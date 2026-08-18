@@ -1,11 +1,11 @@
 # Progress
 
-Última actualización: blueprint v4 — TestSprite pattern review integrated.
+Última actualización: 2026-08-18 — Phase 00 completada; blueprint auditado y endurecido (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
-| 00 | NOT_STARTED | - |
-| 01 | BLOCKED | requiere 00 |
+| 00 | DONE | `scripts/ci-local.sh` all green (blueprint + ruff/format/mypy/pytest + eslint/tsc/vitest/build + compose config); 5 servicios compose healthy; FalkorDB persistence probada write→restart→read; imágenes backend/frontend construidas; graphify-out/graph.json generado (code-only) |
+| 01 | NOT_STARTED | desbloqueada por 00 |
 | 02 | BLOCKED | requiere 01 |
 | 03 | BLOCKED | requiere 02 |
 | 04 | BLOCKED | requiere 02 |
@@ -22,4 +22,6 @@
 
 Statuses permitidos: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 
-- Blueprint update: Adaptive memory graph design added for Phase 09 (Graphiti + FalkorDB as rebuildable projection; implementation not started).
+Notas:
+- 2026-08-18: auditoría de blueprint (6 dimensiones) previa a Phase 00. 2 BLOCKERs corregidos (label observed/model_derived en MemoryContext; regla de resolución de RunPolicy) y ~15 IMPORTANT (contratos versionados, Verdict domain value, ADR 0009 retry ownership/workflow shape/checkpoints, semántica de origins, credential handling, identity model v1). Ver commit `docs(blueprint): fix audit blockers...`.
+- Blueprint update previo: adaptive memory graph design para Phase 09 (Graphiti + FalkorDB como proyección reconstruible; implementación no iniciada).
