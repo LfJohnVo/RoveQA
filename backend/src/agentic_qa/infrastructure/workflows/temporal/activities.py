@@ -5,6 +5,8 @@ authoritative and the Temporal history stays bounded (ADR 0009).
 """
 
 import logging
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from temporalio import activity
 
@@ -12,7 +14,15 @@ from agentic_qa.application.commands.transition_run import (
     TransitionRunCommand,
     transition_run,
 )
+from agentic_qa.application.errors import NotFoundError
+from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
+from agentic_qa.application.services.policy_resolution import resolve_run_policy
 from agentic_qa.bootstrap.container import Container
+from agentic_qa.domain.runs.recovery import (
+    BrowserRecoveryData,
+    RecoveryPoint,
+    RecoveryTrigger,
+)
 from agentic_qa.domain.runs.run import RunStatus, Verdict
 from agentic_qa.infrastructure.workflows.temporal.contracts import (
     EpisodeOutcome,
@@ -21,6 +31,11 @@ from agentic_qa.infrastructure.workflows.temporal.contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TRIGGERS = {
+    "navigation_stable": RecoveryTrigger.NAVIGATION_STABLE,
+    "episode_closed": RecoveryTrigger.EPISODE_CLOSED,
+}
 
 
 class RunActivities:
@@ -46,10 +61,58 @@ class RunActivities:
     async def run_episode(self, params: EpisodeParams) -> EpisodeOutcome:
         """Execute one episode of the agent loop.
 
-        Phase 02 has no agent runtime yet, so there is no work to do and the loop ends
-        immediately. Phase 05 fills this body with the LangGraph execution and
-        heartbeats; the workflow above does not change when it does.
+        The activity stays thin: it resolves the run's policy, asks the episode runner
+        to execute (which resumes from the checkpoint when there is one), and records
+        the safe point durably. Deciding *when* a moment is safe belongs to the graph;
+        writing it down belongs here, where the real checkpoint id exists.
         """
         activity.heartbeat(params.episode_index)
-        logger.info("no agent runtime yet; run %s has no episode to execute", params.run_id)
-        return EpisodeOutcome(more_work=False)
+
+        runner = self._container.episodes
+        if runner is None:
+            # Honest rather than fake: nothing is configured to run an agent yet.
+            logger.info("no agent runtime configured; run %s executes no episode", params.run_id)
+            return EpisodeOutcome(more_work=False)
+
+        async with self._container.unit_of_work() as uow:
+            run = await uow.runs.get(params.run_id)
+            if run is None:
+                raise NotFoundError("run", params.run_id)
+            policy = await resolve_run_policy(
+                uow,
+                project_id=run.project_id,
+                environment_id=run.environment_id,
+                requested_policy_id=run.run_policy_id,
+            )
+
+        result = await runner.run_episode(
+            EpisodeRequest(
+                run_id=params.run_id,
+                goal=params.goal,
+                episode_index=params.episode_index,
+                policy=policy,
+            )
+        )
+        activity.heartbeat(params.episode_index)
+
+        if result.safe_point and result.graph_checkpoint_id:
+            await self._record_recovery_point(params, result)
+
+        return EpisodeOutcome(more_work=result.more_work)
+
+    async def _record_recovery_point(self, params: EpisodeParams, result: EpisodeResult) -> None:
+        async with self._container.unit_of_work() as uow:
+            await uow.recovery_points.add(
+                RecoveryPoint(
+                    recovery_point_id=str(uuid4()),
+                    run_id=params.run_id,
+                    episode_index=params.episode_index,
+                    trigger=_TRIGGERS.get(
+                        result.safe_point or "", RecoveryTrigger.NAVIGATION_STABLE
+                    ),
+                    graph_checkpoint_id=result.graph_checkpoint_id or "",
+                    browser=BrowserRecoveryData(url="", last_verified_action=None),
+                    created_at=datetime.now(UTC),
+                )
+            )
+            await uow.commit()

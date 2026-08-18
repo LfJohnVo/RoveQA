@@ -2,6 +2,11 @@
 
 The worker is replaceable. Nothing about a run lives only in its memory — status and
 progress are durable in PostgreSQL and Temporal, so killing it loses no run.
+
+The agent runtime is deliberately not wired here yet: executing an episode needs a
+ModelGateway, and the only implementation is the deterministic test double. Phase 06
+brings the vLLM adapter and passes it into the container; until then the activity
+reports that no runtime is configured rather than running a scripted pretence.
 """
 
 import asyncio

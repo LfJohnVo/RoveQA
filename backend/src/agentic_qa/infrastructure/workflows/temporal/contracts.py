@@ -37,6 +37,8 @@ class TransitionParams:
 class EpisodeParams:
     run_id: str
     episode_index: int
+    goal: str = "explore the target application"
+    """Phase 07 derives this from the user story; until then it is a stated default."""
 
 
 @dataclass

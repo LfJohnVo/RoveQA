@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 from temporalio.client import Client
 
+from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
@@ -32,6 +33,10 @@ class Container:
 
     events: RunEventPublisher | None = None
     """Realtime fan-out. Absent means clients fall back to durable REST catch-up."""
+
+    episodes: EpisodeRunner | None = None
+    """Absent until a model gateway exists (Phase 06); the worker then says so
+    honestly instead of pretending to run an agent."""
 
     redis: Redis | None = None
     """Owned connection to Redis, closed with the container."""
