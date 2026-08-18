@@ -1,34 +1,30 @@
 #!/usr/bin/env bash
-# Local CI gate: run every Phase-00 check. Fails fast on the first red gate.
+# The gate. Every check runs inside a container, so a green result means the same
+# thing on any machine — and the runtime the code is tested on is the Linux runtime
+# it is deployed on, not whatever the developer happens to have installed.
+#
+# Requires the dependencies to be up: `make up`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "== blueprint =="
-bash scripts/validate-blueprint.sh
-
-echo "== backend: ruff =="
-(cd backend && uv run ruff check . && uv run ruff format --check .)
-echo "== backend: mypy =="
-(cd backend && uv run mypy)
-
-# From Phase 01 the durable schema is part of the gate. Integration tests skip when
-# the database is unreachable, so migrate first and fail loudly instead: run `make up`.
-echo "== backend: migrations =="
-(cd backend && uv run alembic upgrade head && uv run alembic check)
-
-echo "== backend: pytest =="
-(cd backend && uv run pytest)
-
-echo "== frontend: eslint =="
-(cd frontend && pnpm lint)
-echo "== frontend: typecheck =="
-(cd frontend && pnpm typecheck)
-echo "== frontend: vitest =="
-(cd frontend && pnpm test)
-echo "== frontend: build =="
-(cd frontend && pnpm build)
-
 echo "== compose config =="
 docker compose config --quiet
+
+echo "== blueprint =="
+docker compose --profile gates run --rm --quiet-pull blueprint-check
+
+echo "== backend: ruff, mypy, migrations, pytest =="
+docker compose --profile gates run --rm --quiet-pull backend-tests sh -c "
+  set -e
+  ruff check .
+  ruff format --check .
+  mypy
+  alembic upgrade head
+  alembic check
+  pytest -q
+"
+
+echo "== frontend: eslint, typecheck, vitest, build =="
+docker compose --profile gates run --rm --quiet-pull frontend-tests
 
 echo "ci-local: all green"

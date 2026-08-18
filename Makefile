@@ -1,22 +1,27 @@
-# RoveQA developer commands. Requires: uv, pnpm, docker compose, bash.
-.PHONY: bootstrap backend-check frontend-check check compose-config up down logs blueprint-validate graphify-refresh migrate migrate-down
+# RoveQA developer commands. Everything runs in containers: the only host tools
+# needed are docker compose and bash.
+.PHONY: bootstrap backend-check frontend-check check shell compose-config up down logs blueprint-validate graphify-refresh migrate migrate-down
 
+# Build the images the gates run in. Dependencies come with them.
 bootstrap:
-	cd backend && uv sync
-	cd frontend && pnpm install
+	docker compose --profile gates build
 
 backend-check:
-	cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
+	docker compose --profile gates run --rm backend-tests sh -c "ruff check . && ruff format --check . && mypy && pytest -q"
 
-# Needs `make up` first. POSTGRES_DSN overrides the default local DSN.
+# Needs `make up` first.
 migrate:
-	cd backend && uv run alembic upgrade head && uv run alembic check
+	docker compose --profile gates run --rm backend-tests sh -c "alembic upgrade head && alembic check"
 
 migrate-down:
-	cd backend && uv run alembic downgrade -1
+	docker compose --profile gates run --rm backend-tests alembic downgrade -1
 
 frontend-check:
-	cd frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm build
+	docker compose --profile gates run --rm frontend-tests
+
+# A shell inside the backend toolchain, for iterating on one test.
+shell:
+	docker compose --profile gates run --rm backend-tests bash
 
 check:
 	bash scripts/ci-local.sh
