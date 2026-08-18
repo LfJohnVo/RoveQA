@@ -2,23 +2,49 @@
 
 `repositories` is parametrized over every repository implementation so the contract
 suite in tests/contracts runs unchanged against fakes and real adapters.
+
+The postgres parameter skips only when the database is unreachable, and the skip
+reason names the DSN — a silent pass would hide a broken adapter.
 """
 
+import os
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from agentic_qa.application.ports.repositories import (
     ProjectRepository,
     RunRepository,
     StoryRepository,
 )
+from agentic_qa.infrastructure.persistence.postgres.engine import (
+    create_engine,
+    create_session_factory,
+)
+from agentic_qa.infrastructure.persistence.postgres.models import Base
+from agentic_qa.infrastructure.persistence.postgres.repositories import (
+    PostgresProjectRepository,
+    PostgresRunRepository,
+    PostgresStoryRepository,
+)
 from tests.fakes.repositories import (
     InMemoryProjectRepository,
     InMemoryRunRepository,
     InMemoryStoryRepository,
 )
+
+DEFAULT_TEST_DSN = "postgresql+asyncpg://agentic:agentic@localhost:5432/agentic_qa"
+
+# The schema is created once per pytest process; engines stay per-test so every
+# connection belongs to the event loop that uses it.
+_schema_ready = False
+
+
+def test_dsn() -> str:
+    return os.environ.get("POSTGRES_TEST_DSN", DEFAULT_TEST_DSN)
 
 
 @dataclass
@@ -28,13 +54,60 @@ class Repositories:
     runs: RunRepository
 
 
-@pytest.fixture(params=["memory"])
+def in_memory_repositories() -> Repositories:
+    return Repositories(
+        projects=InMemoryProjectRepository(),
+        stories=InMemoryStoryRepository(),
+        runs=InMemoryRunRepository(),
+    )
+
+
+async def _ensure_schema(engine: AsyncEngine, dsn: str) -> None:
+    global _schema_ready
+    try:
+        async with engine.begin() as connection:
+            if not _schema_ready:
+                await connection.run_sync(Base.metadata.create_all)
+    except OSError as error:  # database not reachable at all
+        pytest.skip(f"PostgreSQL not reachable at {dsn}: {error}")
+    _schema_ready = True
+
+
+@asynccontextmanager
+async def postgres_session_scope() -> AsyncIterator[AsyncSession]:
+    """One engine and one always-rolled-back transaction per test.
+
+    Per-test engines keep every connection inside the event loop that uses it; the
+    rollback isolates tests without truncating tables.
+    """
+    dsn = test_dsn()
+    engine = create_engine(dsn)
+    try:
+        await _ensure_schema(engine, dsn)
+        async with create_session_factory(engine)() as session, session.begin():
+            try:
+                yield session
+            finally:
+                await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def postgres_session() -> AsyncIterator[AsyncSession]:
+    async with postgres_session_scope() as session:
+        yield session
+
+
+@pytest.fixture(params=["memory", "postgres"])
 async def repositories(request: pytest.FixtureRequest) -> AsyncIterator[Repositories]:
     if request.param == "memory":
-        yield Repositories(
-            projects=InMemoryProjectRepository(),
-            stories=InMemoryStoryRepository(),
-            runs=InMemoryRunRepository(),
-        )
+        yield in_memory_repositories()
         return
-    raise AssertionError(f"unknown repository implementation: {request.param}")
+
+    async with postgres_session_scope() as session:
+        yield Repositories(
+            projects=PostgresProjectRepository(session),
+            stories=PostgresStoryRepository(session),
+            runs=PostgresRunRepository(session),
+        )

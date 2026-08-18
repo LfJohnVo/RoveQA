@@ -3,7 +3,11 @@ name = "agentic-qa"
 version = "0.1.0"
 description = "RoveQA control plane and agent runtime (FastAPI backend)"
 requires-python = ">=3.12,<3.14"
-dependencies = []
+dependencies = [
+    "alembic>=1.19.1",
+    "asyncpg>=0.31.0",
+    "sqlalchemy[asyncio]>=2.0",
+]
 
 [dependency-groups]
 dev = [
@@ -24,6 +28,9 @@ packages = ["src/agentic_qa"]
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+# Generated migrations are historical artifacts: never restyled, never edited once
+# applied. alembic/env.py is ours and stays linted.
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
@@ -38,3 +45,5 @@ testpaths = ["tests"]
 addopts = "-q"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# A warning is a defect signal (ORM identity conflicts, deprecations); never noise.
+filterwarnings = ["error"]
