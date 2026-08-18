@@ -30,6 +30,8 @@ graphify-out/cache/
 graphify-out/cost.json
 graphify-out/graph.html
 graphify-out/converted/
+graphify-out/.graphify_analysis.json
+graphify-out/.graphify_root
 
 # RoveQA local CLI outputs / credentials
 .roveqa/runs/
