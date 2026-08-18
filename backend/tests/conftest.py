@@ -13,15 +13,19 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import pytest
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from agentic_qa.application.ports.locks import LockManager
 from agentic_qa.application.ports.repositories import (
     ProjectRepository,
     RunRepository,
     StoryRepository,
 )
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
+from agentic_qa.infrastructure.cache.redis.locks import RedisLockManager
 from agentic_qa.infrastructure.persistence.postgres.engine import (
     create_engine,
     create_session_factory,
@@ -33,6 +37,7 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresStoryRepository,
 )
 from agentic_qa.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
+from tests.fakes.locks import InMemoryLockManager
 from tests.fakes.repositories import (
     InMemoryProjectRepository,
     InMemoryRunRepository,
@@ -42,9 +47,13 @@ from tests.fakes.repositories import (
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
 
 DEFAULT_TEST_DSN = "postgresql+asyncpg://agentic:agentic@localhost:5432/agentic_qa"
+DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
+"""Database 15: coordination tests flush it, so they must never touch a real one."""
 
 # Written by the committing unit-of-work tests; truncated in their teardown.
-COMMITTED_TABLES = "projects, user_stories, acceptance_criteria, runs, idempotency_records"
+COMMITTED_TABLES = (
+    "projects, user_stories, acceptance_criteria, runs, run_events, idempotency_records"
+)
 
 # The schema is created once per pytest process; engines stay per-test so every
 # connection belongs to the event loop that uses it.
@@ -53,6 +62,43 @@ _schema_ready = False
 
 def test_dsn() -> str:
     return os.environ.get("POSTGRES_TEST_DSN", DEFAULT_TEST_DSN)
+
+
+def test_redis_url() -> str:
+    return os.environ.get("REDIS_TEST_URL", DEFAULT_TEST_REDIS_URL)
+
+
+@asynccontextmanager
+async def redis_scope() -> AsyncIterator[Redis]:
+    """A flushed test database, skipped with the URL when Redis is unreachable."""
+    url = test_redis_url()
+    client = Redis.from_url(url, decode_responses=True)
+    try:
+        await client.ping()
+    except RedisError as error:
+        await client.aclose()
+        pytest.skip(f"Redis not reachable at {url}: {error}")
+    await client.flushdb()
+    try:
+        yield client
+    finally:
+        await client.flushdb()
+        await client.aclose()
+
+
+@pytest.fixture
+async def redis_client() -> AsyncIterator[Redis]:
+    async with redis_scope() as client:
+        yield client
+
+
+@pytest.fixture(params=["memory", "redis"])
+async def lock_manager(request: pytest.FixtureRequest) -> AsyncIterator[LockManager]:
+    if request.param == "memory":
+        yield InMemoryLockManager()
+        return
+    async with redis_scope() as client:
+        yield RedisLockManager(client)
 
 
 @dataclass
