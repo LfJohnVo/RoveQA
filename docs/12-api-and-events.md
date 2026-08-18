@@ -34,6 +34,8 @@
 - `POST /api/v1/runs/{run_id}/pause`
 - `POST /api/v1/runs/{run_id}/resume`
 - `POST /api/v1/runs/{run_id}/cancel` — explícito y naturalmente idempotente cuando ya está cancelled; nunca inferido desde un disconnect.
+
+**Semántica de los comandos de lifecycle (implementado en Phase 02)**: los tres devuelven `202 Accepted` con `{run_id, accepted}`. Señalan al workflow; **no escriben status**. El status durable cambia cuando el workflow aplica el comando en su siguiente punto seguro, así que un `GET` inmediatamente posterior puede seguir mostrando el estado anterior — eso es correcto, no un bug. Señalar un run ya terminal es un no-op (idempotencia natural).
 - `POST /api/v1/runs/{run_id}/rerun` — nueva ejecución con provenance a run/plan fuente; idempotency key.
 - `GET /api/v1/runs/{run_id}/findings`
 - `GET /api/v1/runs/{run_id}/artifacts`

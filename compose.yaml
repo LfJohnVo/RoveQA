@@ -69,6 +69,41 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    build: ./backend
+    command: ["uv", "run", "--no-dev", "uvicorn", "agentic_qa.interfaces.http.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  worker:
+    build: ./backend
+    command: ["uv", "run", "--no-dev", "python", "-m", "agentic_qa.infrastructure.workflows.temporal.worker"]
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    # Deliberately replaceable: no run state lives in this container, so it can be
+    # killed and restarted without losing a run.
+    restart: unless-stopped
+
   # Heavy inference stays behind profiles so CPU-only development works.
   # Model/image pinning happens in Phase 06 (generation) and Phase 09 (embeddings)
   # after validating GPU compatibility on the target host.

@@ -105,6 +105,33 @@ def test_layer_has_no_forbidden_dependencies(layer: str) -> None:
     assert not violations, f"{layer} layer violates the dependency rule:\n" + "\n".join(violations)
 
 
+WORKFLOW_MODULE = SOURCE_ROOT / "infrastructure" / "workflows" / "temporal" / "workflows.py"
+
+# Workflow code must be deterministic and replayable, so it may not reach the outside
+# world at all: every effect goes through an activity (.claude/rules/temporal.md).
+WORKFLOW_FORBIDDEN = (
+    "sqlalchemy",
+    "asyncpg",
+    "psycopg",
+    "redis",
+    "httpx",
+    "requests",
+    "aiohttp",
+    "os",
+    "random",
+    "socket",
+    "pathlib",
+    "agentic_qa.infrastructure.persistence",
+    "agentic_qa.application",
+    "agentic_qa.bootstrap",
+)
+
+
+def test_workflow_code_performs_no_io() -> None:
+    violations = forbidden_imports(WORKFLOW_MODULE, WORKFLOW_FORBIDDEN)
+    assert not violations, f"workflow module must stay pure, found: {violations}"
+
+
 @pytest.mark.parametrize(
     "line",
     [

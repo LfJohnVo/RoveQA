@@ -1,14 +1,14 @@
 # Progress
 
-Última actualización: 2026-08-18 — Phase 01 completada (Opus 5); Phase 00 completada y blueprint auditado (ver HANDOFF).
+Última actualización: 2026-08-18 — Phase 02 completada (Opus 5); Phases 00 y 01 completadas y blueprint auditado (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
 | 00 | DONE | `scripts/ci-local.sh` all green (blueprint + ruff/format/mypy/pytest + eslint/tsc/vitest/build + compose config); 5 servicios compose healthy; FalkorDB persistence probada write→restart→read; imágenes backend/frontend construidas; graphify-out/graph.json generado (code-only) |
 | 01 | DONE | 4/4 gates PASS: 23 domain tests (Run state machine + Verdict + entity invariants), migración verificada desde schema vacío + `alembic check` sin drift, test automático de dependency rule (Domain/Application sin ORM/framework), 20 contract tests corriendo contra memory y PostgreSQL. 68 tests backend; `ci-local.sh` all green |
-| 02 | NOT_STARTED | desbloqueada por 01 |
-| 03 | BLOCKED | requiere 02 |
-| 04 | BLOCKED | requiere 02 |
+| 02 | DONE | 7/7 gates PASS: run sobrevive al reemplazo del worker (test contra Temporal real), API sin loops largos, workflow puro (test AST), status sólo escrito por activities vía state machine, request id end-to-end en logs, duplicate POST /runs no duplica run ni workflow, reuse incompatible de key falla tipado. 112 tests backend; e2e por el stack containerizado (api+worker) → completed/inconclusive |
+| 03 | NOT_STARTED | desbloqueada por 02 |
+| 04 | NOT_STARTED | desbloqueada por 02 |
 | 05 | BLOCKED | requiere 04 |
 | 06 | BLOCKED | requiere 05 |
 | 07 | BLOCKED | requiere 05-06 |

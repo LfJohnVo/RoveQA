@@ -199,6 +199,24 @@ class TestRunLifecycleCommands:
         after = await client.get(f"/api/v1/runs/{run_id}")
         assert after.json()["status"] == "queued"
 
+    async def test_creating_a_run_returns_before_it_finishes(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """The request hands the run to the durable engine and returns immediately.
+
+        An API that waited for a terminal state would host an hours-long loop, which
+        is exactly what Temporal exists to avoid.
+        """
+        project_id = await create_project(client)
+
+        created = await client.post(
+            "/api/v1/runs", json={"project_id": project_id}, headers={"Idempotency-Key": "k-nb"}
+        )
+
+        assert created.status_code == 201
+        assert created.json()["status"] == "queued"  # not a terminal state
+        assert created.json()["verdict"] is None
+
     async def test_cancelling_twice_is_idempotent(
         self, client: httpx.AsyncClient, workflows: RecordingWorkflowGateway
     ) -> None:
