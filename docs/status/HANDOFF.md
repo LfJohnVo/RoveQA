@@ -1,141 +1,132 @@
 # Session Handoff
 
-Última sesión: 2026-08-18 (Opus 5). Phase 02 completada. Phases 00 y 01 ya estaban DONE.
+Última sesión: 2026-08-18 (Opus 5). Phases 02 y 03 completadas. Phases 00 y 01 ya estaban DONE.
 
 # Current Phase
 
-03 — Redis coordination/realtime (`plans/phase-03-redis-realtime.md`). Phase 02 está DONE con sus 7 gates PASS.
-Phase 04 (browser gateway) también está desbloqueada por 02; el usuario elige cuál sigue.
+04 — Playwright browser gateway (`plans/phase-04-browser-gateway.md`). Phase 03 está DONE con sus 3 gates PASS.
 
 # Phase Status
 
-- Phase 00: **DONE**. Phase 01: **DONE**. Phase 02: **DONE** (7/7 gates, ver Acceptance Gates).
-- Phase 03: **NOT_STARTED**. No existe cliente Redis, ni locks, ni streams, ni WebSocket.
+- Phase 00: **DONE**. Phase 01: **DONE**. Phase 02: **DONE**. Phase 03: **DONE** (3/3 gates, ver Acceptance Gates).
+- Phase 04: **NOT_STARTED**. No existe Playwright, ni BrowserGateway, ni RunPolicy/Environment como entidades.
 
 # Last Stable State
 
-- Git branch `main`, working tree limpio, 19 commits. Último: cierre de Phase 02.
-- `bash scripts/ci-local.sh` → **all green**: 112 tests backend, 1 frontend, migraciones sin drift, build frontend, compose config.
-- Stack compose levantado durante la sesión: postgres, redis, temporal, temporal-ui, falkordb, **api**, **worker**. Schema migrado a `f3aede0b5c07`.
-- E2E verificado por el stack containerizado: `POST /api/v1/projects` → `POST /api/v1/runs` → el worker lleva el run a `completed/inconclusive`.
+- Git branch `main`, working tree limpio. Último commit: cierre de Phase 03.
+- `bash scripts/ci-local.sh` → **all green**: 173 tests backend, 1 frontend, migraciones sin drift, build frontend, compose config.
+- Stack compose corriendo: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema migrado a `492adc523ebb`.
+- E2E containerizado verificado: run completo con 3 eventos (`run.created`, 2× `run.status.changed`) presentes tanto en `run_events` como en el stream `stream:run:{id}` de Redis.
 
 # Architecture Decisions Made
 
-Esta sesión (Phase 02), sobre ADR 0009 (retry ownership/workflow shape) ya existente:
+Esta sesión (Phase 03), sobre ADR 0009 (workflow shape/retry ownership) y ADR 0010 (transaction ownership):
 
-- **ADR 0010 — Transaction ownership (nuevo)**: los _commands_ reciben `UnitOfWork` y son dueños de su commit; las _queries_ reciben el repository. Los repositories se obtienen **a través** del UoW, nunca inyectados en paralelo, lo que hace imposible mezclar repositories de transacciones distintas. Salir del bloque sin commit hace rollback.
-- **Orden obligatorio para side effects externos** (en ADR 0010): persistir y commitear primero, disparar el efecto después. `POST /runs` commitea run + idempotency record y sólo entonces arranca el workflow; si el arranque falla queda un run `QUEUED` recuperable, nunca un workflow huérfano. Hay test.
-- **Sólo el workflow escribe status.** La API señala intención y devuelve `202`; las transiciones ocurren en activities y pasan por el state machine del dominio. Eso es lo que impide que DB y workflow diverjan.
-- **Un run se acepta como `QUEUED`**, no `CREATED`: `POST /runs` significa aceptado y encolado. `CREATED` queda para drafts futuros (UI).
-- **Payload único en el workflow**: `RunParams` lleva `start_episode`. Un segundo argumento hacía que el converter devolviera JSON crudo.
-- **`result_type` explícito** al invocar activities por nombre; sin él la anotación de retorno es mentira (el converter devuelve dict).
-- **Verdict honesto**: sin agent runtime, un run completa `inconclusive`, no `passed`.
-- **`bootstrap/` es el composition root**: Interfaces no importa infraestructura (test de arquitectura lo prohíbe).
+- **El log durable de eventos es la fuente; Redis Streams es proyección.** `run_events` (PostgreSQL) se escribe en la **misma transacción** que el cambio que describe; el fan-out ocurre después del commit y es best-effort.
+- **`(run_id, sequence)` es único** y el `sequence` se deriva dentro de la transacción: un append concurrente no puede reutilizar en silencio una posición de cursor que un cliente ya consumió.
+- **Orden de conexión del WebSocket**: suscribir primero, leer historia durable después, luego relay saltando lo ya entregado. Al revés se pierden los eventos publicados mientras se lee la historia.
+- **Fallo de realtime nunca falla un run**: `publish_best_effort` captura de forma deliberada y documentada, *porque* el evento ya es durable. Sin publisher, el WebSocket entrega el baseline completo y cierra con `4503` para que el cliente haga polling REST — nunca finge estar vivo.
+- **Locks y semáforos comparan el token dentro de Redis (Lua)**: un `GET`-luego-`DEL` desde el cliente puede borrar un lock que expiró y fue readquirido en medio. Hay tests que plantan ese escenario.
+- **Los deadlines de slots usan el reloj de Redis (`TIME`)**, no el del caller, para que workers con reloj desviado coincidan en cuándo caducó un lease.
+- **Respuestas de redis-py se normalizan y validan en runtime**, no se castean: una forma no reconocida es un bug a exponer, no datos que adivinar.
 
 # Files Created
 
-Backend (Phase 02):
+Backend (Phase 03):
 
-- `application/ports/unit_of_work.py`, `application/ports/idempotency.py`, `application/ports/workflows.py`
-- `application/commands/start_run.py` (sustituye a `create_run_draft.py`), `application/commands/transition_run.py`
-- `bootstrap/settings.py`, `bootstrap/container.py`
-- `interfaces/http/`: `app.py`, `dependencies.py`, `errors.py`, `schemas.py`, `request_context.py`, `routers/{projects,runs}.py`
-- `infrastructure/persistence/postgres/unit_of_work.py`
-- `infrastructure/workflows/temporal/`: `contracts.py`, `activities.py`, `workflows.py`, `gateway.py`, `worker.py`
-- `alembic/versions/f3aede0b5c07_phase_02_idempotency_records.py`
-- Tests: `tests/contracts/test_unit_of_work_contracts.py`, `tests/http/test_api_contract.py`, `tests/integration/test_api_postgres.py`, `tests/integration/test_temporal_workflow.py`, `tests/fakes/{unit_of_work,workflows}.py`
-- `docs/adr/0010-transaction-ownership.md`
+- `application/ports/events.py`, `application/ports/streams.py`, `application/ports/locks.py`, `application/ports/semaphores.py`
+- `application/services/event_publishing.py`, `application/queries/list_run_events.py`
+- `infrastructure/cache/redis/`: `locks.py`, `semaphores.py`, `streams.py`
+- `interfaces/http/routers/realtime.py` (WebSocket `/ws/runs/{id}`)
+- `alembic/versions/492adc523ebb_phase_03_run_events.py`
+- Tests: `tests/contracts/{test_event_log_contracts,test_lock_contracts,test_semaphore_contracts}.py`, `tests/http/test_realtime.py`, `tests/integration/test_redis_loss.py`, `tests/fakes/{locks,semaphores,streams}.py`
 
 # Files Modified
 
-- `application/commands/{create_project,create_story}.py`: reciben UoW y commitean (ADR 0010).
-- `application/ports/repositories.py`: `RunRepository.save`.
-- `application/errors.py`: `IdempotencyConflictError`.
-- `infrastructure/persistence/postgres/{models,repositories}.py`: tabla + adapter de idempotency, `save` de runs.
-- `tests/conftest.py`: fixtures `unit_of_work_factory` (memory/postgres) y `postgres_unit_of_work_factory` (con TRUNCATE en teardown).
-- `tests/fakes/repositories.py`: `InMemoryStore` compartido con snapshot/restore.
-- `compose.yaml`: servicios `api` y `worker`; `docs/12-api-and-events.md`: semántica 202 de los comandos de lifecycle.
-- `backend/pyproject.toml`: fastapi, uvicorn, temporalio, httpx(dev).
+- `application/commands/{start_run,transition_run}.py`: append de evento en la transacción + publish best-effort tras el commit.
+- `application/ports/unit_of_work.py` y ambos UoW: propiedad `events`.
+- `infrastructure/persistence/postgres/{models,repositories}.py`: `RunEventModel` + `PostgresRunEventLog`.
+- `interfaces/http/{schemas,dependencies,routers/runs,app}.py`: DTOs de evento, `EventPublisherDep`, `GET /runs/{id}/events`, router realtime.
+- `bootstrap/{settings,container}.py`: `REDIS_URL`, publisher Redis y cierre del cliente.
+- `compose.yaml`: `REDIS_URL` en api y worker (**faltaba**: los contenedores apuntaban a `localhost` y el fan-out fallaba en silencio — lo detectó el e2e, no los tests).
+- `backend/pyproject.toml`: `redis`, `httpx2` (dev, requerido por el `TestClient` de Starlette).
 
 # Database/Migrations State
 
-- Migraciones: `a2fc1518b988` (baseline Phase 01) → **`f3aede0b5c07`** (Phase 02, `idempotency_records` con PK compuesta `scope+idempotency_key`).
-- Verificado: `upgrade head`, `downgrade -1`, re-`upgrade`, `alembic check` limpio.
-- Tablas: projects, user_stories, acceptance_criteria, runs, idempotency_records, alembic_version.
+- Migraciones: `a2fc1518b988` → `f3aede0b5c07` → **`492adc523ebb`** (`run_events`, unique `(run_id, sequence)`, FK a runs con CASCADE).
+- Verificado: `upgrade head` y `alembic check` limpio.
+- Tablas: projects, user_stories, acceptance_criteria, runs, run_events, idempotency_records, alembic_version.
 
 # Docker State
 
-- Servicios corriendo al cierre: postgres, redis, temporal, temporal-ui, falkordb, api (`:8000`, healthcheck), worker.
-- `make up` levanta sólo las dependencias; `docker compose up -d api worker` añade la aplicación. Nunca `down -v`.
-- Imagen `roveqa-api`/`roveqa-worker` construida desde `./backend` en esta sesión.
+- Servicios corriendo: postgres, redis, temporal, temporal-ui, falkordb, api (`:8000`), worker. Imágenes reconstruidas esta sesión (incluyen `redis`).
+- `make up` levanta dependencias; `docker compose up -d api worker` añade la aplicación. Nunca `down -v`.
 
 # Tests Executed
 
 ```
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
-cd backend && uv run alembic upgrade head && uv run alembic check && uv run alembic downgrade -1 && uv run alembic upgrade head
+cd backend && uv run alembic upgrade head && uv run alembic check
+docker compose restart redis        # y luego la suite completa
+docker compose build api worker && docker compose up -d api worker
+curl POST /projects ; POST /runs ; poll GET /runs/{id} ; GET /runs/{id}/events
+docker exec roveqa-redis-1 redis-cli XLEN stream:run:{id}
 bash scripts/ci-local.sh
-docker compose build api && docker compose up -d api worker
-curl POST /api/v1/projects ; curl POST /api/v1/runs (x2, misma Idempotency-Key) ; poll GET /api/v1/runs/{id}
 ```
 
 # Exact Test Results
 
-- **112 tests backend passed** (0 failed, warnings-as-errors activo):
-  - `tests/test_health.py` 2 · `tests/domain` 23 · `tests/contracts` 32 (repos 20 + unit of work 12) · `tests/application` 14 · `tests/http` 19 · `tests/integration` 13 (5 constraints + 3 postgres use-case/api + 5 Temporal) · `tests/architecture` 9
-- ruff "All checks passed!"; mypy strict "no issues found in 95 source files"; `alembic check` "No new upgrade operations detected".
+- **173 tests backend passed** (0 failed, warnings-as-errors activo):
+  - `tests/test_health.py` 2 · `tests/domain` 23 · `tests/contracts` 80 (repos 20 + unit of work 12 + event log 12 + locks 18 + semáforos 18) · `tests/application` 14 · `tests/http` 29 · `tests/integration` 16 (5 constraints + 3 postgres + 5 Temporal + 3 Redis loss) · `tests/architecture` 9
+- ruff "All checks passed!"; mypy strict "no issues found in 113 source files"; `alembic check` "No new upgrade operations detected".
 - Frontend: eslint OK, tsc OK, vitest 1 passed, build OK. `ci-local.sh`: "all green".
-- E2E containerizado: `first=201`, `replay=200`, status final `completed inconclusive`.
+- E2E containerizado: status `completed`, 3 eventos durables con `request_id` propagado en `run.created`, `XLEN stream:run:{id}` = 3.
 
-# Acceptance Gates (Phase 02)
+# Acceptance Gates (Phase 03)
 
-| Gate                                                                | Resultado                                                                                                                                                                                              |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Run sigue existiendo y su workflow continúa tras restart del worker | **PASS** (`test_run_continues_after_the_worker_is_replaced`: run pausado, worker destruido, worker nuevo, resume → completed)                                                                          |
-| API request no aloja loop largo                                     | **PASS** (`test_creating_a_run_returns_before_it_finishes`: devuelve `queued`, no espera estado terminal)                                                                                              |
-| Workflows no realizan I/O directo                                   | **PASS** (`test_workflow_code_performs_no_io`: AST del módulo del workflow sin DB/HTTP/os/random)                                                                                                      |
-| Status DB y workflow no divergen silenciosamente                    | **PASS** (toda transición pasa por activities + state machine; `test_status_does_not_change_just_because_a_command_was_accepted`; los tests de Temporal comparan verdict del workflow con el de la DB) |
-| Request ID visible de extremo a extremo                             | **PASS** (`test_internal_errors_are_generic_and_correlatable`: el id del cliente aparece en el log record del servidor)                                                                                |
-| Duplicate `POST /runs` con misma key no crea segundo run            | **PASS** (unit, postgres y HTTP; además `test_starting_the_same_run_twice_does_not_duplicate_the_workflow`)                                                                                            |
-| Reuse incompatible de una idempotency key falla tipado              | **PASS** (`IdempotencyConflictError` → 409 CONFLICT)                                                                                                                                                   |
+| Gate | Resultado |
+| --- | --- |
+| UI/client puede reconectar y recuperar baseline durable | **PASS** (`GET /runs/{id}/events?after=` con `next_after`; WebSocket entrega historia y luego live; `test_a_client_rebuilds_its_baseline_after_losing_realtime` tras un flush) |
+| Redis loss no cambia resultados ya confirmados de un run | **PASS** (`test_a_flushed_redis_leaves_the_run_and_its_history_intact`; además restart real del contenedor + suite completa verde; y un publisher que siempre falla no impide crear ni completar un run) |
+| Locks expiran/renuevan con ownership seguro | **PASS** (18 casos memory/Redis, incluido `test_an_expired_holder_cannot_release_the_new_owners_lock`) |
 
 # Known Issues
 
-- El worker de compose **no espera** a que las migraciones estén aplicadas; en una DB nueva hay que correr `make migrate` antes de `docker compose up -d api worker`.
-- Los tests de integración (postgres y Temporal) **hacen skip** si el servicio no está accesible; `ci-local.sh` migra antes y falla ruidosamente si la DB está caída, pero Temporal caído sólo produce skips.
-- `run_episode` no ejecuta trabajo real (no hay agent runtime hasta Phase 05); por eso todo run completa `inconclusive`.
-- Graphify sigue code-only y **no se refrescó** en esta sesión: correr `graphify . --code-only`.
-- structlog (tech stack documentada) aún no está: los logs usan stdlib + contextvar. Migrar cuando se implemente `docs/14-observability.md`.
+- **Los `run_events` no se publican al stream si el evento se crea fuera de un caller que pase publisher.** Hoy lo pasan `start_run` (API) y las activities (worker); cualquier nuevo productor de eventos debe acordarse.
+- Los tests de integración (postgres, Temporal, Redis) **hacen skip** si el servicio no responde; `ci-local.sh` sólo falla ruidosamente por PostgreSQL (migraciones).
+- El WebSocket no tiene autenticación ni límite de conexiones por run (v1 local-first, docs/13); Phase 13 debe revisarlo.
+- `run_episode` sigue sin trabajo real hasta Phase 05, así que todo run completa `inconclusive`.
+- structlog aún no está: logs con stdlib + contextvar (pendiente docs/14).
 
 # Technical Debt
 
-- No hay `run_events` ni tabla de eventos: el plan de Phase 02 mencionaba "persist status/events" y sólo se implementó status. Los eventos llegan con Redis Streams/WebSocket (Phase 03).
-- No hay `Environment` ni `RunPolicy` como entidades/tablas; la regla normativa de resolución de RunPolicy (docs/12) sigue sin implementarse. Phase 04 la necesita.
-- `GET /runs/{id}` no tiene `wait_seconds` (bounded long-poll) — es un seam documentado para Phase 08.
-- Sin purga de `idempotency_records` (retención indefinida en v1, Phase 13).
-- No hay endpoint de listado de runs ni pagination; llega cuando la UI (Phase 10) o la CLI (Phase 08) lo necesiten.
+- No hay presence/heartbeat de workers en Redis (`worker:{id}:presence`, docs/09) ni rate limits ni caches: el plan de Phase 03 los menciona como responsabilidades permitidas, pero ninguna fase actual los necesita todavía.
+- El WebSocket usa `limit=500` fijo para el catch-up inicial; si un run supera 500 eventos el cliente debe paginar por REST antes de conectar. Documentarlo en el contrato del cliente (Phase 08/10).
+- `Environment` y `RunPolicy` siguen sin existir como entidades/tablas — **Phase 04 los necesita** para la resolución normativa de RunPolicy (docs/12) y el origin allowlist.
+- Sin purga de `idempotency_records` ni trimming configurable de streams por proyecto.
 - `frontend/index.css` conserva estilos del template Vite (Phase 10).
 
 # Risks
 
-- Phase 05 debe rellenar `run_episode` **sin** cambiar la forma del workflow (ADR 0009). Cambiarla invalidaría los tests de durabilidad de Phase 02.
-- Los dos bugs de conversión de Temporal (payload dict, `result_type`) reaparecerán al añadir nuevas activities: cualquier activity llamada por nombre necesita `result_type` explícito.
-- Compatibilidad GPU/modelos vLLM/AirLLM sin validar (Phases 06/09/11).
+- El fan-out mal configurado falla **en silencio** por diseño (best-effort). Fue exactamente lo que pasó con `REDIS_URL` ausente en compose: los tests estaban verdes y sólo el e2e lo reveló. Cualquier cambio de configuración de Redis necesita una verificación e2e, no sólo tests.
+- Phase 05 debe rellenar `run_episode` sin cambiar la forma del workflow (ADR 0009).
+- Toda activity nueva invocada por nombre necesita `result_type` explícito (bug ya sufrido en Phase 02).
 - CI en Linux pendiente (Phase 13); todo se verifica en Windows contra contenedores Linux.
 
 # Decisions Still Open
 
-- Si `run_events` va a PostgreSQL además de Redis Streams (Phase 03 debe decidirlo; CLAUDE.md exige que Redis no sea fuente de verdad).
+- Si el WebSocket debe soportar múltiples runs por conexión o filtros por tipo de evento (lo decidirá la UI en Phase 10).
+- Política de retención/purga de `run_events` para runs largos (Phase 13).
 - Cómo se resuelve la RunPolicy efectiva cuando existan Environment/Project defaults (Phase 04).
 - Modelos concretos vLLM/AirLLM y auth de plataforma post-v1 (requiere ADR).
 
 # Graphify Status
 
-- `graphify-out/graph.json` está **desactualizado** respecto a Phase 02. Refrescar con `graphify . --code-only` (incremental) antes de usarlo para orientación.
+- `graphify-out/graph.json` refrescado tras Phase 03 (code-only, incremental).
 
 # Services That Are Working
 
-- postgres (schema `f3aede0b5c07`), redis, temporal + temporal-ui, falkordb, **api** (`http://localhost:8000`, `/health`, OpenAPI en `/docs`), **worker** (task queue `agentic-qa`).
+- postgres (schema `492adc523ebb`), redis (locks, semáforos, streams), temporal + temporal-ui, falkordb, api (`http://localhost:8000`, `/docs`, WebSocket `/ws/runs/{id}`), worker.
 
 # Services Still Stubbed/Deferred
 
@@ -143,16 +134,16 @@ curl POST /api/v1/projects ; curl POST /api/v1/runs (x2, misma Idempotency-Key) 
 
 # Exact Next Task
 
-Implement Phase 03 slice 1: add a `RunEventPublisher` port plus its durable PostgreSQL `run_events` table and migration, and have the workflow's activities append an event on every status transition — the durable event log must exist before Redis Streams fan-out is added on top of it, because Redis can never be the source of truth.
+Implement Phase 04 slice 1: add `Environment` and `RunPolicy` as domain entities with their PostgreSQL tables and migration, plus the normative RunPolicy resolution at run creation (plan → environment default → project default, failing typed when none resolves) — the browser gateway cannot enforce an origin allowlist before the policy it reads actually exists.
 
 # Exact Next Command
 
-En Claude Code: `/implement-phase 03`
+En Claude Code: `/implement-phase 04`
 
 # Recommended Skills For Next Session
 
 - `implement-phase` (proceso), `ponytail` (always-on).
-- `backend-slice` + `postgresql` (tabla de eventos, secuencia, índices).
-- `error-handling-patterns` y `durability-review` (Redis puede desaparecer sin perder el run).
-- `api-design-principles` para `GET /runs/{id}/events?after=&limit=` y el WebSocket.
+- `browser-runtime` (Playwright, acciones tipadas, recovery) + `error-handling-patterns`.
+- `postgresql` (tablas de environment/policy) y `backend-slice`.
+- `durability-review` (verify-before-retry, storage state, side effects del browser).
 - `architecture-guard` + `test-and-verify` al cierre.

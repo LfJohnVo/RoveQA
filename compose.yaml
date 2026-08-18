@@ -74,6 +74,7 @@ services:
     command: ["uv", "run", "--no-dev", "uvicorn", "agentic_qa.interfaces.http.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
+      REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233
     ports:
       - "8000:8000"
@@ -94,6 +95,7 @@ services:
     command: ["uv", "run", "--no-dev", "python", "-m", "agentic_qa.infrastructure.workflows.temporal.worker"]
     environment:
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
+      REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233
     depends_on:
       postgres:

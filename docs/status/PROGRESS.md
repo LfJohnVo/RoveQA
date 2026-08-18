@@ -1,13 +1,13 @@
 # Progress
 
-Última actualización: 2026-08-18 — Phase 02 completada (Opus 5); Phases 00 y 01 completadas y blueprint auditado (ver HANDOFF).
+Última actualización: 2026-08-18 — Phase 03 completada (Opus 5); Phases 00-02 completadas y blueprint auditado (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
 | 00 | DONE | `scripts/ci-local.sh` all green (blueprint + ruff/format/mypy/pytest + eslint/tsc/vitest/build + compose config); 5 servicios compose healthy; FalkorDB persistence probada write→restart→read; imágenes backend/frontend construidas; graphify-out/graph.json generado (code-only) |
 | 01 | DONE | 4/4 gates PASS: 23 domain tests (Run state machine + Verdict + entity invariants), migración verificada desde schema vacío + `alembic check` sin drift, test automático de dependency rule (Domain/Application sin ORM/framework), 20 contract tests corriendo contra memory y PostgreSQL. 68 tests backend; `ci-local.sh` all green |
 | 02 | DONE | 7/7 gates PASS: run sobrevive al reemplazo del worker (test contra Temporal real), API sin loops largos, workflow puro (test AST), status sólo escrito por activities vía state machine, request id end-to-end en logs, duplicate POST /runs no duplica run ni workflow, reuse incompatible de key falla tipado. 112 tests backend; e2e por el stack containerizado (api+worker) → completed/inconclusive |
-| 03 | NOT_STARTED | desbloqueada por 02 |
+| 03 | DONE | 3/3 gates PASS: cliente reconecta y recupera baseline durable desde `run_events` (REST + WebSocket con catch-up antes del live), `FLUSHALL` + restart de Redis no cambian status ni historial confirmados, locks expiran/renuevan con ownership token verificado por Lua. 173 tests backend; e2e containerizado con 3 eventos en el log durable y en el stream |
 | 04 | NOT_STARTED | desbloqueada por 02 |
 | 05 | BLOCKED | requiere 04 |
 | 06 | BLOCKED | requiere 05 |
