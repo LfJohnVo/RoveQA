@@ -5,7 +5,7 @@
 | Phase | Status | Evidence |
 |---|---|---|
 | 00 | DONE | `scripts/ci-local.sh` all green (blueprint + ruff/format/mypy/pytest + eslint/tsc/vitest/build + compose config); 5 servicios compose healthy; FalkorDB persistence probada write→restart→read; imágenes backend/frontend construidas; graphify-out/graph.json generado (code-only) |
-| 01 | NOT_STARTED | desbloqueada por 00 |
+| 01 | IN_PROGRESS | slice 1 DONE: Run state machine + Verdict invariants, 12 domain unit tests verdes (mypy strict/ruff verdes); faltan ports, SQLAlchemy/Alembic, use cases e integration tests |
 | 02 | BLOCKED | requiere 01 |
 | 03 | BLOCKED | requiere 02 |
 | 04 | BLOCKED | requiere 02 |

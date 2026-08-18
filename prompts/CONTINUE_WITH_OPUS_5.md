@@ -1,6 +1,6 @@
 # Continue RoveQA with Opus 5
 
-Instrucción autosuficiente para la siguiente sesión. Estado al cierre de la sesión anterior (2026-08-18): blueprint auditado y endurecido, **Phase 00 DONE con todos los gates verdes**, Phase 01 sin empezar.
+Instrucción autosuficiente para la siguiente sesión. Estado al cierre de la sesión anterior (2026-08-18): blueprint auditado y endurecido, **Phase 00 DONE con todos los gates verdes**, **Phase 01 IN_PROGRESS con el slice 1 completado** (Run state machine + Verdict, 12 tests verdes).
 
 ## Pasos obligatorios, en orden
 
@@ -17,8 +17,8 @@ Instrucción autosuficiente para la siguiente sesión. Estado al cierre de la se
    ```
    Si algo está rojo, aplica `systematic-debugging` antes de continuar; no asumas que lo rompiste tú ni lo "arregles" a ciegas.
 6. Continúa EXACTAMENTE desde el `Exact Next Task` del HANDOFF:
-   > Implement Phase 01 slice 1: Run domain entity with RunStatus/Verdict state machine (per docs/02 including the new Verdict mapping) plus unit tests covering legal/illegal transitions, in `backend/src/agentic_qa/domain/runs/`, before touching SQLAlchemy or Alembic.
-   El comando de arranque es `/implement-phase 01`. Lee `plans/phase-01-domain-postgres.md` y trabaja slice a slice.
+   > Implement Phase 01 slice 2: Project/UserStory domain entities plus the repository ports (`RunRepository`, `ProjectRepository`, `StoryRepository` as Protocols in `backend/src/agentic_qa/application/ports/`), with fake in-memory implementations exercised by repository contract tests, before touching SQLAlchemy or Alembic.
+   El slice 1 (Run state machine en `domain/runs/run.py` + 12 tests) YA está hecho y commiteado — no lo rehagas ni lo redisenes; extiéndelo sólo si un test de contrato lo exige. El comando de arranque es `/implement-phase 01`. Lee `plans/phase-01-domain-postgres.md` y trabaja slice a slice.
 7. **No repitas side effects**: el stack compose ya se levantó y validó en la sesión anterior (volúmenes `roveqa_postgres_data`/`roveqa_falkordb_data` persisten); las imágenes `roveqa-backend:dev`/`roveqa-frontend:dev` ya compilan; el grafo Graphify ya existe. No re-crees nada de eso salvo que un check demuestre que está roto. No hagas `docker compose down -v` (destruiría datos de Temporal).
 8. **No avances de fase sin gates verdes**: Phase 01 no está Done hasta que TODOS sus gates de `plans/phase-01-domain-postgres.md` pasen (domain unit tests de invariants, migración desde DB limpia a head, cero imports ORM en Domain/Application, repository contract tests). Al cerrar: `/test-and-verify 01`, `/architecture-guard`, actualizar `PROGRESS.md` y `HANDOFF.md` con resultados reales, y DETENTE — no empieces Phase 02 sin instrucción explícita del usuario.
 9. Sigue usando todas las skills y reglas del proyecto: `ponytail` always-on, routing según `docs/21-claude-skill-routing.md` (`backend-slice` + `postgresql` + `error-handling-patterns` para esta fase), `.claude/rules/*` por path, ADR para toda decisión estructural nueva (el último es ADR 0009 — retry ownership/workflow shape/checkpoints; no lo contradigas).

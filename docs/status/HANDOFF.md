@@ -7,7 +7,7 @@
 
 # Phase Status
 - Phase 00: **DONE** (todos los gates PASS, ver Acceptance Gates).
-- Phase 01: **NOT_STARTED**. Ninguna entidad de dominio, ORM ni migración existe todavía.
+- Phase 01: **IN_PROGRESS** — slice 1 completado y commiteado: `backend/src/agentic_qa/domain/runs/run.py` (Run + RunStatus/Verdict state machine) con `backend/tests/domain/test_run_state_machine.py` (12 tests verdes, mypy strict verde). Sin ORM, Alembic, ports ni use cases todavía.
 
 # Last Stable State
 - Git branch `main`, working tree limpio. Historial: blueprint import → blueprint hardening → slices de Phase 00 (cada uno commiteado con checks verdes).
@@ -113,10 +113,10 @@ graphify . --code-only ; graphify explain "agentic_qa"
 - `api`, `worker` (Phase 02), `frontend` como servicio compose (Phase 10), `vllm` (Phase 06), `vllm-embed` (Phase 09), `airllm` (Phase 11), `test-target-app` (Phase 04/15 fixtures).
 
 # Exact Next Task
-Implement Phase 01 slice 1: Run domain entity with RunStatus/Verdict state machine (per docs/02 including the new Verdict mapping) plus unit tests covering legal/illegal transitions, in `backend/src/agentic_qa/domain/runs/`, before touching SQLAlchemy or Alembic.
+Implement Phase 01 slice 2: Project/UserStory domain entities plus the repository ports (`RunRepository`, `ProjectRepository`, `StoryRepository` as Protocols in `backend/src/agentic_qa/application/ports/`), with fake in-memory implementations exercised by repository contract tests, before touching SQLAlchemy or Alembic.
 
 # Exact Next Command
-En Claude Code: `/implement-phase 01`
+En Claude Code: `/implement-phase 01` (la skill detecta el slice 1 ya hecho vía este HANDOFF y continúa con el slice 2)
 
 # Recommended Skills For Next Session
 - `implement-phase` (proceso de fase), `ponytail` (always-on).
