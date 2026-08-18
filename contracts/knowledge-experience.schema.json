@@ -12,6 +12,7 @@
     "kind",
     "observed",
     "model_derived",
+    "created_at",
     "provenance",
     "validity",
     "payload",
@@ -51,6 +52,10 @@
     },
     "model_derived": {
       "type": "boolean"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
     },
     "provenance": {
       "type": "object",
@@ -98,7 +103,9 @@
         "valid_from",
         "valid_to",
         "app_version",
-        "page_fingerprint"
+        "page_fingerprint",
+        "origin",
+        "policy_id"
       ],
       "properties": {
         "valid_from": {
@@ -129,6 +136,20 @@
             "string",
             "null"
           ]
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Origin (scheme://host[:port]) where the knowledge was observed. Retrieval hard filters compare it against the resolved RunPolicy allowed_origins; null means origin-independent knowledge."
+        },
+        "policy_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "RunPolicy under which the knowledge was captured, for policy-compatibility hard filtering; null means not policy-bound."
         }
       }
     },
@@ -139,6 +160,7 @@
       "enum": [
         "candidate",
         "promoted",
+        "trusted",
         "invalidated",
         "rejected",
         "pending_sync"

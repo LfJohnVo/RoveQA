@@ -44,6 +44,12 @@ required=(
   contracts/cli-envelope.schema.json
   contracts/knowledge-experience.schema.json
   contracts/memory-context.schema.json
+  contracts/run-event.schema.json
+  contracts/run-policy.schema.json
+  contracts/agent-action.schema.json
+  contracts/browser-action.schema.json
+  contracts/user-story-contract.schema.json
+  docs/adr/0009-run-workflow-shape-and-retry-ownership.md
   templates/MEMORY_EVAL_TEMPLATE.md
 )
 

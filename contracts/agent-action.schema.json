@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roveqa.dev/schemas/agent-action.v1.json",
   "title": "AgentAction",
   "type": "object",
   "required": [
@@ -11,13 +12,16 @@
   ],
   "properties": {
     "action_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "intent": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "type": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "preconditions": {
       "type": "array",
@@ -44,6 +48,36 @@
         "verify_before_retry",
         "non_retryable_requires_human"
       ]
+    },
+    "verification_strategy": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How the executed action is verified (postcondition check, idempotency-marker lookup, fingerprint compare). Consumed by verify-before-retry per docs/05."
+    },
+    "actual_outcome": {
+      "type": ["object", "null"],
+      "description": "Recorded post-execution; null while the action is not yet executed/verified."
+    },
+    "artifact_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
-  }
+  },
+  "if": {
+    "properties": {
+      "side_effect": {
+        "const": true
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "preconditions",
+      "expected_postconditions",
+      "verification_strategy"
+    ]
+  },
+  "additionalProperties": false
 }

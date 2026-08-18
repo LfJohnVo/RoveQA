@@ -8,7 +8,7 @@ Start/pause/resume/cancel de runs durables sin browser todavía, con identidad d
 2. `X-Request-Id`: aceptar o generar, propagar a logs/events y devolver en response.
 3. `POST /runs` con `Idempotency-Key` durable; mismo logical request/key devuelve el mismo logical run/resultado sin crear duplicate workflow.
 4. Persistir idempotency records en PostgreSQL con request fingerprint/response identity y reglas de expiración/reuse documentadas; Redis no es source of truth.
-5. Workflow `AgentRunWorkflow` con state durable.
+5. Workflow `AgentRunWorkflow` con state durable, siguiendo la forma de workflow/retry ownership de ADR 0009.
 6. Activities mínimas para persist status/events.
 7. Pause/resume vía signals/updates adecuados; cancel semantics explícita y naturalmente idempotente cuando corresponde.
 8. `GET /runs/{id}` con status durable; dejar seam para bounded long-poll usado por Phase 08 sin alojar loops de horas en FastAPI.

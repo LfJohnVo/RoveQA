@@ -115,6 +115,8 @@ A timeout result must include the `run_id`, last known status and a next action 
 
 Materialize into a sibling temp directory first and promote files atomically. `manifest.json` is final. `.partial` means do not consume.
 
+`manifest.json` es **autoritativo**: `observation.json` y `hypothesis.json` son extracciones verbatim de los campos `deterministic_observation` y `root_cause_hypothesis` del manifest, para lectura cómoda. Ante divergencia gana el manifest. `result.json` y `steps.json` son proyecciones del run result/steps públicos del API y adoptan schema formal antes de Phase 08.
+
 ## Agent verification skill
 The installed skill should enforce:
 

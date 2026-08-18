@@ -1,19 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roveqa.dev/schemas/run-policy.v1.json",
   "title": "RunPolicy",
   "type": "object",
   "required": [
     "allowed_origins",
     "destructive_actions",
     "max_duration_seconds",
-    "max_actions"
+    "max_actions",
+    "max_model_calls"
   ],
   "properties": {
     "allowed_origins": {
       "type": "array",
       "items": {
         "type": "string",
-        "format": "uri"
+        "pattern": "^https?://[^/\\s?#]+$",
+        "description": "RFC 6454 origin (scheme://host[:port]), no path/query. Exact matching; see docs/13-security.md."
       }
     },
     "destructive_actions": {
@@ -23,6 +26,14 @@
     "allow_file_uploads": {
       "type": "boolean",
       "default": false
+    },
+    "upload_path_allowlist": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Directories/globs the browser may read files from for uploads. Required in practice when allow_file_uploads is true; empty means no uploads possible."
     },
     "allow_downloads": {
       "type": "boolean",
@@ -35,6 +46,11 @@
     "max_actions": {
       "type": "integer",
       "minimum": 1
+    },
+    "max_model_calls": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Upper bound of model invocations for a run governed by this policy. A referenced RunPolicy must be an equivalent-or-stronger substitute for the inline plan budget."
     },
     "max_depth": {
       "type": "integer",

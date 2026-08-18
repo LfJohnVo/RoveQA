@@ -31,6 +31,11 @@
       "enum": ["product", "plan", "environment", "policy", "agent_budget", "model", "unknown", null]
     },
     "failed_step_index": { "type": ["integer", "null"], "minimum": 0 },
+    "failed_step_id": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Stable step_id from the executed TestPlan version; primary key for cross-version diff/flaky correlation. failed_step_index is positional convenience only."
+    },
     "captured_at": { "type": "string", "format": "date-time" },
     "deterministic_observation": { "type": ["string", "null"], "maxLength": 20000 },
     "root_cause_hypothesis": {
@@ -61,7 +66,12 @@
         "properties": {
           "artifact_id": { "type": "string", "minLength": 1 },
           "kind": { "type": "string", "minLength": 1 },
-          "relative_path": { "type": "string", "minLength": 1 },
+          "relative_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!(.*/)?\\.\\.?(/.*)?$)[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+            "description": "POSIX-style path relative to the bundle root. No absolute paths, drive letters, backslashes or '.'/'..' segments; the consumer must additionally verify the resolved path stays inside the bundle directory before writing."
+          },
           "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
           "size_bytes": { "type": "integer", "minimum": 0 },
           "run_id": { "type": "string", "minLength": 1 },

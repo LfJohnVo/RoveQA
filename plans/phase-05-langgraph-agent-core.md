@@ -9,7 +9,7 @@ Agent loop durable usando un FakeModelGateway determinista inicialmente.
 3. PostgreSQL-backed checkpointer.
 4. Context compaction y EpisodeSummary.
 5. Fake planner/action model para tests reproducibles.
-6. Temporal Activity que ejecuta/resume graph con heartbeat.
+6. Temporal Activity que ejecuta/resume graph con heartbeat (`RunEpisodeActivity`, una por episodio; retry ownership y checkpoint reconciliation según ADR 0009).
 7. Kill/restart test durante run multi-step.
 
 ## Gates

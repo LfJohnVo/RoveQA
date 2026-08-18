@@ -161,6 +161,8 @@ Default inicial, configurable y evaluable:
 
 Los thresholds exactos se configuran y se ajustan por benchmark, no por intuición. Incluso `trusted` exige RunPolicy + precondition verification.
 
+Estados adicionales del contrato (`contracts/knowledge-experience.schema.json`): `rejected` (candidato descartado en consolidación, nunca promovido) y `pending_sync` (durable en PostgreSQL, aún no materializado en el graph por outage/backlog; no es un tier de promoción).
+
 ## Reliability
 Mantener contadores deterministas (`success_count`, `failure_count`, `contradiction_count`, `last_verified_at`). Puede usarse como baseline una estimación suavizada tipo Beta:
 

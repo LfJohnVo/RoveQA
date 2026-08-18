@@ -37,8 +37,11 @@
           "memory_id",
           "kind",
           "summary",
+          "observed",
+          "model_derived",
           "reliability",
           "freshness",
+          "validity",
           "compatibility",
           "provenance",
           "selection_reason"
@@ -51,6 +54,14 @@
           "kind": {
             "type": "string",
             "minLength": 1
+          },
+          "observed": {
+            "type": "boolean",
+            "description": "True when the item derives from deterministic verified observation. Mirrors knowledge-experience.v1; the label must survive retrieval so the planner never treats an LLM hypothesis as an observed fact."
+          },
+          "model_derived": {
+            "type": "boolean",
+            "description": "True when the item originates from a model hypothesis. Must never be silently dropped or coerced to observed."
           },
           "summary": {
             "type": "string",
@@ -66,6 +77,35 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1
+          },
+          "validity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "valid_from",
+              "valid_to",
+              "last_verified_at"
+            ],
+            "properties": {
+              "valid_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "valid_to": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "last_verified_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              }
+            }
           },
           "compatibility": {
             "enum": [

@@ -27,7 +27,9 @@
 `contracts/test-plan.schema.json` es el contrato portable. Persistir un plan no puede hacerlo imposible de exportar losslessly.
 
 ### Runs
-- `POST /api/v1/runs` — acepta `plan_id + version` o un TestPlan inline válido. Requiere/acepta `Idempotency-Key`.
+- `POST /api/v1/runs` — acepta `plan_id + version` o un TestPlan inline válido. Requiere `Idempotency-Key`.
+  - **RunPolicy resolution (normativo)**: el servidor resuelve la RunPolicy efectiva en este orden: `run_policy_id` del plan → default del Environment → default del Project. Si ninguna resuelve, la request falla con error tipado. Un run nunca arranca sin una RunPolicy resuelta con `allowed_origins`. El run persiste el policy id/version resuelto como provenance.
+  - **Inline plan versioning (normativo)**: si el plan inline no trae `plan_version`, el servidor asigna una versión canónica = content-hash del plan normalizado. Ese valor es el que registran run, evidence y FailureBundle (`plan_version` es required en el manifest).
 - `GET /api/v1/runs/{run_id}` — status/verdict/provenance. Opcional `wait_seconds=1..N` para bounded long-poll y `include_steps=false` por defecto.
 - `POST /api/v1/runs/{run_id}/pause`
 - `POST /api/v1/runs/{run_id}/resume`
@@ -40,6 +42,9 @@
 
 ### Artifacts
 - `GET /api/v1/artifacts/{artifact_id}` — metadata o streaming/download autorizado según content negotiation/endpoints separados.
+
+### Memory admin (Phase 09)
+La superficie de administración de memoria (`memory status|rebuild|validate`) se especifica en `docs/26-adaptive-learning-graph.md` y se añade aquí cuando Phase 09 la implemente como endpoints públicos (`GET /api/v1/projects/{id}/memory/status`, `POST .../memory/rebuild` con `Idempotency-Key`, `POST .../memory/validate`). La CLI sigue siendo thin-client sobre estos endpoints.
 
 `run diff` puede empezar como comparación determinista client-side de dos snapshots públicos; si el cálculo se vuelve domain logic compartida, promoverlo a un Application query/API sin duplicarlo en UI/CLI.
 

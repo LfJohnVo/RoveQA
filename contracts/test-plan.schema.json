@@ -53,5 +53,6 @@
   "anyOf": [
     { "required": ["run_policy_id"] },
     { "required": ["budget"] }
-  ]
+  ],
+  "$comment": "A plan without run_policy_id is still portable, but the server MUST resolve an effective RunPolicy at POST /runs (plan run_policy_id, else environment default, else project default) and a run never starts without a resolved RunPolicy containing allowed_origins. See docs/12-api-and-events.md and docs/13-security.md."
 }
