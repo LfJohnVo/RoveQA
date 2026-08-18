@@ -65,13 +65,15 @@ async def test_repositories_of_one_unit_of_work_share_the_transaction(
     """A run written next to its project must be atomic with it, not half-committed."""
     async with unit_of_work_factory() as uow:
         await uow.projects.add(Project(project_id="p-atomic", name="Checkout"))
-        run = await create_run_draft(
-            uow.projects, uow.runs, CreateRunDraftCommand(project_id="p-atomic")
-        )
         await uow.commit()
 
     async with unit_of_work_factory() as uow:
-        stored = await uow.runs.get(run.run_id)
+        result = await create_run_draft(
+            uow, CreateRunDraftCommand(project_id="p-atomic", idempotency_key="k-atomic")
+        )
+
+    async with unit_of_work_factory() as uow:
+        stored = await uow.runs.get(result.run.run_id)
         assert stored is not None
         assert stored.status is RunStatus.CREATED
         assert await uow.projects.get("p-atomic") is not None

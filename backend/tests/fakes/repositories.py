@@ -9,6 +9,7 @@ transaction able to roll back for real.
 from dataclasses import dataclass, field, replace
 
 from agentic_qa.application.errors import AlreadyExistsError
+from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.runs.run import Run
@@ -19,12 +20,14 @@ class InMemoryStore:
     projects: dict[str, Project] = field(default_factory=dict)
     stories: dict[str, UserStory] = field(default_factory=dict)
     runs: dict[str, Run] = field(default_factory=dict)
+    idempotency: dict[tuple[str, str], IdempotencyRecord] = field(default_factory=dict)
 
     def snapshot(self) -> "InMemoryStore":
         return InMemoryStore(
             projects=dict(self.projects),
             stories=dict(self.stories),
             runs=dict(self.runs),
+            idempotency=dict(self.idempotency),
         )
 
     def restore(self, snapshot: "InMemoryStore") -> None:
@@ -35,6 +38,8 @@ class InMemoryStore:
         self.stories.update(snapshot.stories)
         self.runs.clear()
         self.runs.update(snapshot.runs)
+        self.idempotency.clear()
+        self.idempotency.update(snapshot.idempotency)
 
 
 class InMemoryProjectRepository:
@@ -70,6 +75,20 @@ class InMemoryStoryRepository:
             key=lambda s: s.story_id,
         )
         return [replace(story) for story in matching[:limit]]
+
+
+class InMemoryIdempotencyRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def get(self, scope: str, key: str) -> IdempotencyRecord | None:
+        return self._store.idempotency.get((scope, key))
+
+    async def add(self, record: IdempotencyRecord) -> None:
+        identity = (record.scope, record.key)
+        if identity in self._store.idempotency:
+            raise AlreadyExistsError("idempotency_record", f"{record.scope}/{record.key}")
+        self._store.idempotency[identity] = record
 
 
 class InMemoryRunRepository:

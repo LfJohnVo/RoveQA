@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentic_qa.application.errors import AlreadyExistsError
+from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.runs.run import Run
@@ -21,6 +22,7 @@ from agentic_qa.infrastructure.persistence.postgres.mappers import (
     story_to_model,
 )
 from agentic_qa.infrastructure.persistence.postgres.models import (
+    IdempotencyRecordModel,
     ProjectModel,
     RunModel,
     UserStoryModel,
@@ -87,6 +89,43 @@ class PostgresStoryRepository:
         )
         result = await self._session.scalars(statement)
         return [story_to_domain(model) for model in result]
+
+
+class PostgresIdempotencyRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, scope: str, key: str) -> IdempotencyRecord | None:
+        model = await self._session.get(IdempotencyRecordModel, (scope, key))
+        if model is None:
+            return None
+        return IdempotencyRecord(
+            scope=model.scope,
+            key=model.idempotency_key,
+            request_fingerprint=model.request_fingerprint,
+            resource_id=model.resource_id,
+            created_at=model.created_at,
+        )
+
+    async def add(self, record: IdempotencyRecord) -> None:
+        if await self.get(record.scope, record.key) is not None:
+            raise AlreadyExistsError("idempotency_record", f"{record.scope}/{record.key}")
+        try:
+            async with self._session.begin_nested():
+                self._session.add(
+                    IdempotencyRecordModel(
+                        scope=record.scope,
+                        idempotency_key=record.key,
+                        request_fingerprint=record.request_fingerprint,
+                        resource_id=record.resource_id,
+                    )
+                )
+        except IntegrityError as error:  # concurrent request won the race
+            if _is_unique_violation(error):
+                raise AlreadyExistsError(
+                    "idempotency_record", f"{record.scope}/{record.key}"
+                ) from error
+            raise
 
 
 class PostgresRunRepository:

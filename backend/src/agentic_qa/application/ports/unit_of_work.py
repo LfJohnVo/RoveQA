@@ -9,6 +9,7 @@ commit must lose the write, never persist half of it.
 from types import TracebackType
 from typing import Protocol, Self
 
+from agentic_qa.application.ports.idempotency import IdempotencyRepository
 from agentic_qa.application.ports.repositories import (
     ProjectRepository,
     RunRepository,
@@ -25,6 +26,9 @@ class UnitOfWork(Protocol):
 
     @property
     def runs(self) -> RunRepository: ...
+
+    @property
+    def idempotency(self) -> IdempotencyRepository: ...
 
     async def __aenter__(self) -> Self: ...
 

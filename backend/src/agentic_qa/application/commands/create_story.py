@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from agentic_qa.application.errors import NotFoundError
-from agentic_qa.application.ports.repositories import ProjectRepository, StoryRepository
+from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion, UserStory
 
 
@@ -19,12 +19,8 @@ class CreateStoryCommand:
     forbidden_outcomes: tuple[str, ...] = field(default=())
 
 
-async def create_story(
-    projects: ProjectRepository,
-    stories: StoryRepository,
-    command: CreateStoryCommand,
-) -> UserStory:
-    if await projects.get(command.project_id) is None:
+async def create_story(uow: UnitOfWork, command: CreateStoryCommand) -> UserStory:
+    if await uow.projects.get(command.project_id) is None:
         raise NotFoundError("project", command.project_id)
 
     story = UserStory(
@@ -36,5 +32,6 @@ async def create_story(
         preconditions=command.preconditions,
         forbidden_outcomes=command.forbidden_outcomes,
     )
-    await stories.add(story)
+    await uow.stories.add(story)
+    await uow.commit()
     return story

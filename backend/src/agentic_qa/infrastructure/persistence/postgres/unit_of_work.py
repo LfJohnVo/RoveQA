@@ -6,6 +6,7 @@ from typing import Self
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_qa.infrastructure.persistence.postgres.repositories import (
+    PostgresIdempotencyRepository,
     PostgresProjectRepository,
     PostgresRunRepository,
     PostgresStoryRepository,
@@ -36,6 +37,10 @@ class PostgresUnitOfWork:
     @property
     def runs(self) -> PostgresRunRepository:
         return PostgresRunRepository(self.session)
+
+    @property
+    def idempotency(self) -> PostgresIdempotencyRepository:
+        return PostgresIdempotencyRepository(self.session)
 
     async def __aenter__(self) -> Self:
         self._session = self._session_factory()

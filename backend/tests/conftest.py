@@ -44,7 +44,7 @@ from tests.fakes.unit_of_work import InMemoryUnitOfWork
 DEFAULT_TEST_DSN = "postgresql+asyncpg://agentic:agentic@localhost:5432/agentic_qa"
 
 # Written by the committing unit-of-work tests; truncated in their teardown.
-COMMITTED_TABLES = "projects, user_stories, acceptance_criteria, runs"
+COMMITTED_TABLES = "projects, user_stories, acceptance_criteria, runs, idempotency_records"
 
 # The schema is created once per pytest process; engines stay per-test so every
 # connection belongs to the event loop that uses it.
@@ -122,21 +122,9 @@ async def repositories(request: pytest.FixtureRequest) -> AsyncIterator[Reposito
         )
 
 
-@pytest.fixture(params=["memory", "postgres"])
-async def unit_of_work_factory(
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[Callable[[], UnitOfWork]]:
-    """Build fresh units of work over one shared store/database.
-
-    A factory rather than a single instance: proving a commit survived means opening
-    a *new* transaction and finding the data there. The postgres parameter really
-    commits, so its teardown truncates.
-    """
-    if request.param == "memory":
-        store = InMemoryStore()
-        yield lambda: InMemoryUnitOfWork(store)
-        return
-
+@asynccontextmanager
+async def postgres_unit_of_work_scope() -> AsyncIterator[Callable[[], UnitOfWork]]:
+    """Units of work that really commit, with a truncating teardown."""
     dsn = test_dsn()
     engine = create_engine(dsn)
     try:
@@ -151,3 +139,27 @@ async def unit_of_work_factory(
                 )
     finally:
         await engine.dispose()
+
+
+@pytest.fixture
+async def postgres_unit_of_work_factory() -> AsyncIterator[Callable[[], UnitOfWork]]:
+    async with postgres_unit_of_work_scope() as factory:
+        yield factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+async def unit_of_work_factory(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[Callable[[], UnitOfWork]]:
+    """Build fresh units of work over one shared store/database.
+
+    A factory rather than a single instance: proving a commit survived means opening
+    a *new* transaction and finding the data there.
+    """
+    if request.param == "memory":
+        store = InMemoryStore()
+        yield lambda: InMemoryUnitOfWork(store)
+        return
+
+    async with postgres_unit_of_work_scope() as factory:
+        yield factory

@@ -1,13 +1,12 @@
 """Create a project.
 
-Use cases never commit: the caller owns the transaction boundary, so an adapter can
-group several writes and keep transactions short (docs/09 + postgresql skill).
+Commands own their transaction and commit; queries take repositories (ADR 0010).
 """
 
 from dataclasses import dataclass
 from uuid import uuid4
 
-from agentic_qa.application.ports.repositories import ProjectRepository
+from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.domain.projects.project import Project
 
 
@@ -16,7 +15,8 @@ class CreateProjectCommand:
     name: str
 
 
-async def create_project(projects: ProjectRepository, command: CreateProjectCommand) -> Project:
+async def create_project(uow: UnitOfWork, command: CreateProjectCommand) -> Project:
     project = Project(project_id=str(uuid4()), name=command.name)
-    await projects.add(project)
+    await uow.projects.add(project)
+    await uow.commit()
     return project

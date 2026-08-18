@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Self
 
 from tests.fakes.repositories import (
+    InMemoryIdempotencyRepository,
     InMemoryProjectRepository,
     InMemoryRunRepository,
     InMemoryStore,
@@ -38,6 +39,10 @@ class InMemoryUnitOfWork:
     @property
     def runs(self) -> InMemoryRunRepository:
         return InMemoryRunRepository(self._require_active())
+
+    @property
+    def idempotency(self) -> InMemoryIdempotencyRepository:
+        return InMemoryIdempotencyRepository(self._require_active())
 
     async def __aenter__(self) -> Self:
         self._baseline = self._store.snapshot()

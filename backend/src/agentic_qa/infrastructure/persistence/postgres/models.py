@@ -119,6 +119,25 @@ class AcceptanceCriterionModel(Base):
     story: Mapped[UserStoryModel] = relationship(back_populates="criteria")
 
 
+class IdempotencyRecordModel(Base):
+    """Durable dedup for repeatable mutations (docs/12). Never Redis-only.
+
+    `resource_id` is deliberately not a foreign key: the scope decides what kind of
+    resource it names, and the record is committed in the same transaction as that
+    resource, which is what actually guarantees it points at something real.
+    """
+
+    __tablename__ = "idempotency_records"
+
+    scope: Mapped[str] = mapped_column(String(100), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class RunModel(Base):
     __tablename__ = "runs"
     __table_args__ = (
