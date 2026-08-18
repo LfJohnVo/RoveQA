@@ -1,0 +1,24 @@
+# Blueprint only. Phase 00 must create the actual root compose.yaml after checking compatible image versions.
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+  redis:
+    image: ${REDIS_IMAGE}
+  temporal:
+    image: ${TEMPORAL_IMAGE}
+  temporal-ui:
+    image: ${TEMPORAL_UI_IMAGE}
+  falkordb:
+    image: ${FALKORDB_IMAGE}
+    volumes: [falkordb_data:/data]
+  # Phase 09 adds a local embedding service only when its image/model is validated.
+  vllm-embed:
+    image: ${VLLM_IMAGE}
+    profiles: ["memory-gpu"]
+    # command is intentionally left to Phase 09 after choosing/pinning a supported pooling model.
+  # api, worker and frontend are added when their Dockerfiles exist.
+  # generation vllm, vllm-embed and airllm must be profiles so CPU-only development remains possible.
+volumes:
+  postgres_data: {}
+  falkordb_data: {}

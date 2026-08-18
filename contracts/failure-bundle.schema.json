@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roveqa.dev/schemas/failure-bundle.v1.json",
+  "title": "RoveQA FailureBundle Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bundle_id",
+    "run_id",
+    "evidence_set_id",
+    "project_id",
+    "plan_version",
+    "verdict",
+    "captured_at",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": "roveqa.failure-bundle.v1" },
+    "bundle_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "evidence_set_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "plan_id": { "type": ["string", "null"] },
+    "plan_version": { "type": "string", "minLength": 1 },
+    "target_url": { "type": ["string", "null"], "format": "uri" },
+    "target_fingerprint": { "type": ["string", "null"] },
+    "verdict": { "type": "string", "enum": ["failed", "blocked", "inconclusive", "cancelled"] },
+    "failure_kind": {
+      "type": ["string", "null"],
+      "enum": ["product", "plan", "environment", "policy", "agent_budget", "model", "unknown", null]
+    },
+    "failed_step_index": { "type": ["integer", "null"], "minimum": 0 },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "deterministic_observation": { "type": ["string", "null"], "maxLength": 20000 },
+    "root_cause_hypothesis": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["text", "model_derived"],
+      "properties": {
+        "text": { "type": "string", "maxLength": 20000 },
+        "model_derived": { "const": true },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "recommended_fix_target": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "reference": { "type": ["string", "null"], "maxLength": 2000 },
+        "rationale": { "type": ["string", "null"], "maxLength": 10000 },
+        "model_derived": { "type": "boolean" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact_id", "kind", "relative_path", "sha256", "size_bytes", "run_id", "evidence_set_id"],
+        "properties": {
+          "artifact_id": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "minLength": 1 },
+          "relative_path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "run_id": { "type": "string", "minLength": 1 },
+          "evidence_set_id": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

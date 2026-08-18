@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roveqa.dev/schemas/knowledge-experience.v1.json",
+  "title": "RoveQA Knowledge Experience Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "project_id",
+    "environment_id",
+    "kind",
+    "observed",
+    "model_derived",
+    "provenance",
+    "validity",
+    "payload",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "roveqa.knowledge-experience.v1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "environment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "route",
+        "page_state",
+        "transition",
+        "playbook",
+        "failure_signature",
+        "acceptance_fact",
+        "api_relation",
+        "role_constraint",
+        "locator_hint"
+      ]
+    },
+    "observed": {
+      "type": "boolean"
+    },
+    "model_derived": {
+      "type": "boolean"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_run_id",
+        "source_episode_id",
+        "evidence_set_id"
+      ],
+      "properties": {
+        "source_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_episode_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_set_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "test_plan_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_invocation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valid_from",
+        "valid_to",
+        "app_version",
+        "page_fingerprint"
+      ],
+      "properties": {
+        "valid_from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "valid_to": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "app_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "payload": {
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "candidate",
+        "promoted",
+        "invalidated",
+        "rejected",
+        "pending_sync"
+      ]
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "support_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "success_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failure_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contradiction_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reliability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "last_verified_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

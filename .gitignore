@@ -1,0 +1,35 @@
+.env
+.env.*
+!.env.example
+CLAUDE.local.md
+.claude/settings.local.json
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+node_modules/
+dist/
+coverage/
+.coverage
+htmlcov/
+playwright-report/
+test-results/
+/data/runs/
+/data/browser-state/
+/data/models/
+*.log
+.DS_Store
+
+# Graphify local-only/generated outputs
+graphify-out/cache/
+graphify-out/cost.json
+graphify-out/graph.html
+graphify-out/converted/
+
+# RoveQA local CLI outputs / credentials
+.roveqa/runs/
+.roveqa/cache/
+.roveqa/credentials
+.roveqa/credentials.*

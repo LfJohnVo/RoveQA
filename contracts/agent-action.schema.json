@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentAction",
+  "type": "object",
+  "required": [
+    "action_id",
+    "intent",
+    "type",
+    "side_effect",
+    "idempotency_strategy"
+  ],
+  "properties": {
+    "action_id": {
+      "type": "string"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "payload": {
+      "type": "object"
+    },
+    "expected_postconditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "side_effect": {
+      "type": "boolean"
+    },
+    "idempotency_strategy": {
+      "enum": [
+        "none_read_only",
+        "idempotency_key",
+        "verify_before_retry",
+        "non_retryable_requires_human"
+      ]
+    }
+  }
+}

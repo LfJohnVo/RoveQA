@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roveqa.dev/schemas/test-plan.v1.json",
+  "title": "RoveQA TestPlan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "name", "mode", "plan_steps"],
+  "properties": {
+    "schema_version": { "const": "roveqa.test-plan.v1" },
+    "plan_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "plan_version": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "project_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "environment_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "source_story_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "description": { "type": "string", "maxLength": 4000 },
+    "priority": { "type": "string", "enum": ["p0", "p1", "p2", "p3"] },
+    "mode": { "type": "string", "enum": ["story", "workflow", "regression", "exploratory"] },
+    "memory_policy": { "type": "string", "enum": ["normal", "frozen", "off"], "default": "normal" },
+    "run_policy_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_actions": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "max_duration_seconds": { "type": "integer", "minimum": 1, "maximum": 172800 },
+        "max_model_calls": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      },
+      "minProperties": 1
+    },
+    "plan_steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "type", "description"],
+        "properties": {
+          "step_id": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[A-Za-z0-9._-]+$" },
+          "type": { "type": "string", "enum": ["action", "assertion"] },
+          "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "criterion_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "critical": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+    }
+  },
+  "anyOf": [
+    { "required": ["run_policy_id"] },
+    { "required": ["budget"] }
+  ]
+}

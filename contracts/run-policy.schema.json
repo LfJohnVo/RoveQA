@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunPolicy",
+  "type": "object",
+  "required": [
+    "allowed_origins",
+    "destructive_actions",
+    "max_duration_seconds",
+    "max_actions"
+  ],
+  "properties": {
+    "allowed_origins": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      }
+    },
+    "destructive_actions": {
+      "type": "boolean",
+      "default": false
+    },
+    "allow_file_uploads": {
+      "type": "boolean",
+      "default": false
+    },
+    "allow_downloads": {
+      "type": "boolean",
+      "default": false
+    },
+    "max_duration_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_actions": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_depth": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "synthetic_data_allowed": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "additionalProperties": false
+}

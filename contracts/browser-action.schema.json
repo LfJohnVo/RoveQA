@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BrowserAction",
+  "type": "object",
+  "required": [
+    "type",
+    "intent",
+    "target",
+    "side_effect"
+  ],
+  "properties": {
+    "type": {
+      "enum": [
+        "navigate",
+        "click",
+        "fill",
+        "select",
+        "check",
+        "uncheck",
+        "upload",
+        "press_key",
+        "wait_for",
+        "extract",
+        "assert_text",
+        "assert_url",
+        "screenshot",
+        "back"
+      ]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "value": {},
+    "side_effect": {
+      "type": "boolean"
+    },
+    "expected_postconditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "idempotency_strategy": {
+      "enum": [
+        "none_read_only",
+        "idempotency_key",
+        "verify_before_retry",
+        "non_retryable_requires_human"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

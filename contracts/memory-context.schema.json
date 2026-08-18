@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roveqa.dev/schemas/memory-context.v1.json",
+  "title": "RoveQA Retrieved Memory Context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "query_id",
+    "project_id",
+    "environment_id",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "roveqa.memory-context.v1"
+    },
+    "query_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "environment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "memory_id",
+          "kind",
+          "summary",
+          "reliability",
+          "freshness",
+          "compatibility",
+          "provenance",
+          "selection_reason"
+        ],
+        "properties": {
+          "memory_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "reliability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "freshness": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "compatibility": {
+            "enum": [
+              "exact",
+              "compatible",
+              "revalidate",
+              "incompatible"
+            ]
+          },
+          "provenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source_run_id",
+              "candidate_id"
+            ],
+            "properties": {
+              "source_run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "candidate_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence_set_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "selection_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    }
+  }
+}

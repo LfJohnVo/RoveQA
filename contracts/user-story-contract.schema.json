@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecutableUserStoryContract",
+  "type": "object",
+  "required": [
+    "story_id",
+    "actor",
+    "goal",
+    "acceptance_criteria"
+  ],
+  "properties": {
+    "story_id": {
+      "type": "string"
+    },
+    "actor": {
+      "type": "string"
+    },
+    "goal": {
+      "type": "string"
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "description"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "verification_hint": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "forbidden_outcomes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
