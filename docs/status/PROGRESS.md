@@ -1,12 +1,12 @@
 # Progress
 
-Última actualización: 2026-08-18 — Phase 00 completada; blueprint auditado y endurecido (ver HANDOFF).
+Última actualización: 2026-08-18 — Phase 01 completada (Opus 5); Phase 00 completada y blueprint auditado (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
 | 00 | DONE | `scripts/ci-local.sh` all green (blueprint + ruff/format/mypy/pytest + eslint/tsc/vitest/build + compose config); 5 servicios compose healthy; FalkorDB persistence probada write→restart→read; imágenes backend/frontend construidas; graphify-out/graph.json generado (code-only) |
-| 01 | IN_PROGRESS | slice 1 DONE: Run state machine + Verdict invariants, 12 domain unit tests verdes (mypy strict/ruff verdes); faltan ports, SQLAlchemy/Alembic, use cases e integration tests |
-| 02 | BLOCKED | requiere 01 |
+| 01 | DONE | 4/4 gates PASS: 23 domain tests (Run state machine + Verdict + entity invariants), migración verificada desde schema vacío + `alembic check` sin drift, test automático de dependency rule (Domain/Application sin ORM/framework), 20 contract tests corriendo contra memory y PostgreSQL. 68 tests backend; `ci-local.sh` all green |
+| 02 | NOT_STARTED | desbloqueada por 01 |
 | 03 | BLOCKED | requiere 02 |
 | 04 | BLOCKED | requiere 02 |
 | 05 | BLOCKED | requiere 04 |

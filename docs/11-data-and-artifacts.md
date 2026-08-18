@@ -2,12 +2,12 @@
 
 ## PostgreSQL tables — initial proposal
 
-Introducir las tablas por fase, no en una mega migración:
+Introducir las tablas por fase, no en una mega migración. ✅ = ya migrada:
 
-- `projects`, `environments`, `credential_refs`
-- `user_stories`, `acceptance_criteria`, `test_cases`
+- `projects` ✅ (Phase 01), `environments`, `credential_refs`
+- `user_stories` ✅ (Phase 01), `acceptance_criteria` ✅ (Phase 01), `test_cases`
 - `test_plans`, `test_plan_versions`
-- `runs`, `episodes`, `goals`
+- `runs` ✅ (Phase 01), `episodes`, `goals`
 - `agent_actions`, `observations`, `verifications`, `findings`
 - `checkpoints`, `run_events`
 - `evidence_sets`, `artifacts`
