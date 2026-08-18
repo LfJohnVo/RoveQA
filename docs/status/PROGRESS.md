@@ -1,6 +1,6 @@
 # Progress
 
-Última actualización: 2026-08-18 — Phase 04 en curso (2/5 slices); Phases 00-03 completadas y blueprint auditado (ver HANDOFF).
+Última actualización: 2026-08-18 — Phase 04 completada; Phases 00-03 completadas y blueprint auditado (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
@@ -8,8 +8,8 @@
 | 01 | DONE | 4/4 gates PASS: 23 domain tests (Run state machine + Verdict + entity invariants), migración verificada desde schema vacío + `alembic check` sin drift, test automático de dependency rule (Domain/Application sin ORM/framework), 20 contract tests corriendo contra memory y PostgreSQL. 68 tests backend; `ci-local.sh` all green |
 | 02 | DONE | 7/7 gates PASS: run sobrevive al reemplazo del worker (test contra Temporal real), API sin loops largos, workflow puro (test AST), status sólo escrito por activities vía state machine, request id end-to-end en logs, duplicate POST /runs no duplica run ni workflow, reuse incompatible de key falla tipado. 112 tests backend; e2e por el stack containerizado (api+worker) → completed/inconclusive |
 | 03 | DONE | 3/3 gates PASS: cliente reconecta y recupera baseline durable desde `run_events` (REST + WebSocket con catch-up antes del live), `FLUSHALL` + restart de Redis no cambian status ni historial confirmados, locks expiran/renuevan con ownership token verificado por Lua. 173 tests backend; e2e containerizado con 3 eventos en el log durable y en el stream |
-| 04 | IN_PROGRESS | slices 1-2 DONE: Environment/RunPolicy con resolución normativa (plan → environment → project, fallo tipado 422 si no resuelve) y origins RFC 6454 exactos; action set cerrado sin JS arbitrario + GuardedBrowserGateway que hace inbypasseable la policy. 216 tests. Faltan: test-target-app, adapter Playwright, evidence/artifacts, recovery |
-| 05 | BLOCKED | requiere 04 |
+| 04 | DONE | 5/5 gates PASS: sin JS arbitrario (action set cerrado), origin policy aplicada en dominio y sobre Chromium real, recovery tras crash real con storage state, manifests con provenance verificable (hash/size/streaming), y cross-run imposible por construcción. 247 tests incl. 31 de browser contra Chromium; `ci-local.sh` all green |
+| 05 | NOT_STARTED | desbloqueada por 04 |
 | 06 | BLOCKED | requiere 05 |
 | 07 | BLOCKED | requiere 05-06 |
 | 08 | BLOCKED | requiere 02 + 07 contracts |
