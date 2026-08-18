@@ -132,6 +132,26 @@ def test_workflow_code_performs_no_io() -> None:
     assert not violations, f"workflow module must stay pure, found: {violations}"
 
 
+def test_the_raw_browser_adapter_is_only_reachable_through_the_guard() -> None:
+    """Policy enforcement lives in a wrapper, so the raw adapter must stay contained.
+
+    If production code outside infrastructure imported the Playwright gateway
+    directly, it could hand an unguarded browser to a run and every origin and
+    destructive-action check would silently stop applying.
+    """
+    offenders = [
+        source_file.relative_to(SOURCE_ROOT)
+        for layer in ("domain", "application", "interfaces")
+        for source_file in layer_files(layer)
+        if forbidden_imports(source_file, ("agentic_qa.infrastructure.browser",))
+    ]
+
+    assert not offenders, (
+        "these modules import the Playwright adapter directly instead of receiving a "
+        f"GuardedBrowserGateway: {offenders}"
+    )
+
+
 @pytest.mark.parametrize(
     "line",
     [
