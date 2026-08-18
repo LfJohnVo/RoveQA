@@ -8,11 +8,12 @@ reason names the DSN — a silent pass would hide a broken adapter.
 """
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from agentic_qa.application.ports.repositories import (
@@ -20,6 +21,7 @@ from agentic_qa.application.ports.repositories import (
     RunRepository,
     StoryRepository,
 )
+from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.infrastructure.persistence.postgres.engine import (
     create_engine,
     create_session_factory,
@@ -30,13 +32,19 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresRunRepository,
     PostgresStoryRepository,
 )
+from agentic_qa.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 from tests.fakes.repositories import (
     InMemoryProjectRepository,
     InMemoryRunRepository,
+    InMemoryStore,
     InMemoryStoryRepository,
 )
+from tests.fakes.unit_of_work import InMemoryUnitOfWork
 
 DEFAULT_TEST_DSN = "postgresql+asyncpg://agentic:agentic@localhost:5432/agentic_qa"
+
+# Written by the committing unit-of-work tests; truncated in their teardown.
+COMMITTED_TABLES = "projects, user_stories, acceptance_criteria, runs"
 
 # The schema is created once per pytest process; engines stay per-test so every
 # connection belongs to the event loop that uses it.
@@ -55,10 +63,11 @@ class Repositories:
 
 
 def in_memory_repositories() -> Repositories:
+    store = InMemoryStore()
     return Repositories(
-        projects=InMemoryProjectRepository(),
-        stories=InMemoryStoryRepository(),
-        runs=InMemoryRunRepository(),
+        projects=InMemoryProjectRepository(store),
+        stories=InMemoryStoryRepository(store),
+        runs=InMemoryRunRepository(store),
     )
 
 
@@ -111,3 +120,34 @@ async def repositories(request: pytest.FixtureRequest) -> AsyncIterator[Reposito
             stories=PostgresStoryRepository(session),
             runs=PostgresRunRepository(session),
         )
+
+
+@pytest.fixture(params=["memory", "postgres"])
+async def unit_of_work_factory(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[Callable[[], UnitOfWork]]:
+    """Build fresh units of work over one shared store/database.
+
+    A factory rather than a single instance: proving a commit survived means opening
+    a *new* transaction and finding the data there. The postgres parameter really
+    commits, so its teardown truncates.
+    """
+    if request.param == "memory":
+        store = InMemoryStore()
+        yield lambda: InMemoryUnitOfWork(store)
+        return
+
+    dsn = test_dsn()
+    engine = create_engine(dsn)
+    try:
+        await _ensure_schema(engine, dsn)
+        session_factory = create_session_factory(engine)
+        try:
+            yield lambda: PostgresUnitOfWork(session_factory)
+        finally:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(f"TRUNCATE {COMMITTED_TABLES} RESTART IDENTITY CASCADE")
+                )
+    finally:
+        await engine.dispose()

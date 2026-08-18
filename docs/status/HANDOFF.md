@@ -5,6 +5,13 @@
 # Current Phase
 02 — Run API + Temporal Lifecycle (`plans/phase-02-temporal-run-lifecycle.md`). Phase 01 está DONE con sus 4 gates PASS.
 
+## Plan activo (Phase 02)
+1. `UnitOfWork` port + adapter PostgreSQL; `create_run_draft` dentro de la transacción.
+2. Idempotency records durables (tabla + migración + port + use case con request fingerprint).
+3. FastAPI: DTOs, error contract, `X-Request-Id`, `POST /api/v1/runs`, `GET /api/v1/runs/{id}`.
+4. Temporal `AgentRunWorkflow` + activities + worker + pause/resume/cancel (ADR 0009).
+5. Durability tests (worker restart, lost-response, divergencia status) + gates + docs.
+
 # Phase Status
 - Phase 00: **DONE** (gates PASS; ver histórico más abajo).
 - Phase 01: **DONE** (4/4 gates PASS, ver Acceptance Gates).

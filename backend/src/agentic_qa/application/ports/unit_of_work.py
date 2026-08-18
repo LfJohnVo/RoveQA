@@ -1,0 +1,40 @@
+"""Transaction boundary port.
+
+Repositories are reached *through* a unit of work so a use case cannot accidentally
+mix repositories bound to different transactions — the failure mode that silently
+breaks atomicity. Leaving the block without `commit()` rolls back: forgetting to
+commit must lose the write, never persist half of it.
+"""
+
+from types import TracebackType
+from typing import Protocol, Self
+
+from agentic_qa.application.ports.repositories import (
+    ProjectRepository,
+    RunRepository,
+    StoryRepository,
+)
+
+
+class UnitOfWork(Protocol):
+    @property
+    def projects(self) -> ProjectRepository: ...
+
+    @property
+    def stories(self) -> StoryRepository: ...
+
+    @property
+    def runs(self) -> RunRepository: ...
+
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Roll back unless commit() already ran."""
+        ...
+
+    async def commit(self) -> None: ...
