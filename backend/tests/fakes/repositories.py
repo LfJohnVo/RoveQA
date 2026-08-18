@@ -8,7 +8,7 @@ transaction able to roll back for real.
 
 from dataclasses import dataclass, field, replace
 
-from agentic_qa.application.errors import AlreadyExistsError
+from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.qa.user_story import UserStory
@@ -103,3 +103,8 @@ class InMemoryRunRepository:
     async def get(self, run_id: str) -> Run | None:
         stored = self._store.runs.get(run_id)
         return replace(stored) if stored is not None else None
+
+    async def save(self, run: Run) -> None:
+        if run.run_id not in self._store.runs:
+            raise NotFoundError("run", run.run_id)
+        self._store.runs[run.run_id] = replace(run)

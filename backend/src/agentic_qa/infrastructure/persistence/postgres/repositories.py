@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agentic_qa.application.errors import AlreadyExistsError
+from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.qa.user_story import UserStory
@@ -146,3 +146,10 @@ class PostgresRunRepository:
     async def get(self, run_id: str) -> Run | None:
         model = await self._session.get(RunModel, run_id)
         return run_to_domain(model) if model is not None else None
+
+    async def save(self, run: Run) -> None:
+        model = await self._session.get(RunModel, run.run_id)
+        if model is None:
+            raise NotFoundError("run", run.run_id)
+        model.status = run.status
+        model.verdict = run.verdict

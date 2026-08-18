@@ -10,16 +10,14 @@ from agentic_qa.application.commands.create_project import (
     CreateProjectCommand,
     create_project,
 )
-from agentic_qa.application.commands.create_run_draft import (
-    CreateRunDraftCommand,
-    create_run_draft,
-)
 from agentic_qa.application.commands.create_story import CreateStoryCommand, create_story
+from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.ports.idempotency import RUN_CREATION_SCOPE
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.queries.get_project import get_project
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion
 from agentic_qa.domain.runs.run import RunStatus
+from tests.fakes.workflows import RecordingWorkflowGateway
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 
@@ -46,9 +44,10 @@ async def test_project_story_and_run_draft_reach_the_database(
         )
 
     async with postgres_unit_of_work_factory() as uow:
-        result = await create_run_draft(
+        result = await start_run(
             uow,
-            CreateRunDraftCommand(project_id=project.project_id, idempotency_key="k-e2e"),
+            RecordingWorkflowGateway(),
+            StartRunCommand(project_id=project.project_id, idempotency_key="k-e2e"),
         )
 
     async with postgres_unit_of_work_factory() as uow:
@@ -62,7 +61,7 @@ async def test_project_story_and_run_draft_reach_the_database(
 
         stored_run = await uow.runs.get(result.run.run_id)
         assert stored_run is not None
-        assert stored_run.status is RunStatus.CREATED
+        assert stored_run.status is RunStatus.QUEUED
 
         record = await uow.idempotency.get(RUN_CREATION_SCOPE, "k-e2e")
         assert record is not None
@@ -77,12 +76,13 @@ async def test_a_retried_request_reuses_the_committed_run(
     async with postgres_unit_of_work_factory() as uow:
         project = await create_project(uow, CreateProjectCommand(name="Checkout"))
 
-    command = CreateRunDraftCommand(project_id=project.project_id, idempotency_key="k-retry")
+    command = StartRunCommand(project_id=project.project_id, idempotency_key="k-retry")
 
+    workflows = RecordingWorkflowGateway()
     async with postgres_unit_of_work_factory() as uow:
-        first = await create_run_draft(uow, command)
+        first = await start_run(uow, workflows, command)
     async with postgres_unit_of_work_factory() as uow:
-        second = await create_run_draft(uow, command)
+        second = await start_run(uow, workflows, command)
 
     assert second.replayed is True
     assert second.run.run_id == first.run.run_id

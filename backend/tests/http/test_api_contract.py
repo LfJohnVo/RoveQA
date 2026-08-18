@@ -14,6 +14,7 @@ from agentic_qa.interfaces.http.request_context import (
 )
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
+from tests.fakes.workflows import RecordingWorkflowGateway
 
 
 def asgi_client(container: Container, *, raise_app_exceptions: bool = True) -> httpx.AsyncClient:
@@ -24,14 +25,20 @@ def asgi_client(container: Container, *, raise_app_exceptions: bool = True) -> h
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[httpx.AsyncClient]:
+def workflows() -> RecordingWorkflowGateway:
+    return RecordingWorkflowGateway()
+
+
+@pytest.fixture
+async def client(workflows: RecordingWorkflowGateway) -> AsyncIterator[httpx.AsyncClient]:
     """Drive the real app over ASGI with in-memory adapters.
 
     The container seam keeps this a true HTTP contract test — routing, validation,
-    error handlers and middleware all run — without needing a database.
+    error handlers and middleware all run — without needing a database or Temporal.
     """
     store = InMemoryStore()
-    async with asgi_client(Container(unit_of_work=lambda: InMemoryUnitOfWork(store))) as client:
+    container = Container(unit_of_work=lambda: InMemoryUnitOfWork(store), workflows=workflows)
+    async with asgi_client(container) as client:
         yield client
 
 
@@ -94,7 +101,7 @@ class TestCreateRun:
         assert response.status_code == 201
         body = response.json()
         assert body["project_id"] == project_id
-        assert body["status"] == "created"
+        assert body["status"] == "queued"  # accepted; the worker picks it up
         assert body["verdict"] is None
 
     async def test_repeated_request_replays_with_200(self, client: httpx.AsyncClient) -> None:
@@ -152,6 +159,67 @@ class TestCreateRun:
         )
 
         assert response.status_code == 422
+
+
+class TestRunLifecycleCommands:
+    """The API signals intent; only the workflow's activities write status."""
+
+    async def test_pause_resume_cancel_are_accepted_and_signalled(
+        self, client: httpx.AsyncClient, workflows: RecordingWorkflowGateway
+    ) -> None:
+        project_id = await create_project(client)
+        created = await client.post(
+            "/api/v1/runs", json={"project_id": project_id}, headers={"Idempotency-Key": "k-lc"}
+        )
+        run_id = created.json()["run_id"]
+
+        for action in ("pause", "resume", "cancel"):
+            response = await client.post(f"/api/v1/runs/{run_id}/{action}")
+            assert response.status_code == 202
+            assert response.json() == {"run_id": run_id, "accepted": action}
+
+        assert workflows.signals == [
+            (run_id, "pause"),
+            (run_id, "resume"),
+            (run_id, "cancel"),
+        ]
+
+    async def test_status_does_not_change_just_because_a_command_was_accepted(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """Durable status follows the workflow, never the request that asked for it."""
+        project_id = await create_project(client)
+        created = await client.post(
+            "/api/v1/runs", json={"project_id": project_id}, headers={"Idempotency-Key": "k-st"}
+        )
+        run_id = created.json()["run_id"]
+
+        await client.post(f"/api/v1/runs/{run_id}/cancel")
+
+        after = await client.get(f"/api/v1/runs/{run_id}")
+        assert after.json()["status"] == "queued"
+
+    async def test_cancelling_twice_is_idempotent(
+        self, client: httpx.AsyncClient, workflows: RecordingWorkflowGateway
+    ) -> None:
+        project_id = await create_project(client)
+        created = await client.post(
+            "/api/v1/runs", json={"project_id": project_id}, headers={"Idempotency-Key": "k-cc"}
+        )
+        run_id = created.json()["run_id"]
+
+        first = await client.post(f"/api/v1/runs/{run_id}/cancel")
+        second = await client.post(f"/api/v1/runs/{run_id}/cancel")
+
+        assert first.status_code == second.status_code == 202
+        assert workflows.signals.count((run_id, "cancel")) == 2
+
+    async def test_commands_on_an_unknown_run_are_not_found(
+        self, client: httpx.AsyncClient, workflows: RecordingWorkflowGateway
+    ) -> None:
+        response = await client.post("/api/v1/runs/ghost/cancel")
+        assert response.status_code == 404
+        assert workflows.signals == []
 
 
 class TestProjects:

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 
-from agentic_qa.bootstrap.container import Container, build_container
+from agentic_qa.bootstrap.container import Container, build_container, connect_workflows
 from agentic_qa.bootstrap.settings import Settings
 from agentic_qa.interfaces.http.errors import register_error_handlers
 from agentic_qa.interfaces.http.request_context import (
@@ -23,12 +23,14 @@ def create_app(container: Container | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if injected is None:
-            app.state.container = build_container(Settings.from_env())
+            settings = Settings.from_env()
+            container = await connect_workflows(build_container(settings), settings)
+            app.state.container = container
             try:
                 yield
             finally:
                 # Only dispose what we created; an injected container outlives the app.
-                await app.state.container.aclose()
+                await container.aclose()
         else:
             yield
 

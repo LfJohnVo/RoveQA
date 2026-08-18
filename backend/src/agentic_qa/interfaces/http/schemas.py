@@ -34,6 +34,15 @@ class CreateRunRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=200)
 
 
+class RunAcceptedResponse(BaseModel):
+    """A lifecycle command was accepted; the durable status changes when it applies."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    accepted: str
+
+
 class RunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.bootstrap.container import Container
+from tests.fakes.workflows import RecordingWorkflowGateway
 from tests.http.test_api_contract import asgi_client
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
@@ -16,7 +17,9 @@ UnitOfWorkFactory = Callable[[], UnitOfWork]
 async def test_run_creation_and_replay_against_postgres(
     postgres_unit_of_work_factory: UnitOfWorkFactory,
 ) -> None:
-    container = Container(unit_of_work=postgres_unit_of_work_factory)
+    container = Container(
+        unit_of_work=postgres_unit_of_work_factory, workflows=RecordingWorkflowGateway()
+    )
 
     async with asgi_client(container) as client:
         created = await client.post("/api/v1/projects", json={"name": "Checkout"})
@@ -34,4 +37,4 @@ async def test_run_creation_and_replay_against_postgres(
         # Durable read: a fresh request must see the committed run.
         fetched = await client.get(f"/api/v1/runs/{first.json()['run_id']}")
         assert fetched.status_code == 200
-        assert fetched.json()["status"] == "created"
+        assert fetched.json()["status"] == "queued"

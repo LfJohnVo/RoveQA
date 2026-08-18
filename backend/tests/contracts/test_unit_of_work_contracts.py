@@ -8,13 +8,11 @@ from collections.abc import Callable
 
 import pytest
 
-from agentic_qa.application.commands.create_run_draft import (
-    CreateRunDraftCommand,
-    create_run_draft,
-)
+from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.runs.run import Run, RunStatus
+from tests.fakes.workflows import RecordingWorkflowGateway
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 
@@ -68,14 +66,16 @@ async def test_repositories_of_one_unit_of_work_share_the_transaction(
         await uow.commit()
 
     async with unit_of_work_factory() as uow:
-        result = await create_run_draft(
-            uow, CreateRunDraftCommand(project_id="p-atomic", idempotency_key="k-atomic")
+        result = await start_run(
+            uow,
+            RecordingWorkflowGateway(),
+            StartRunCommand(project_id="p-atomic", idempotency_key="k-atomic"),
         )
 
     async with unit_of_work_factory() as uow:
         stored = await uow.runs.get(result.run.run_id)
         assert stored is not None
-        assert stored.status is RunStatus.CREATED
+        assert stored.status is RunStatus.QUEUED
         assert await uow.projects.get("p-atomic") is not None
 
 

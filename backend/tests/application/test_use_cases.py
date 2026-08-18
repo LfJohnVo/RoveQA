@@ -10,11 +10,8 @@ from agentic_qa.application.commands.create_project import (
     CreateProjectCommand,
     create_project,
 )
-from agentic_qa.application.commands.create_run_draft import (
-    CreateRunDraftCommand,
-    create_run_draft,
-)
 from agentic_qa.application.commands.create_story import CreateStoryCommand, create_story
+from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.errors import IdempotencyConflictError, NotFoundError
 from agentic_qa.application.ports.idempotency import RUN_CREATION_SCOPE
 from agentic_qa.application.queries.get_project import get_project
@@ -24,6 +21,7 @@ from agentic_qa.domain.qa.user_story import AcceptanceCriterion
 from agentic_qa.domain.runs.run import RunStatus
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
+from tests.fakes.workflows import FailingWorkflowGateway, RecordingWorkflowGateway
 
 CRITERIA = (AcceptanceCriterion(criterion_id="ac-1", description="reset email is sent"),)
 
@@ -36,6 +34,11 @@ def store() -> InMemoryStore:
 @pytest.fixture
 def uow(store: InMemoryStore) -> InMemoryUnitOfWork:
     return InMemoryUnitOfWork(store)
+
+
+@pytest.fixture
+def workflows() -> RecordingWorkflowGateway:
+    return RecordingWorkflowGateway()
 
 
 async def seed_project(uow: InMemoryUnitOfWork, project_id: str = "p-1") -> Project:
@@ -131,73 +134,108 @@ class TestCreateStory:
                 )
 
 
-class TestCreateRunDraft:
-    async def test_draft_is_created_but_not_started(self, uow: InMemoryUnitOfWork) -> None:
+class TestStartRun:
+    async def test_run_is_queued_and_handed_to_the_workflow_engine(
+        self, uow: InMemoryUnitOfWork, workflows: RecordingWorkflowGateway
+    ) -> None:
         project = await seed_project(uow)
 
         async with uow:
-            result = await create_run_draft(
-                uow, CreateRunDraftCommand(project_id=project.project_id, idempotency_key="k-1")
+            result = await start_run(
+                uow,
+                workflows,
+                StartRunCommand(project_id=project.project_id, idempotency_key="k-1"),
             )
 
         assert result.replayed is False
+        assert workflows.started == [(result.run.run_id, project.project_id)]
         async with uow:
             stored = await uow.runs.get(result.run.run_id)
             assert stored is not None
-            assert stored.status is RunStatus.CREATED
+            assert stored.status is RunStatus.QUEUED
             assert stored.verdict is None
 
-    async def test_rejects_unknown_project(self, uow: InMemoryUnitOfWork) -> None:
+    async def test_rejects_unknown_project(
+        self, uow: InMemoryUnitOfWork, workflows: RecordingWorkflowGateway
+    ) -> None:
         async with uow:
             with pytest.raises(NotFoundError):
-                await create_run_draft(
-                    uow, CreateRunDraftCommand(project_id="ghost", idempotency_key="k-1")
+                await start_run(
+                    uow, workflows, StartRunCommand(project_id="ghost", idempotency_key="k-1")
                 )
 
+        assert workflows.started == []
+
     async def test_repeating_the_same_request_replays_the_same_run(
-        self, uow: InMemoryUnitOfWork, store: InMemoryStore
+        self,
+        uow: InMemoryUnitOfWork,
+        store: InMemoryStore,
+        workflows: RecordingWorkflowGateway,
     ) -> None:
         """The lost-response case: the client never saw the ACK and retries."""
         project = await seed_project(uow)
-        command = CreateRunDraftCommand(project_id=project.project_id, idempotency_key="k-lost")
+        command = StartRunCommand(project_id=project.project_id, idempotency_key="k-lost")
 
         async with uow:
-            first = await create_run_draft(uow, command)
+            first = await start_run(uow, workflows, command)
         async with uow:
-            second = await create_run_draft(uow, command)
+            second = await start_run(uow, workflows, command)
 
         assert second.replayed is True
         assert second.run.run_id == first.run.run_id
         assert len(store.runs) == 1  # the retry created nothing new
+        assert len(workflows.started) == 1  # and started no second workflow
 
     async def test_reusing_a_key_for_a_different_request_fails_typed(
-        self, uow: InMemoryUnitOfWork
+        self, uow: InMemoryUnitOfWork, workflows: RecordingWorkflowGateway
     ) -> None:
         await seed_project(uow, "p-1")
         await seed_project(uow, "p-2")
 
         async with uow:
-            await create_run_draft(
-                uow, CreateRunDraftCommand(project_id="p-1", idempotency_key="k-shared")
+            await start_run(
+                uow, workflows, StartRunCommand(project_id="p-1", idempotency_key="k-shared")
             )
 
         async with uow:
             with pytest.raises(IdempotencyConflictError):
-                await create_run_draft(
-                    uow, CreateRunDraftCommand(project_id="p-2", idempotency_key="k-shared")
+                await start_run(
+                    uow, workflows, StartRunCommand(project_id="p-2", idempotency_key="k-shared")
                 )
 
-    async def test_record_and_run_are_committed_together(self, uow: InMemoryUnitOfWork) -> None:
+    async def test_record_and_run_are_committed_together(
+        self, uow: InMemoryUnitOfWork, workflows: RecordingWorkflowGateway
+    ) -> None:
         project = await seed_project(uow)
 
         async with uow:
-            command = CreateRunDraftCommand(
-                project_id=project.project_id, idempotency_key="k-atomic"
-            )
-            result = await create_run_draft(uow, command)
+            command = StartRunCommand(project_id=project.project_id, idempotency_key="k-atomic")
+            result = await start_run(uow, workflows, command)
 
         async with uow:
             record = await uow.idempotency.get(RUN_CREATION_SCOPE, "k-atomic")
             assert record is not None
             assert record.resource_id == result.run.run_id
             assert await uow.runs.get(record.resource_id) is not None
+
+    async def test_a_failed_start_leaves_a_recoverable_queued_run(
+        self, uow: InMemoryUnitOfWork, store: InMemoryStore
+    ) -> None:
+        """ADR 0010 ordering: the run is durable before the workflow is started.
+
+        Losing the engine must not lose the run, and must not leave a workflow with no
+        row behind it.
+        """
+        project = await seed_project(uow)
+
+        with pytest.raises(RuntimeError):
+            async with uow:
+                await start_run(
+                    uow,
+                    FailingWorkflowGateway(),
+                    StartRunCommand(project_id=project.project_id, idempotency_key="k-nostart"),
+                )
+
+        assert len(store.runs) == 1
+        queued = next(iter(store.runs.values()))
+        assert queued.status is RunStatus.QUEUED
