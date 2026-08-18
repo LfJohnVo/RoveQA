@@ -495,9 +495,9 @@
     "semantic_hash": "5f9ff13e234f0ce9e384d945f367319a"
   },
   "backend/src/agentic_qa/bootstrap/container.py": {
-    "mtime": 1787085957.9395437,
-    "ast_hash": "6bd7f494c22f45dbf121685046d8149a",
-    "semantic_hash": "6bd7f494c22f45dbf121685046d8149a"
+    "mtime": 1787091141.7739758,
+    "ast_hash": "d9016e47dda78925bd0c8763a89f8733",
+    "semantic_hash": "d9016e47dda78925bd0c8763a89f8733"
   },
   "backend/src/agentic_qa/bootstrap/settings.py": {
     "mtime": 1787085957.8394938,
@@ -510,14 +510,14 @@
     "semantic_hash": "273d3458b692736fca1b8b4d729cc4e7"
   },
   "backend/src/agentic_qa/infrastructure/workflows/temporal/activities.py": {
-    "mtime": 1787085957.8404953,
-    "ast_hash": "c4fe0577f1ff34089ec0d139c24513da",
-    "semantic_hash": "c4fe0577f1ff34089ec0d139c24513da"
+    "mtime": 1787091274.4202783,
+    "ast_hash": "8a7cd337f458977b3a082264ac157580",
+    "semantic_hash": "8a7cd337f458977b3a082264ac157580"
   },
   "backend/src/agentic_qa/infrastructure/workflows/temporal/contracts.py": {
-    "mtime": 1787082624.8504558,
-    "ast_hash": "519b4ce9a6766a6641898a085abcb295",
-    "semantic_hash": "519b4ce9a6766a6641898a085abcb295"
+    "mtime": 1787091141.7754824,
+    "ast_hash": "f62fb820741b0b1463bce1f80b3fd4de",
+    "semantic_hash": "f62fb820741b0b1463bce1f80b3fd4de"
   },
   "backend/src/agentic_qa/infrastructure/workflows/temporal/gateway.py": {
     "mtime": 1787082378.5317993,
@@ -525,9 +525,9 @@
     "semantic_hash": "4ef6674054844c951d3bef6df09edec5"
   },
   "backend/src/agentic_qa/infrastructure/workflows/temporal/worker.py": {
-    "mtime": 1787082203.759922,
-    "ast_hash": "ec45d59ae37123c0992749009c151904",
-    "semantic_hash": "ec45d59ae37123c0992749009c151904"
+    "mtime": 1787091330.84365,
+    "ast_hash": "b5fd15cc8294a66be0febcd55122a02f",
+    "semantic_hash": "b5fd15cc8294a66be0febcd55122a02f"
   },
   "backend/src/agentic_qa/infrastructure/workflows/temporal/workflows.py": {
     "mtime": 1787082664.228168,
@@ -883,5 +883,45 @@
     "mtime": 1787089855.2016907,
     "ast_hash": "52bfc6d838ed2112fdb1cd531da3de83",
     "semantic_hash": "52bfc6d838ed2112fdb1cd531da3de83"
+  },
+  "backend/src/agentic_qa/application/ports/episodes.py": {
+    "mtime": 1787091089.331591,
+    "ast_hash": "df9c6227e39cebfe69b3473edbf887ea",
+    "semantic_hash": "df9c6227e39cebfe69b3473edbf887ea"
+  },
+  "backend/src/agentic_qa/application/ports/models.py": {
+    "mtime": 1787090737.446195,
+    "ast_hash": "6fae24000e9b2448e7fba008cbb88ded",
+    "semantic_hash": "6fae24000e9b2448e7fba008cbb88ded"
+  },
+  "backend/src/agentic_qa/infrastructure/agent/langgraph/episode_runner.py": {
+    "mtime": 1787091274.4202783,
+    "ast_hash": "a70e3a6d31635b71bdf268644bd12f27",
+    "semantic_hash": "a70e3a6d31635b71bdf268644bd12f27"
+  },
+  "backend/src/agentic_qa/infrastructure/agent/langgraph/graph.py": {
+    "mtime": 1787090898.4083517,
+    "ast_hash": "51c4546816cd5b6d08eae1bb2360a7a3",
+    "semantic_hash": "51c4546816cd5b6d08eae1bb2360a7a3"
+  },
+  "backend/tests/agent/test_episode_activity.py": {
+    "mtime": 1787091307.572811,
+    "ast_hash": "69116ac5ac9a1fe23884e29ce28b1830",
+    "semantic_hash": "69116ac5ac9a1fe23884e29ce28b1830"
+  },
+  "backend/tests/agent/test_graph.py": {
+    "mtime": 1787090872.2756095,
+    "ast_hash": "bb2deb6f6456701d434c3fb9df012fdd",
+    "semantic_hash": "bb2deb6f6456701d434c3fb9df012fdd"
+  },
+  "backend/tests/agent/test_graph_resume.py": {
+    "mtime": 1787090951.170477,
+    "ast_hash": "09202de3bdc26739f5f004f9ae26db6f",
+    "semantic_hash": "09202de3bdc26739f5f004f9ae26db6f"
+  },
+  "backend/tests/fakes/agent.py": {
+    "mtime": 1787090776.8757813,
+    "ast_hash": "4e0ac0ccbdd36f7fe64d313ed655e346",
+    "semantic_hash": "4e0ac0ccbdd36f7fe64d313ed655e346"
   }
 }
