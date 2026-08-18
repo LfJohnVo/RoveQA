@@ -24,8 +24,10 @@ from agentic_qa.application.ports.repositories import (
     RunRepository,
     StoryRepository,
 )
+from agentic_qa.application.ports.semaphores import ResourceSemaphore
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.infrastructure.cache.redis.locks import RedisLockManager
+from agentic_qa.infrastructure.cache.redis.semaphores import RedisResourceSemaphore
 from agentic_qa.infrastructure.persistence.postgres.engine import (
     create_engine,
     create_session_factory,
@@ -44,6 +46,7 @@ from tests.fakes.repositories import (
     InMemoryStore,
     InMemoryStoryRepository,
 )
+from tests.fakes.semaphores import InMemoryResourceSemaphore
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
 
 DEFAULT_TEST_DSN = "postgresql+asyncpg://agentic:agentic@localhost:5432/agentic_qa"
@@ -99,6 +102,17 @@ async def lock_manager(request: pytest.FixtureRequest) -> AsyncIterator[LockMana
         return
     async with redis_scope() as client:
         yield RedisLockManager(client)
+
+
+@pytest.fixture(params=["memory", "redis"])
+async def resource_semaphore(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[ResourceSemaphore]:
+    if request.param == "memory":
+        yield InMemoryResourceSemaphore()
+        return
+    async with redis_scope() as client:
+        yield RedisResourceSemaphore(client)
 
 
 @dataclass
