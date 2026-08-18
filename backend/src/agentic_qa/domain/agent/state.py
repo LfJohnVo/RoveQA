@@ -1,0 +1,75 @@
+"""Agent state carried through the graph.
+
+Kept small on purpose: every field here is checkpointed at each superstep, so a state
+that grows with the number of steps makes both the checkpoint and the model context
+grow with it. Completed work is summarized into `episode_summaries` and dropped from
+`recent_steps` (docs/05 context compaction).
+
+This module is pure domain: no LangGraph, no database, no browser.
+"""
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+
+MAX_RECENT_STEPS = 12
+"""Working window. Older steps survive as summaries, not as raw history."""
+
+
+class StepOutcome(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    DENIED = "denied"
+    """Refused by policy: a fact about the run, not a browser malfunction."""
+
+
+@dataclass(frozen=True)
+class StepRecord:
+    index: int
+    intent: str
+    outcome: StepOutcome
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class EpisodeSummary:
+    """What an episode achieved, in place of its raw steps."""
+
+    episode_index: int
+    goal: str
+    steps_taken: int
+    succeeded: bool
+    summary: str
+
+
+@dataclass
+class AgentState:
+    run_id: str
+    goal: str
+    episode_index: int = 0
+    step_index: int = 0
+    recent_steps: tuple[StepRecord, ...] = field(default=())
+    episode_summaries: tuple[EpisodeSummary, ...] = field(default=())
+    last_observation: str = ""
+    pending_action_intent: str | None = None
+    goal_reached: bool = False
+    failure_reason: str | None = None
+
+    def record_step(self, record: StepRecord) -> None:
+        """Append a step and keep only the working window."""
+        self.recent_steps = (*self.recent_steps, record)[-MAX_RECENT_STEPS:]
+        self.step_index = record.index
+
+    def close_episode(self, summary: EpisodeSummary) -> None:
+        """Fold the episode's raw steps into one summary and start the next.
+
+        This is what keeps active context flat: a hundred steps leave a handful of
+        summaries behind, not a hundred entries.
+        """
+        self.episode_summaries = (*self.episode_summaries, summary)
+        self.recent_steps = ()
+        self.episode_index = summary.episode_index + 1
+
+    @property
+    def context_size(self) -> int:
+        """What a planner would have to read: the window plus the summaries."""
+        return len(self.recent_steps) + len(self.episode_summaries)

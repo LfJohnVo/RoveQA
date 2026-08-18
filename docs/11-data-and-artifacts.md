@@ -9,7 +9,7 @@ Introducir las tablas por fase, no en una mega migración. ✅ = ya migrada:
 - `test_plans`, `test_plan_versions`
 - `runs` ✅ (Phase 01), `episodes`, `goals`
 - `agent_actions`, `observations`, `verifications`, `findings`
-- `checkpoints`, `run_events`
+- `recovery_points` ✅ (Phase 05; se llamaba `checkpoints` en el plan original — renombrada porque el checkpointer de LangGraph posee una tabla `checkpoints` propia y ambas colisionaban), `run_events` ✅ (Phase 03)
 - `evidence_sets`, `artifacts`
 - `idempotency_records`
 - `model_invocations`

@@ -17,6 +17,11 @@ from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.user_story import UserStory
+from agentic_qa.domain.runs.recovery import (
+    BrowserRecoveryData,
+    RecoveryPoint,
+    RecoveryTrigger,
+)
 from agentic_qa.domain.runs.run import Run
 from agentic_qa.infrastructure.persistence.postgres.mappers import (
     environment_to_domain,
@@ -34,6 +39,7 @@ from agentic_qa.infrastructure.persistence.postgres.models import (
     EnvironmentModel,
     IdempotencyRecordModel,
     ProjectModel,
+    RecoveryPointModel,
     RunEventModel,
     RunModel,
     RunPolicyModel,
@@ -259,3 +265,55 @@ class PostgresEnvironmentRepository:
     async def get(self, environment_id: str) -> Environment | None:
         model = await self._session.get(EnvironmentModel, environment_id)
         return environment_to_domain(model) if model is not None else None
+
+
+class PostgresRecoveryPointRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, point: RecoveryPoint) -> None:
+        self._session.add(
+            RecoveryPointModel(
+                recovery_point_id=point.recovery_point_id,
+                run_id=point.run_id,
+                episode_index=point.episode_index,
+                trigger=point.trigger.value,
+                graph_checkpoint_id=point.graph_checkpoint_id,
+                browser_url=point.browser.url,
+                page_fingerprint=point.browser.page_fingerprint,
+                storage_state_ref=point.browser.storage_state_ref,
+                last_verified_action=point.browser.last_verified_action,
+            )
+        )
+        await self._session.flush()
+
+    async def latest_for_run(self, run_id: str) -> RecoveryPoint | None:
+        points = await self.list_for_run(run_id, limit=1)
+        return points[0] if points else None
+
+    async def list_for_run(self, run_id: str, *, limit: int) -> list[RecoveryPoint]:
+        statement = (
+            select(RecoveryPointModel)
+            .where(RecoveryPointModel.run_id == run_id)
+            .order_by(RecoveryPointModel.created_at.desc(), RecoveryPointModel.episode_index.desc())
+            .limit(limit)
+        )
+        result = await self._session.scalars(statement)
+        return [_recovery_to_domain(model) for model in result]
+
+
+def _recovery_to_domain(model: RecoveryPointModel) -> RecoveryPoint:
+    return RecoveryPoint(
+        recovery_point_id=model.recovery_point_id,
+        run_id=model.run_id,
+        episode_index=model.episode_index,
+        trigger=RecoveryTrigger(model.trigger),
+        graph_checkpoint_id=model.graph_checkpoint_id,
+        browser=BrowserRecoveryData(
+            url=model.browser_url,
+            page_fingerprint=model.page_fingerprint,
+            storage_state_ref=model.storage_state_ref,
+            last_verified_action=model.last_verified_action,
+        ),
+        created_at=model.created_at,
+    )

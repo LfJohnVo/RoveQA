@@ -69,7 +69,8 @@ DEFAULT_POLICY_PAYLOAD = {
 
 # Written by the committing unit-of-work tests; truncated in their teardown.
 COMMITTED_TABLES = (
-    "projects, user_stories, acceptance_criteria, runs, run_events, idempotency_records"
+    "projects, environments, run_policies, user_stories, acceptance_criteria, "
+    "runs, run_events, recovery_points, idempotency_records"
 )
 
 # The schema is created once per pytest process; engines stay per-test so every
@@ -77,7 +78,7 @@ COMMITTED_TABLES = (
 _schema_ready = False
 
 
-def test_dsn() -> str:
+def postgres_test_dsn() -> str:
     return os.environ.get("POSTGRES_TEST_DSN", DEFAULT_TEST_DSN)
 
 
@@ -163,7 +164,7 @@ async def postgres_session_scope() -> AsyncIterator[AsyncSession]:
     Per-test engines keep every connection inside the event loop that uses it; the
     rollback isolates tests without truncating tables.
     """
-    dsn = test_dsn()
+    dsn = postgres_test_dsn()
     engine = create_engine(dsn)
     try:
         await _ensure_schema(engine, dsn)
@@ -199,7 +200,7 @@ async def repositories(request: pytest.FixtureRequest) -> AsyncIterator[Reposito
 @asynccontextmanager
 async def postgres_unit_of_work_scope() -> AsyncIterator[Callable[[], UnitOfWork]]:
     """Units of work that really commit, with a truncating teardown."""
-    dsn = test_dsn()
+    dsn = postgres_test_dsn()
     engine = create_engine(dsn)
     try:
         await _ensure_schema(engine, dsn)

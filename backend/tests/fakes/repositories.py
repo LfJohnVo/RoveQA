@@ -17,6 +17,7 @@ from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.user_story import UserStory
+from agentic_qa.domain.runs.recovery import RecoveryPoint
 from agentic_qa.domain.runs.run import Run
 
 
@@ -29,6 +30,7 @@ class InMemoryStore:
     events: list[RunEvent] = field(default_factory=list)
     policies: dict[str, RunPolicy] = field(default_factory=dict)
     environments: dict[str, Environment] = field(default_factory=dict)
+    recovery_points: list[RecoveryPoint] = field(default_factory=list)
 
     def snapshot(self) -> "InMemoryStore":
         return InMemoryStore(
@@ -39,6 +41,7 @@ class InMemoryStore:
             events=list(self.events),
             policies=dict(self.policies),
             environments=dict(self.environments),
+            recovery_points=list(self.recovery_points),
         )
 
     def restore(self, snapshot: "InMemoryStore") -> None:
@@ -57,6 +60,8 @@ class InMemoryStore:
         self.policies.update(snapshot.policies)
         self.environments.clear()
         self.environments.update(snapshot.environments)
+        self.recovery_points.clear()
+        self.recovery_points.extend(snapshot.recovery_points)
 
 
 class InMemoryProjectRepository:
@@ -181,3 +186,19 @@ class InMemoryEnvironmentRepository:
     async def get(self, environment_id: str) -> Environment | None:
         stored = self._store.environments.get(environment_id)
         return replace(stored) if stored is not None else None
+
+
+class InMemoryRecoveryPointRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, point: RecoveryPoint) -> None:
+        self._store.recovery_points.append(point)
+
+    async def latest_for_run(self, run_id: str) -> RecoveryPoint | None:
+        points = await self.list_for_run(run_id, limit=1)
+        return points[0] if points else None
+
+    async def list_for_run(self, run_id: str, *, limit: int) -> list[RecoveryPoint]:
+        matching = [p for p in self._store.recovery_points if p.run_id == run_id]
+        return list(reversed(matching))[:limit]

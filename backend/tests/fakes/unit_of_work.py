@@ -12,6 +12,7 @@ from tests.fakes.repositories import (
     InMemoryEnvironmentRepository,
     InMemoryIdempotencyRepository,
     InMemoryProjectRepository,
+    InMemoryRecoveryPointRepository,
     InMemoryRunEventLog,
     InMemoryRunPolicyRepository,
     InMemoryRunRepository,
@@ -58,6 +59,10 @@ class InMemoryUnitOfWork:
     @property
     def environments(self) -> InMemoryEnvironmentRepository:
         return InMemoryEnvironmentRepository(self._require_active())
+
+    @property
+    def recovery_points(self) -> InMemoryRecoveryPointRepository:
+        return InMemoryRecoveryPointRepository(self._require_active())
 
     async def __aenter__(self) -> Self:
         self._baseline = self._store.snapshot()

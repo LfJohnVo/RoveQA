@@ -198,6 +198,36 @@ class RunEventModel(Base):
     request_id: Mapped[str | None] = mapped_column(String(IDENTIFIER_LENGTH), nullable=True)
 
 
+class RecoveryPointModel(Base):
+    """The domain's safe points (ADR 0009).
+
+    Named `recovery_points`, not `checkpoints`: LangGraph's saver owns a table of that
+    exact name, and the two colliding produced a real failure. The distinction is also
+    the right one — this table records which graph checkpoint is *semantically* safe
+    and how to rebuild the browser there, which is not what a superstep checkpoint is.
+    """
+
+    __tablename__ = "recovery_points"
+
+    recovery_point_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    episode_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(50), nullable=False)
+    graph_checkpoint_id: Mapped[str] = mapped_column(String(500), nullable=False)
+    browser_url: Mapped[str] = mapped_column(Text, nullable=False)
+    page_fingerprint: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    storage_state_ref: Mapped[str | None] = mapped_column(String(IDENTIFIER_LENGTH), nullable=True)
+    last_verified_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class IdempotencyRecordModel(Base):
     """Durable dedup for repeatable mutations (docs/12). Never Redis-only.
 
