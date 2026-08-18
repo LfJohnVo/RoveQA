@@ -7,6 +7,9 @@ terminal runs. Mapping rules live in docs/02-domain-model.md.
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from agentic_qa.domain.errors import DomainError
+from agentic_qa.domain.validation import require_identifier
+
 
 class RunStatus(StrEnum):
     CREATED = "created"
@@ -59,7 +62,7 @@ _COMPLETED_VERDICTS = frozenset(
 _INFRA_FAILURE_VERDICTS = frozenset({Verdict.INCONCLUSIVE, Verdict.BLOCKED})
 
 
-class RunTransitionError(Exception):
+class RunTransitionError(DomainError):
     """A run lifecycle invariant was violated."""
 
 
@@ -75,6 +78,10 @@ class Run:
     project_id: str
     status: RunStatus = RunStatus.CREATED
     verdict: Verdict | None = field(default=None)
+
+    def __post_init__(self) -> None:
+        self.run_id = require_identifier(self.run_id, field="run_id")
+        self.project_id = require_identifier(self.project_id, field="project_id")
 
     def transition_to(self, new_status: RunStatus, verdict: Verdict | None = None) -> None:
         if self.status in TERMINAL_STATUSES:
