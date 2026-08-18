@@ -1,6 +1,6 @@
 # Progress
 
-Última actualización: 2026-08-18 — Phase 04 completada; Phases 00-03 completadas y blueprint auditado (ver HANDOFF).
+Última actualización: 2026-08-18 — Phase 05 en curso (1/4 slices); Phases 00-04 completadas y blueprint auditado (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
@@ -9,7 +9,7 @@
 | 02 | DONE | 7/7 gates PASS: run sobrevive al reemplazo del worker (test contra Temporal real), API sin loops largos, workflow puro (test AST), status sólo escrito por activities vía state machine, request id end-to-end en logs, duplicate POST /runs no duplica run ni workflow, reuse incompatible de key falla tipado. 112 tests backend; e2e por el stack containerizado (api+worker) → completed/inconclusive |
 | 03 | DONE | 3/3 gates PASS: cliente reconecta y recupera baseline durable desde `run_events` (REST + WebSocket con catch-up antes del live), `FLUSHALL` + restart de Redis no cambian status ni historial confirmados, locks expiran/renuevan con ownership token verificado por Lua. 173 tests backend; e2e containerizado con 3 eventos en el log durable y en el stream |
 | 04 | DONE | 5/5 gates PASS: sin JS arbitrario (action set cerrado), origin policy aplicada en dominio y sobre Chromium real, recovery tras crash real con storage state, manifests con provenance verificable (hash/size/streaming), y cross-run imposible por construcción. 247 tests incl. 31 de browser contra Chromium; `ci-local.sh` all green |
-| 05 | NOT_STARTED | desbloqueada por 04 |
+| 05 | IN_PROGRESS | slice 1 DONE: `AgentState` con ventana acotada + summaries (contexto plano probado con 500 steps → 10 entradas), tabla `recovery_points` (renombrada por colisión con la tabla `checkpoints` de LangGraph) y checkpointer PostgreSQL cuyo estado sobrevive a una conexión nueva. 260 tests. Faltan: nodos del graph, fake model, compaction en el runtime y RunEpisodeActivity real |
 | 06 | BLOCKED | requiere 05 |
 | 07 | BLOCKED | requiere 05-06 |
 | 08 | BLOCKED | requiere 02 + 07 contracts |
