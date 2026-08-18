@@ -46,6 +46,23 @@ FORBIDDEN_BY_LAYER = {
         "agentic_qa.bootstrap",
         *INFRASTRUCTURE_PACKAGES,
     ),
+    # Delivery translates protocol and calls use cases. It reaches adapters only
+    # through the composition root (bootstrap), never by importing one directly, so
+    # swapping an adapter can never require editing a router.
+    "interfaces": (
+        "agentic_qa.infrastructure",
+        "sqlalchemy",
+        "alembic",
+        "asyncpg",
+        "psycopg",
+        "redis",
+        "temporalio",
+        "langgraph",
+        "langchain",
+        "playwright",
+        "graphiti",
+        "falkordb",
+    ),
 }
 
 
