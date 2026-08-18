@@ -1,0 +1,96 @@
+name: roveqa
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
+      POSTGRES_DB: ${POSTGRES_DB:-agentic_qa}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentic} -d ${POSTGRES_DB:-agentic_qa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: ${TEMPORAL_IMAGE:-temporalio/auto-setup:1.29.7}
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-agentic}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-agentic}
+    ports:
+      - "7233:7233"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address temporal:7233 || tctl --address temporal:7233 cluster health"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  temporal-ui:
+    image: ${TEMPORAL_UI_IMAGE:-temporalio/ui:2.53.3}
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:8233
+    ports:
+      - "8233:8080"
+    depends_on:
+      - temporal
+
+  falkordb:
+    image: ${FALKORDB_IMAGE:-falkordb/falkordb:v4.20.3}
+    ports:
+      - "6380:6379"
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Heavy inference stays behind profiles so CPU-only development works.
+  # Model/image pinning happens in Phase 06 (generation) and Phase 09 (embeddings)
+  # after validating GPU compatibility on the target host.
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    profiles: ["gpu"]
+    environment:
+      VLLM_MODEL: ${VLLM_MODEL:-configure-me}
+    ports:
+      - "8000:8000"
+
+  vllm-embed:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    profiles: ["memory-gpu"]
+    environment:
+      VLLM_EMBED_MODEL: ${VLLM_EMBED_MODEL:-configure-embedding-model}
+    ports:
+      - "8001:8000"
+
+  # api / worker / frontend services are added in their phases (02/10)
+  # once real entrypoints exist. airllm is added in Phase 11.
+
+volumes:
+  postgres_data: {}
+  falkordb_data: {}
