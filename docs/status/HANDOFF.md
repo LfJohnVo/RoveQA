@@ -1,140 +1,134 @@
 # Session Handoff
 
-Última sesión: 2026-08-18 (Opus 5). Phases 02 y 03 completadas. Phases 00 y 01 ya estaban DONE.
+Última sesión: 2026-08-18 (Opus 5). Phases 02 y 03 completadas; **Phase 04 en curso (2 de 5 slices)**.
 
 # Current Phase
 
-04 — Playwright browser gateway (`plans/phase-04-browser-gateway.md`). Phase 03 está DONE con sus 3 gates PASS.
+04 — Browser Gateway (`plans/phase-04-browser-gateway.md`). **IN_PROGRESS**: los dos slices que desbloqueaban la fase están hechos y verdes; falta el browser real.
 
 # Phase Status
 
-- Phase 00: **DONE**. Phase 01: **DONE**. Phase 02: **DONE**. Phase 03: **DONE** (3/3 gates, ver Acceptance Gates).
-- Phase 04: **NOT_STARTED**. No existe Playwright, ni BrowserGateway, ni RunPolicy/Environment como entidades.
+- Phases 00, 01, 02, 03: **DONE** (gates verificados; ver histórico en git y PROGRESS).
+- Phase 04: **IN_PROGRESS**.
+  - Slice 1 **DONE**: Environment + RunPolicy + resolución normativa.
+  - Slice 2 **DONE**: action set tipado cerrado + enforcement de policy inbypasseable.
+  - Slices 3-5 **PENDIENTES**: `test-target-app`, adapter Playwright, evidence/artifacts, recovery e integrity tests.
 
 # Last Stable State
 
-- Git branch `main`, working tree limpio. Último commit: cierre de Phase 03.
-- `bash scripts/ci-local.sh` → **all green**: 173 tests backend, 1 frontend, migraciones sin drift, build frontend, compose config.
-- Stack compose corriendo: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema migrado a `492adc523ebb`.
-- E2E containerizado verificado: run completo con 3 eventos (`run.created`, 2× `run.status.changed`) presentes tanto en `run_events` como en el stream `stream:run:{id}` de Redis.
+- Git branch `main`, working tree limpio.
+- `bash scripts/ci-local.sh` → **all green**: 216 tests backend, 1 frontend, migraciones sin drift, build frontend, compose config.
+- Stack corriendo: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `6c4d6570f65c`.
+- **Playwright y Chromium ya instalados** en el venv del backend (`uv run playwright install chromium` ejecutado con éxito): el próximo slice arranca sin esperar descargas.
 
 # Architecture Decisions Made
 
-Esta sesión (Phase 03), sobre ADR 0009 (workflow shape/retry ownership) y ADR 0010 (transaction ownership):
+Esta sesión (Phase 04, slices 1-2):
 
-- **El log durable de eventos es la fuente; Redis Streams es proyección.** `run_events` (PostgreSQL) se escribe en la **misma transacción** que el cambio que describe; el fan-out ocurre después del commit y es best-effort.
-- **`(run_id, sequence)` es único** y el `sequence` se deriva dentro de la transacción: un append concurrente no puede reutilizar en silencio una posición de cursor que un cliente ya consumió.
-- **Orden de conexión del WebSocket**: suscribir primero, leer historia durable después, luego relay saltando lo ya entregado. Al revés se pierden los eventos publicados mientras se lee la historia.
-- **Fallo de realtime nunca falla un run**: `publish_best_effort` captura de forma deliberada y documentada, *porque* el evento ya es durable. Sin publisher, el WebSocket entrega el baseline completo y cierra con `4503` para que el cliente haga polling REST — nunca finge estar vivo.
-- **Locks y semáforos comparan el token dentro de Redis (Lua)**: un `GET`-luego-`DEL` desde el cliente puede borrar un lock que expiró y fue readquirido en medio. Hay tests que plantan ese escenario.
-- **Los deadlines de slots usan el reloj de Redis (`TIME`)**, no el del caller, para que workers con reloj desviado coincidan en cuándo caducó un lease.
-- **Respuestas de redis-py se normalizan y validan en runtime**, no se castean: una forma no reconocida es un bug a exponer, no datos que adivinar.
+- **Un run no arranca sin RunPolicy resuelta.** Orden normativo (docs/12): policy pedida → default del environment → default del project. Si no resuelve, `422 POLICY_DENIED`. Una referencia colgante o de otro proyecto **falla** en vez de caer a una policy más permisiva.
+- **Las policies son inmutables** (sólo add/get). Un run graba `run_policy_id`, así que editarla in-place reescribiría las reglas de runs ya terminados. Cambiar reglas = crear policy nueva y apuntar el default.
+- **Origins RFC 6454 con match exacto**: sin subdominios implícitos, sin prefijos de path, sensible a scheme y puerto. Una policy con allowlist vacía es imposible de construir.
+- **El action set es cerrado**: no existe `evaluate`/`execute_script`. El control es la ausencia de la capacidad, no un flag que la proteja.
+- **El enforcement vive en un wrapper (`GuardedBrowserGateway`), no en el adapter.** Un adapter que olvidara el check seguiría satisfaciendo el port; un run que sólo recibe el gateway guardado no puede saltarse la policy. Las acciones denegadas **lanzan**, no se degradan a no-op silencioso.
+- **Una acción que cambia estado no se puede construir** sin declarar `side_effect`, estrategia de idempotencia y estrategia de verificación.
 
 # Files Created
 
-Backend (Phase 03):
+Backend (Phase 04 hasta ahora):
 
-- `application/ports/events.py`, `application/ports/streams.py`, `application/ports/locks.py`, `application/ports/semaphores.py`
-- `application/services/event_publishing.py`, `application/queries/list_run_events.py`
-- `infrastructure/cache/redis/`: `locks.py`, `semaphores.py`, `streams.py`
-- `interfaces/http/routers/realtime.py` (WebSocket `/ws/runs/{id}`)
-- `alembic/versions/492adc523ebb_phase_03_run_events.py`
-- Tests: `tests/contracts/{test_event_log_contracts,test_lock_contracts,test_semaphore_contracts}.py`, `tests/http/test_realtime.py`, `tests/integration/test_redis_loss.py`, `tests/fakes/{locks,semaphores,streams}.py`
+- `domain/projects/run_policy.py`, `domain/projects/environment.py`
+- `domain/browser/actions.py`, `domain/browser/policy_guard.py`
+- `application/ports/policies.py`, `application/ports/browser.py`
+- `application/services/policy_resolution.py`, `application/services/guarded_browser.py`
+- `application/commands/create_run_policy.py`
+- `alembic/versions/6c4d6570f65c_phase_04_environments_and_run_policies.py`
+- Tests: `tests/domain/test_run_policy.py`, `tests/domain/test_browser_actions.py`, `tests/application/test_policy_resolution.py`
 
 # Files Modified
 
-- `application/commands/{start_run,transition_run}.py`: append de evento en la transacción + publish best-effort tras el commit.
-- `application/ports/unit_of_work.py` y ambos UoW: propiedad `events`.
-- `infrastructure/persistence/postgres/{models,repositories}.py`: `RunEventModel` + `PostgresRunEventLog`.
-- `interfaces/http/{schemas,dependencies,routers/runs,app}.py`: DTOs de evento, `EventPublisherDep`, `GET /runs/{id}/events`, router realtime.
-- `bootstrap/{settings,container}.py`: `REDIS_URL`, publisher Redis y cierre del cliente.
-- `compose.yaml`: `REDIS_URL` en api y worker (**faltaba**: los contenedores apuntaban a `localhost` y el fan-out fallaba en silencio — lo detectó el e2e, no los tests).
-- `backend/pyproject.toml`: `redis`, `httpx2` (dev, requerido por el `TestClient` de Starlette).
+- `domain/projects/project.py` y `domain/runs/run.py`: `default_run_policy_id`; el run guarda `run_policy_id` y `environment_id`.
+- `application/commands/start_run.py`: resuelve la policy antes de crear el run; el fingerprint de idempotencia incluye environment y policy.
+- `application/ports/repositories.py` + ambas implementaciones: `ProjectRepository.save`.
+- `interfaces/http/`: `POST /api/v1/projects/{id}/run-policies`, DTOs de policy, `environment_id`/`run_policy_id` en la creación de runs, `PolicyNotResolvedError` → 422 `POLICY_DENIED`.
+- `tests/conftest.py`: `DEFAULT_POLICY_PAYLOAD` y `seed_project_with_default_policy` compartidos (todos los tests que arrancan runs siembran policy).
+- `backend/pyproject.toml`: `playwright`.
 
 # Database/Migrations State
 
-- Migraciones: `a2fc1518b988` → `f3aede0b5c07` → **`492adc523ebb`** (`run_events`, unique `(run_id, sequence)`, FK a runs con CASCADE).
-- Verificado: `upgrade head` y `alembic check` limpio.
-- Tablas: projects, user_stories, acceptance_criteria, runs, run_events, idempotency_records, alembic_version.
-
-# Docker State
-
-- Servicios corriendo: postgres, redis, temporal, temporal-ui, falkordb, api (`:8000`), worker. Imágenes reconstruidas esta sesión (incluyen `redis`).
-- `make up` levanta dependencias; `docker compose up -d api worker` añade la aplicación. Nunca `down -v`.
+- Migraciones: `a2fc1518b988` → `f3aede0b5c07` → `492adc523ebb` → **`6c4d6570f65c`** (`run_policies`, `environments`, y `runs.run_policy_id`/`runs.environment_id`).
+- `alembic check` limpio.
 
 # Tests Executed
 
 ```
 cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
 cd backend && uv run alembic upgrade head && uv run alembic check
-docker compose restart redis        # y luego la suite completa
-docker compose build api worker && docker compose up -d api worker
-curl POST /projects ; POST /runs ; poll GET /runs/{id} ; GET /runs/{id}/events
-docker exec roveqa-redis-1 redis-cli XLEN stream:run:{id}
 bash scripts/ci-local.sh
+graphify . --code-only
 ```
 
 # Exact Test Results
 
-- **173 tests backend passed** (0 failed, warnings-as-errors activo):
-  - `tests/test_health.py` 2 · `tests/domain` 23 · `tests/contracts` 80 (repos 20 + unit of work 12 + event log 12 + locks 18 + semáforos 18) · `tests/application` 14 · `tests/http` 29 · `tests/integration` 16 (5 constraints + 3 postgres + 5 Temporal + 3 Redis loss) · `tests/architecture` 9
-- ruff "All checks passed!"; mypy strict "no issues found in 113 source files"; `alembic check` "No new upgrade operations detected".
+- **216 tests backend passed** (0 failed, warnings-as-errors activo):
+  - `tests/domain` 59 · `tests/contracts` 80 · `tests/application` 21 · `tests/http` 29 · `tests/integration` 16 · `tests/test_health.py` 2 · `tests/architecture` 9
+- ruff "All checks passed!"; mypy strict "no issues found in 125 source files" **sin ningún `type: ignore`**; `alembic check` sin drift.
 - Frontend: eslint OK, tsc OK, vitest 1 passed, build OK. `ci-local.sh`: "all green".
-- E2E containerizado: status `completed`, 3 eventos durables con `request_id` propagado en `run.created`, `XLEN stream:run:{id}` = 3.
 
-# Acceptance Gates (Phase 03)
+# Acceptance Gates (Phase 04) — estado parcial
 
-| Gate | Resultado |
+| Gate | Estado |
 | --- | --- |
-| UI/client puede reconectar y recuperar baseline durable | **PASS** (`GET /runs/{id}/events?after=` con `next_after`; WebSocket entrega historia y luego live; `test_a_client_rebuilds_its_baseline_after_losing_realtime` tras un flush) |
-| Redis loss no cambia resultados ya confirmados de un run | **PASS** (`test_a_flushed_redis_leaves_the_run_and_its_history_intact`; además restart real del contenedor + suite completa verde; y un publisher que siempre falla no impide crear ni completar un run) |
-| Locks expiran/renuevan con ownership seguro | **PASS** (18 casos memory/Redis, incluido `test_an_expired_holder_cannot_release_the_new_owners_lock`) |
+| No arbitrary JS tool expuesto al agente | **PASS** (`test_there_is_no_javascript_action` + action set cerrado verificado contra la lista v1 de docs/07) |
+| Origin policy enforced | **PASS a nivel de dominio/aplicación** (match exacto testeado contra subdominios, lookalikes, scheme y puerto; `GuardedBrowserGateway` bloquea antes de ejecutar). Falta confirmarlo con el adapter Playwright real. |
+| Browser restart recovery demostrado | **PENDIENTE** (slice 4/5) |
+| Artifact manifest consistente con provenance verificable | **PENDIENTE** (slice 4) |
+| No "latest artifact" lookup cross-run | **PENDIENTE** (slice 4) |
 
 # Known Issues
 
-- **Los `run_events` no se publican al stream si el evento se crea fuera de un caller que pase publisher.** Hoy lo pasan `start_run` (API) y las activities (worker); cualquier nuevo productor de eventos debe acordarse.
-- Los tests de integración (postgres, Temporal, Redis) **hacen skip** si el servicio no responde; `ci-local.sh` sólo falla ruidosamente por PostgreSQL (migraciones).
-- El WebSocket no tiene autenticación ni límite de conexiones por run (v1 local-first, docs/13); Phase 13 debe revisarlo.
-- `run_episode` sigue sin trabajo real hasta Phase 05, así que todo run completa `inconclusive`.
-- structlog aún no está: logs con stdlib + contextvar (pendiente docs/14).
+- El `GuardedBrowserGateway` existe pero **nadie lo instancia todavía** en producción: el wiring real llega con el adapter Playwright (slice 3). Hasta entonces el enforcement está probado pero no ejercitado end-to-end.
+- Los tests de integración (postgres, Temporal, Redis) hacen skip si el servicio no responde; `ci-local.sh` sólo falla ruidosamente por PostgreSQL.
+- `run_episode` sigue sin trabajo real (Phase 05), así que todo run completa `inconclusive`.
+- El fan-out de eventos falla en silencio por diseño: verificar configuración de Redis end-to-end, no sólo con la suite.
+- structlog aún pendiente (docs/14).
 
 # Technical Debt
 
-- No hay presence/heartbeat de workers en Redis (`worker:{id}:presence`, docs/09) ni rate limits ni caches: el plan de Phase 03 los menciona como responsabilidades permitidas, pero ninguna fase actual los necesita todavía.
-- El WebSocket usa `limit=500` fijo para el catch-up inicial; si un run supera 500 eventos el cliente debe paginar por REST antes de conectar. Documentarlo en el contrato del cliente (Phase 08/10).
-- `Environment` y `RunPolicy` siguen sin existir como entidades/tablas — **Phase 04 los necesita** para la resolución normativa de RunPolicy (docs/12) y el origin allowlist.
-- Sin purga de `idempotency_records` ni trimming configurable de streams por proyecto.
+- No hay endpoints para crear/listar `Environment` (sólo existe la entidad y su tabla); los tests usan el default del project. Añadirlos cuando la UI o la CLI los necesiten.
+- No hay listado ni GET de policies por API (sólo POST).
+- `run_policy_id` es nullable en `runs` por compatibilidad con runs anteriores a Phase 04; cuando no queden, considerar hacerlo NOT NULL.
+- Sigue sin haber presence/heartbeat de workers, rate limits ni caches en Redis.
+- WebSocket sin auth ni límite de conexiones (v1 local-first).
 - `frontend/index.css` conserva estilos del template Vite (Phase 10).
 
 # Risks
 
-- El fan-out mal configurado falla **en silencio** por diseño (best-effort). Fue exactamente lo que pasó con `REDIS_URL` ausente en compose: los tests estaban verdes y sólo el e2e lo reveló. Cualquier cambio de configuración de Redis necesita una verificación e2e, no sólo tests.
+- El adapter Playwright debe recibir **siempre** el gateway guardado. Si alguien inyecta el adapter crudo, el enforcement desaparece sin romper ningún test actual: el próximo slice debería añadir un test de arquitectura que lo impida.
 - Phase 05 debe rellenar `run_episode` sin cambiar la forma del workflow (ADR 0009).
-- Toda activity nueva invocada por nombre necesita `result_type` explícito (bug ya sufrido en Phase 02).
-- CI en Linux pendiente (Phase 13); todo se verifica en Windows contra contenedores Linux.
+- Toda activity de Temporal invocada por nombre necesita `result_type` explícito.
+- CI en Linux pendiente (Phase 13).
 
 # Decisions Still Open
 
-- Si el WebSocket debe soportar múltiples runs por conexión o filtros por tipo de evento (lo decidirá la UI en Phase 10).
-- Política de retención/purga de `run_events` para runs largos (Phase 13).
-- Cómo se resuelve la RunPolicy efectiva cuando existan Environment/Project defaults (Phase 04).
-- Modelos concretos vLLM/AirLLM y auth de plataforma post-v1 (requiere ADR).
+- Si el `test-target-app` se implementa como app estática servida por el propio test o como servicio compose (docs/15 pide auth, CRUD, errores 500 controlados, DOM dinámico y fixtures de prompt injection).
+- Formato del `PageFingerprint` v1 (docs/07 lista los componentes; falta fijar el hash).
+- Retención/purga de `run_events` e `idempotency_records` (Phase 13).
 
 # Graphify Status
 
-- `graphify-out/graph.json` refrescado tras Phase 03 (code-only, incremental).
+- `graphify-out/graph.json` refrescado tras estos slices (code-only, incremental).
 
 # Services That Are Working
 
-- postgres (schema `492adc523ebb`), redis (locks, semáforos, streams), temporal + temporal-ui, falkordb, api (`http://localhost:8000`, `/docs`, WebSocket `/ws/runs/{id}`), worker.
+- postgres (`6c4d6570f65c`), redis, temporal + temporal-ui, falkordb, api (`http://localhost:8000/docs`, WebSocket `/ws/runs/{id}`), worker.
 
 # Services Still Stubbed/Deferred
 
-- `frontend` como servicio compose (Phase 10), `vllm` (06), `vllm-embed` (09), `airllm` (11), `test-target-app` (04).
+- `test-target-app` (slice 3), `frontend` como servicio compose (Phase 10), `vllm` (06), `vllm-embed` (09), `airllm` (11).
 
 # Exact Next Task
 
-Implement Phase 04 slice 1: add `Environment` and `RunPolicy` as domain entities with their PostgreSQL tables and migration, plus the normative RunPolicy resolution at run creation (plan → environment default → project default, failing typed when none resolves) — the browser gateway cannot enforce an origin allowlist before the policy it reads actually exists.
+Implement Phase 04 slice 3: create the deterministic `test-target-app` (a small local site with a form, a delayed response and a controlled 500) and the Playwright `BrowserGateway` adapter using semantic role/label locators with one BrowserContext per run, wiring it so callers only ever receive it wrapped in `GuardedBrowserGateway` — Playwright and Chromium are already installed, so no download is needed.
 
 # Exact Next Command
 
@@ -143,7 +137,6 @@ En Claude Code: `/implement-phase 04`
 # Recommended Skills For Next Session
 
 - `implement-phase` (proceso), `ponytail` (always-on).
-- `browser-runtime` (Playwright, acciones tipadas, recovery) + `error-handling-patterns`.
-- `postgresql` (tablas de environment/policy) y `backend-slice`.
-- `durability-review` (verify-before-retry, storage state, side effects del browser).
+- `browser-runtime` (locators, isolation, recovery, artifacts) + `error-handling-patterns`.
+- `durability-review` (verify-before-retry, storage state, side effects).
 - `architecture-guard` + `test-and-verify` al cierre.
