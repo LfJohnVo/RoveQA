@@ -7,8 +7,11 @@ transaction able to roll back for real.
 """
 
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
+from agentic_qa.application.ports.events import NewRunEvent, RunEvent
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.qa.user_story import UserStory
@@ -21,6 +24,7 @@ class InMemoryStore:
     stories: dict[str, UserStory] = field(default_factory=dict)
     runs: dict[str, Run] = field(default_factory=dict)
     idempotency: dict[tuple[str, str], IdempotencyRecord] = field(default_factory=dict)
+    events: list[RunEvent] = field(default_factory=list)
 
     def snapshot(self) -> "InMemoryStore":
         return InMemoryStore(
@@ -28,6 +32,7 @@ class InMemoryStore:
             stories=dict(self.stories),
             runs=dict(self.runs),
             idempotency=dict(self.idempotency),
+            events=list(self.events),
         )
 
     def restore(self, snapshot: "InMemoryStore") -> None:
@@ -40,6 +45,8 @@ class InMemoryStore:
         self.runs.update(snapshot.runs)
         self.idempotency.clear()
         self.idempotency.update(snapshot.idempotency)
+        self.events.clear()
+        self.events.extend(snapshot.events)
 
 
 class InMemoryProjectRepository:
@@ -89,6 +96,29 @@ class InMemoryIdempotencyRepository:
         if identity in self._store.idempotency:
             raise AlreadyExistsError("idempotency_record", f"{record.scope}/{record.key}")
         self._store.idempotency[identity] = record
+
+
+class InMemoryRunEventLog:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def append(self, event: NewRunEvent) -> RunEvent:
+        existing = [e for e in self._store.events if e.run_id == event.run_id]
+        stored = RunEvent(
+            event_id=str(uuid4()),
+            run_id=event.run_id,
+            sequence=len(existing) + 1,
+            type=event.type,
+            occurred_at=datetime.now(UTC),
+            payload=dict(event.payload),
+            request_id=event.request_id,
+        )
+        self._store.events.append(stored)
+        return stored
+
+    async def list_for_run(self, run_id: str, *, after: int, limit: int) -> list[RunEvent]:
+        matching = [e for e in self._store.events if e.run_id == run_id and e.sequence > after]
+        return sorted(matching, key=lambda e: e.sequence)[:limit]
 
 
 class InMemoryRunRepository:

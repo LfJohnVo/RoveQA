@@ -11,6 +11,7 @@ it never writes status itself.
 from dataclasses import dataclass
 
 from agentic_qa.application.errors import NotFoundError
+from agentic_qa.application.ports.events import RUN_STATUS_CHANGED, NewRunEvent
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.domain.runs.run import Run, RunStatus, Verdict
 
@@ -27,7 +28,21 @@ async def transition_run(uow: UnitOfWork, command: TransitionRunCommand) -> Run:
     if run is None:
         raise NotFoundError("run", command.run_id)
 
+    previous = run.status
     run.transition_to(command.target_status, command.verdict)
     await uow.runs.save(run)
+    # Same transaction as the status change: a run can never move without leaving its
+    # event, nor an event exist for a move that was rolled back.
+    await uow.events.append(
+        NewRunEvent(
+            run_id=run.run_id,
+            type=RUN_STATUS_CHANGED,
+            payload={
+                "from": previous.value,
+                "to": run.status.value,
+                "verdict": run.verdict.value if run.verdict else None,
+            },
+        )
+    )
     await uow.commit()
     return run

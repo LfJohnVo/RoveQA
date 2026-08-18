@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresIdempotencyRepository,
     PostgresProjectRepository,
+    PostgresRunEventLog,
     PostgresRunRepository,
     PostgresStoryRepository,
 )
@@ -41,6 +42,10 @@ class PostgresUnitOfWork:
     @property
     def idempotency(self) -> PostgresIdempotencyRepository:
         return PostgresIdempotencyRepository(self.session)
+
+    @property
+    def events(self) -> PostgresRunEventLog:
+        return PostgresRunEventLog(self.session)
 
     async def __aenter__(self) -> Self:
         self._session = self._session_factory()

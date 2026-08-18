@@ -4,11 +4,14 @@ Each adapter owns a session but never commits: the caller controls the transacti
 boundary, so a use case can group writes and keep transactions short.
 """
 
-from sqlalchemy import select
+from uuid import uuid4
+
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
+from agentic_qa.application.ports.events import NewRunEvent, RunEvent
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.qa.user_story import UserStory
@@ -24,6 +27,7 @@ from agentic_qa.infrastructure.persistence.postgres.mappers import (
 from agentic_qa.infrastructure.persistence.postgres.models import (
     IdempotencyRecordModel,
     ProjectModel,
+    RunEventModel,
     RunModel,
     UserStoryModel,
 )
@@ -89,6 +93,53 @@ class PostgresStoryRepository:
         )
         result = await self._session.scalars(statement)
         return [story_to_domain(model) for model in result]
+
+
+class PostgresRunEventLog:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def append(self, event: NewRunEvent) -> RunEvent:
+        # Sequence is derived inside the caller's transaction; the unique constraint
+        # on (run_id, sequence) is the real guarantee if two appends ever race.
+        next_sequence = await self._session.scalar(
+            select(func.coalesce(func.max(RunEventModel.sequence), 0) + 1).where(
+                RunEventModel.run_id == event.run_id
+            )
+        )
+        model = RunEventModel(
+            event_id=str(uuid4()),
+            run_id=event.run_id,
+            sequence=next_sequence or 1,
+            type=event.type,
+            payload=dict(event.payload),
+            request_id=event.request_id,
+        )
+        self._session.add(model)
+        await self._session.flush()
+        return _event_to_domain(model)
+
+    async def list_for_run(self, run_id: str, *, after: int, limit: int) -> list[RunEvent]:
+        statement = (
+            select(RunEventModel)
+            .where(RunEventModel.run_id == run_id, RunEventModel.sequence > after)
+            .order_by(RunEventModel.sequence)
+            .limit(limit)
+        )
+        result = await self._session.scalars(statement)
+        return [_event_to_domain(model) for model in result]
+
+
+def _event_to_domain(model: RunEventModel) -> RunEvent:
+    return RunEvent(
+        event_id=model.event_id,
+        run_id=model.run_id,
+        sequence=model.sequence,
+        type=model.type,
+        occurred_at=model.occurred_at,
+        payload=dict(model.payload),
+        request_id=model.request_id,
+    )
 
 
 class PostgresIdempotencyRepository:

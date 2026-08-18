@@ -5,18 +5,28 @@ the commit point live in the use case (ADR 0010), and status is only ever writte
 the workflow's activities — never here.
 """
 
-from fastapi import APIRouter, Response, status
+from typing import Annotated
+
+from fastapi import APIRouter, Query, Response, status
 
 from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.errors import NotFoundError
+from agentic_qa.application.ports.events import (
+    DEFAULT_EVENT_PAGE_SIZE,
+    MAX_EVENT_PAGE_SIZE,
+)
+from agentic_qa.application.queries.list_run_events import list_run_events
 from agentic_qa.interfaces.http.dependencies import (
     IdempotencyKeyDep,
     UnitOfWorkDep,
     WorkflowGatewayDep,
 )
+from agentic_qa.interfaces.http.request_context import get_request_id
 from agentic_qa.interfaces.http.schemas import (
     CreateRunRequest,
     RunAcceptedResponse,
+    RunEventPageResponse,
+    RunEventResponse,
     RunResponse,
 )
 
@@ -39,7 +49,11 @@ async def create_run(
     result = await start_run(
         uow,
         workflows,
-        StartRunCommand(project_id=payload.project_id, idempotency_key=idempotency_key),
+        StartRunCommand(
+            project_id=payload.project_id,
+            idempotency_key=idempotency_key,
+            request_id=get_request_id(),
+        ),
     )
     if result.replayed:
         response.status_code = status.HTTP_200_OK
@@ -57,6 +71,25 @@ async def get_run(run_id: str, uow: UnitOfWorkDep) -> RunResponse:
     if run is None:
         raise NotFoundError("run", run_id)
     return RunResponse.from_domain(run)
+
+
+@router.get("/{run_id}/events", response_model=RunEventPageResponse)
+async def list_events(
+    run_id: str,
+    uow: UnitOfWorkDep,
+    after: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_EVENT_PAGE_SIZE)] = DEFAULT_EVENT_PAGE_SIZE,
+) -> RunEventPageResponse:
+    """Durable event catch-up.
+
+    A client that lost its realtime connection resumes from the last sequence it saw;
+    realtime delivery may drop events, this path may not.
+    """
+    events = await list_run_events(uow, run_id, after=after, limit=limit)
+    return RunEventPageResponse(
+        events=[RunEventResponse.from_domain(event) for event in events],
+        next_after=events[-1].sequence if events else after,
+    )
 
 
 async def _ensure_run_exists(run_id: str, uow: UnitOfWorkDep) -> None:

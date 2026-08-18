@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from agentic_qa.application.errors import IdempotencyConflictError, NotFoundError
+from agentic_qa.application.ports.events import RUN_CREATED, NewRunEvent
 from agentic_qa.application.ports.idempotency import (
     RUN_CREATION_SCOPE,
     IdempotencyRecord,
@@ -24,6 +25,8 @@ from agentic_qa.domain.runs.run import Run, RunStatus
 class StartRunCommand:
     project_id: str
     idempotency_key: str
+    request_id: str | None = None
+    """Recorded on the run.created event so one id correlates client, API and run."""
 
     def fingerprint(self) -> str:
         return request_fingerprint(RUN_CREATION_SCOPE, {"project_id": self.project_id})
@@ -57,6 +60,14 @@ async def start_run(
     run = Run(run_id=str(uuid4()), project_id=command.project_id)
     run.transition_to(RunStatus.QUEUED)  # accepted; the worker will pick it up
     await uow.runs.add(run)
+    await uow.events.append(
+        NewRunEvent(
+            run_id=run.run_id,
+            type=RUN_CREATED,
+            payload={"project_id": run.project_id, "status": run.status.value},
+            request_id=command.request_id,
+        )
+    )
     await uow.idempotency.add(
         IdempotencyRecord(
             scope=RUN_CREATION_SCOPE,

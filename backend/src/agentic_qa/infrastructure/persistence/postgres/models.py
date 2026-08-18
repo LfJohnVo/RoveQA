@@ -119,6 +119,31 @@ class AcceptanceCriterionModel(Base):
     story: Mapped[UserStoryModel] = relationship(back_populates="criteria")
 
 
+class RunEventModel(Base):
+    """Durable event journal. Redis Streams are a projection of this, never a source.
+
+    (run_id, sequence) is unique so a concurrent append cannot silently reuse a
+    cursor position a client already consumed.
+    """
+
+    __tablename__ = "run_events"
+    __table_args__ = (UniqueConstraint("run_id", "sequence", name="uq_run_events_run_sequence"),)
+
+    event_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    type: Mapped[str] = mapped_column(String(100), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    request_id: Mapped[str | None] = mapped_column(String(IDENTIFIER_LENGTH), nullable=True)
+
+
 class IdempotencyRecordModel(Base):
     """Durable dedup for repeatable mutations (docs/12). Never Redis-only.
 

@@ -240,6 +240,58 @@ class TestRunLifecycleCommands:
         assert workflows.signals == []
 
 
+class TestRunEvents:
+    """Durable catch-up: what a client replays after losing its live connection."""
+
+    async def test_creation_and_lifecycle_leave_durable_events(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        project_id = await create_project(client)
+        created = await client.post(
+            "/api/v1/runs",
+            json={"project_id": project_id},
+            headers={"Idempotency-Key": "k-ev", REQUEST_ID_HEADER: "req-ev"},
+        )
+        run_id = created.json()["run_id"]
+
+        page = await client.get(f"/api/v1/runs/{run_id}/events")
+
+        assert page.status_code == 200
+        body = page.json()
+        assert [event["type"] for event in body["events"]] == ["run.created"]
+        assert body["events"][0]["sequence"] == 1
+        assert body["events"][0]["request_id"] == "req-ev"
+        assert body["next_after"] == 1
+
+    async def test_resuming_from_a_cursor_returns_nothing_when_caught_up(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        project_id = await create_project(client)
+        created = await client.post(
+            "/api/v1/runs", json={"project_id": project_id}, headers={"Idempotency-Key": "k-ev2"}
+        )
+        run_id = created.json()["run_id"]
+
+        page = await client.get(f"/api/v1/runs/{run_id}/events", params={"after": 1})
+
+        assert page.json() == {"events": [], "next_after": 1}
+
+    async def test_page_size_is_bounded(self, client: httpx.AsyncClient) -> None:
+        project_id = await create_project(client)
+        created = await client.post(
+            "/api/v1/runs", json={"project_id": project_id}, headers={"Idempotency-Key": "k-ev3"}
+        )
+        run_id = created.json()["run_id"]
+
+        response = await client.get(f"/api/v1/runs/{run_id}/events", params={"limit": 10_000})
+
+        assert response.status_code == 422  # rejected, never silently unbounded
+
+    async def test_events_of_an_unknown_run_are_not_found(self, client: httpx.AsyncClient) -> None:
+        response = await client.get("/api/v1/runs/ghost/events")
+        assert response.status_code == 404
+
+
 class TestProjects:
     async def test_blank_name_fails_validation(self, client: httpx.AsyncClient) -> None:
         response = await client.post("/api/v1/projects", json={"name": ""})
