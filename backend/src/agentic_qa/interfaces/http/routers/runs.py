@@ -17,6 +17,7 @@ from agentic_qa.application.ports.events import (
 )
 from agentic_qa.application.queries.list_run_events import list_run_events
 from agentic_qa.interfaces.http.dependencies import (
+    EventPublisherDep,
     IdempotencyKeyDep,
     UnitOfWorkDep,
     WorkflowGatewayDep,
@@ -39,6 +40,7 @@ async def create_run(
     idempotency_key: IdempotencyKeyDep,
     uow: UnitOfWorkDep,
     workflows: WorkflowGatewayDep,
+    publisher: EventPublisherDep,
     response: Response,
 ) -> RunResponse:
     """Start a run.
@@ -54,6 +56,7 @@ async def create_run(
             idempotency_key=idempotency_key,
             request_id=get_request_id(),
         ),
+        publisher=publisher,
     )
     if result.replayed:
         response.status_code = status.HTTP_200_OK

@@ -12,7 +12,9 @@ from dataclasses import dataclass
 
 from agentic_qa.application.errors import NotFoundError
 from agentic_qa.application.ports.events import RUN_STATUS_CHANGED, NewRunEvent
+from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
+from agentic_qa.application.services.event_publishing import publish_best_effort
 from agentic_qa.domain.runs.run import Run, RunStatus, Verdict
 
 
@@ -23,7 +25,11 @@ class TransitionRunCommand:
     verdict: Verdict | None = None
 
 
-async def transition_run(uow: UnitOfWork, command: TransitionRunCommand) -> Run:
+async def transition_run(
+    uow: UnitOfWork,
+    command: TransitionRunCommand,
+    publisher: RunEventPublisher | None = None,
+) -> Run:
     run = await uow.runs.get(command.run_id)
     if run is None:
         raise NotFoundError("run", command.run_id)
@@ -33,7 +39,7 @@ async def transition_run(uow: UnitOfWork, command: TransitionRunCommand) -> Run:
     await uow.runs.save(run)
     # Same transaction as the status change: a run can never move without leaving its
     # event, nor an event exist for a move that was rolled back.
-    await uow.events.append(
+    event = await uow.events.append(
         NewRunEvent(
             run_id=run.run_id,
             type=RUN_STATUS_CHANGED,
@@ -45,4 +51,6 @@ async def transition_run(uow: UnitOfWork, command: TransitionRunCommand) -> Run:
         )
     )
     await uow.commit()
+    # Durable first, fan-out second and best-effort (ADR 0010 ordering).
+    await publish_best_effort(publisher, event)
     return run

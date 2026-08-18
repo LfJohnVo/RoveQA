@@ -39,6 +39,7 @@ class RunActivities:
                     target_status=RunStatus(params.target_status),
                     verdict=Verdict(params.verdict) if params.verdict else None,
                 ),
+                publisher=self._container.events,
             )
 
     @activity.defn(name="run_episode")

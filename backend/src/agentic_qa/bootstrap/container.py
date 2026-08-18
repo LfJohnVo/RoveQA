@@ -7,12 +7,15 @@ Interfaces can stay a protocol translator and never import a concrete adapter.
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 from temporalio.client import Client
 
+from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
 from agentic_qa.bootstrap.settings import Settings
+from agentic_qa.infrastructure.cache.redis.streams import RedisRunEventPublisher
 from agentic_qa.infrastructure.persistence.postgres.engine import (
     create_engine,
     create_session_factory,
@@ -27,6 +30,12 @@ class Container:
     workflows: WorkflowGateway | None = None
     """Absent until the API is connected to Temporal; endpoints that need it say so."""
 
+    events: RunEventPublisher | None = None
+    """Realtime fan-out. Absent means clients fall back to durable REST catch-up."""
+
+    redis: Redis | None = None
+    """Owned connection to Redis, closed with the container."""
+
     engine: AsyncEngine | None = None
     """Present only for containers that own a database connection pool.
 
@@ -37,14 +46,19 @@ class Container:
     async def aclose(self) -> None:
         if self.engine is not None:
             await self.engine.dispose()
+        if self.redis is not None:
+            await self.redis.aclose()
 
 
 def build_container(settings: Settings) -> Container:
     """Database-only container. Temporal needs an async connect, see `connect_workflows`."""
     engine = create_engine(settings.postgres_dsn, echo=settings.sql_echo)
     session_factory = create_session_factory(engine)
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
     return Container(
         unit_of_work=lambda: PostgresUnitOfWork(session_factory),
+        events=RedisRunEventPublisher(redis),
+        redis=redis,
         engine=engine,
     )
 
@@ -54,5 +68,7 @@ async def connect_workflows(container: Container, settings: Settings) -> Contain
     return Container(
         unit_of_work=container.unit_of_work,
         workflows=TemporalWorkflowGateway(client, settings.temporal_task_queue),
+        events=container.events,
+        redis=container.redis,
         engine=container.engine,
     )

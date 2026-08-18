@@ -16,8 +16,10 @@ from agentic_qa.application.ports.idempotency import (
     IdempotencyRecord,
     request_fingerprint,
 )
+from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
+from agentic_qa.application.services.event_publishing import publish_best_effort
 from agentic_qa.domain.runs.run import Run, RunStatus
 
 
@@ -40,7 +42,10 @@ class StartRunResult:
 
 
 async def start_run(
-    uow: UnitOfWork, workflows: WorkflowGateway, command: StartRunCommand
+    uow: UnitOfWork,
+    workflows: WorkflowGateway,
+    command: StartRunCommand,
+    publisher: RunEventPublisher | None = None,
 ) -> StartRunResult:
     fingerprint = command.fingerprint()
     existing = await uow.idempotency.get(RUN_CREATION_SCOPE, command.idempotency_key)
@@ -60,7 +65,7 @@ async def start_run(
     run = Run(run_id=str(uuid4()), project_id=command.project_id)
     run.transition_to(RunStatus.QUEUED)  # accepted; the worker will pick it up
     await uow.runs.add(run)
-    await uow.events.append(
+    event = await uow.events.append(
         NewRunEvent(
             run_id=run.run_id,
             type=RUN_CREATED,
@@ -78,7 +83,8 @@ async def start_run(
     )
     await uow.commit()
 
-    # Durable first, side effect second. Starting is itself idempotent, so a retry
+    # Durable first, side effects second. Starting is itself idempotent, so a retry
     # after a lost acknowledgement cannot produce a second workflow.
+    await publish_best_effort(publisher, event)
     await workflows.start_run(run.run_id, run.project_id)
     return StartRunResult(run=run, replayed=False)
