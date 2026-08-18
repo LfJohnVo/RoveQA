@@ -9,10 +9,6 @@ from collections.abc import Callable
 
 from redis.asyncio import Redis
 
-from agentic_qa.application.commands.create_project import (
-    CreateProjectCommand,
-    create_project,
-)
 from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.commands.transition_run import (
     TransitionRunCommand,
@@ -24,6 +20,7 @@ from agentic_qa.domain.runs.run import RunStatus
 from agentic_qa.infrastructure.cache.redis.locks import RedisLockManager
 from agentic_qa.infrastructure.cache.redis.semaphores import RedisResourceSemaphore
 from agentic_qa.infrastructure.cache.redis.streams import RedisRunEventPublisher, stream_key
+from tests.conftest import seed_project_with_default_policy
 from tests.fakes.workflows import RecordingWorkflowGateway
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
@@ -34,13 +31,12 @@ async def test_a_flushed_redis_leaves_the_run_and_its_history_intact(
 ) -> None:
     publisher = RedisRunEventPublisher(redis_client)
 
-    async with postgres_unit_of_work_factory() as uow:
-        project = await create_project(uow, CreateProjectCommand(name="Redis loss"))
+    project_id = await seed_project_with_default_policy(postgres_unit_of_work_factory, "Redis loss")
     async with postgres_unit_of_work_factory() as uow:
         result = await start_run(
             uow,
             RecordingWorkflowGateway(),
-            StartRunCommand(project_id=project.project_id, idempotency_key="k-flush"),
+            StartRunCommand(project_id=project_id, idempotency_key="k-flush"),
             publisher=publisher,
         )
     run_id = result.run.run_id
@@ -71,13 +67,12 @@ async def test_a_client_rebuilds_its_baseline_after_losing_realtime(
     """Reconnect path: durable catch-up gives the full picture, then live resumes."""
     publisher = RedisRunEventPublisher(redis_client)
 
-    async with postgres_unit_of_work_factory() as uow:
-        project = await create_project(uow, CreateProjectCommand(name="Reconnect"))
+    project_id = await seed_project_with_default_policy(postgres_unit_of_work_factory, "Reconnect")
     async with postgres_unit_of_work_factory() as uow:
         result = await start_run(
             uow,
             RecordingWorkflowGateway(),
-            StartRunCommand(project_id=project.project_id, idempotency_key="k-reconnect"),
+            StartRunCommand(project_id=project_id, idempotency_key="k-reconnect"),
             publisher=publisher,
         )
     run_id = result.run.run_id

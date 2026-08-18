@@ -12,10 +12,6 @@ import pytest
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from agentic_qa.application.commands.create_project import (
-    CreateProjectCommand,
-    create_project,
-)
 from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.bootstrap.container import Container
@@ -25,8 +21,10 @@ from agentic_qa.infrastructure.workflows.temporal.activities import RunActivitie
 from agentic_qa.infrastructure.workflows.temporal.contracts import workflow_id_for
 from agentic_qa.infrastructure.workflows.temporal.gateway import TemporalWorkflowGateway
 from agentic_qa.infrastructure.workflows.temporal.worker import build_worker
+from tests.conftest import seed_project_with_default_policy
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
+
 
 RESULT_TIMEOUT = 30
 POLL_INTERVAL = 0.1
@@ -60,13 +58,12 @@ async def wait_for_status(
 
 async def queue_run(factory: UnitOfWorkFactory, client: Client, task_queue: str) -> str:
     gateway = TemporalWorkflowGateway(client, task_queue)
-    async with factory() as uow:
-        project = await create_project(uow, CreateProjectCommand(name="Durability"))
+    project_id = await seed_project_with_default_policy(factory, "Durability")
     async with factory() as uow:
         result = await start_run(
             uow,
             gateway,
-            StartRunCommand(project_id=project.project_id, idempotency_key=str(uuid4())),
+            StartRunCommand(project_id=project_id, idempotency_key=str(uuid4())),
         )
     return result.run.run_id
 

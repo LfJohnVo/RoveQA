@@ -11,6 +11,7 @@ from typing import Protocol, Self
 
 from agentic_qa.application.ports.events import RunEventLog
 from agentic_qa.application.ports.idempotency import IdempotencyRepository
+from agentic_qa.application.ports.policies import EnvironmentRepository, RunPolicyRepository
 from agentic_qa.application.ports.repositories import (
     ProjectRepository,
     RunRepository,
@@ -33,6 +34,12 @@ class UnitOfWork(Protocol):
 
     @property
     def events(self) -> RunEventLog: ...
+
+    @property
+    def policies(self) -> RunPolicyRepository: ...
+
+    @property
+    def environments(self) -> EnvironmentRepository: ...
 
     async def __aenter__(self) -> Self: ...
 

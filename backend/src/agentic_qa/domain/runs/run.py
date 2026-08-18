@@ -78,10 +78,18 @@ class Run:
     project_id: str
     status: RunStatus = RunStatus.CREATED
     verdict: Verdict | None = field(default=None)
+    run_policy_id: str | None = None
+    """The policy that governs this run, resolved once at creation and never re-read."""
+
+    environment_id: str | None = None
 
     def __post_init__(self) -> None:
         self.run_id = require_identifier(self.run_id, field="run_id")
         self.project_id = require_identifier(self.project_id, field="project_id")
+        if self.run_policy_id is not None:
+            self.run_policy_id = require_identifier(self.run_policy_id, field="run_policy_id")
+        if self.environment_id is not None:
+            self.environment_id = require_identifier(self.environment_id, field="environment_id")
 
     def transition_to(self, new_status: RunStatus, verdict: Verdict | None = None) -> None:
         if self.status in TERMINAL_STATUSES:

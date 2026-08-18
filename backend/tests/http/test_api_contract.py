@@ -12,6 +12,7 @@ from agentic_qa.interfaces.http.request_context import (
     REQUEST_ID_HEADER,
     RequestIdLogFilter,
 )
+from tests.conftest import DEFAULT_POLICY_PAYLOAD
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
 from tests.fakes.workflows import RecordingWorkflowGateway
@@ -43,9 +44,14 @@ async def client(workflows: RecordingWorkflowGateway) -> AsyncIterator[httpx.Asy
 
 
 async def create_project(client: httpx.AsyncClient, name: str = "Checkout") -> str:
+    """Create a project with a default run policy: a run cannot start without one."""
     response = await client.post("/api/v1/projects", json={"name": name})
     assert response.status_code == 201
     project_id: str = response.json()["project_id"]
+    policy = await client.post(
+        f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD
+    )
+    assert policy.status_code == 201
     return project_id
 
 
@@ -326,7 +332,7 @@ class TestUnexpectedFailures:
         This also proves request-id propagation end to end: the id the client sees is
         the id on the server log record.
         """
-        container = Container(unit_of_work=ExplodingUnitOfWork)
+        container = Container(unit_of_work=lambda: ExplodingUnitOfWork())
         async with asgi_client(container, raise_app_exceptions=False) as client:
             response = await client.get(
                 "/api/v1/projects/anything", headers={REQUEST_ID_HEADER: "req-boom"}

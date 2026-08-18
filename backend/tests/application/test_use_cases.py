@@ -17,6 +17,7 @@ from agentic_qa.application.ports.idempotency import RUN_CREATION_SCOPE
 from agentic_qa.application.queries.get_project import get_project
 from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.projects.project import Project
+from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion
 from agentic_qa.domain.runs.run import RunStatus
 from tests.fakes.repositories import InMemoryStore
@@ -42,9 +43,21 @@ def workflows() -> RecordingWorkflowGateway:
 
 
 async def seed_project(uow: InMemoryUnitOfWork, project_id: str = "p-1") -> Project:
-    project = Project(project_id=project_id, name="Checkout")
+    """Seed a project with a default policy: a run cannot start without one."""
+    policy_id = f"pol-{project_id}"
+    project = Project(project_id=project_id, name="Checkout", default_run_policy_id=policy_id)
     async with uow:
         await uow.projects.add(project)
+        await uow.policies.add(
+            RunPolicy(
+                policy_id=policy_id,
+                project_id=project_id,
+                allowed_origins=("http://localhost:3000",),
+                max_duration_seconds=600,
+                max_actions=100,
+                max_model_calls=10,
+            )
+        )
         await uow.commit()
     return project
 

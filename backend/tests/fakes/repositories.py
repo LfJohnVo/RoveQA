@@ -13,7 +13,9 @@ from uuid import uuid4
 from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
 from agentic_qa.application.ports.events import NewRunEvent, RunEvent
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
+from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
+from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.runs.run import Run
 
@@ -25,6 +27,8 @@ class InMemoryStore:
     runs: dict[str, Run] = field(default_factory=dict)
     idempotency: dict[tuple[str, str], IdempotencyRecord] = field(default_factory=dict)
     events: list[RunEvent] = field(default_factory=list)
+    policies: dict[str, RunPolicy] = field(default_factory=dict)
+    environments: dict[str, Environment] = field(default_factory=dict)
 
     def snapshot(self) -> "InMemoryStore":
         return InMemoryStore(
@@ -33,6 +37,8 @@ class InMemoryStore:
             runs=dict(self.runs),
             idempotency=dict(self.idempotency),
             events=list(self.events),
+            policies=dict(self.policies),
+            environments=dict(self.environments),
         )
 
     def restore(self, snapshot: "InMemoryStore") -> None:
@@ -47,6 +53,10 @@ class InMemoryStore:
         self.idempotency.update(snapshot.idempotency)
         self.events.clear()
         self.events.extend(snapshot.events)
+        self.policies.clear()
+        self.policies.update(snapshot.policies)
+        self.environments.clear()
+        self.environments.update(snapshot.environments)
 
 
 class InMemoryProjectRepository:
@@ -61,6 +71,11 @@ class InMemoryProjectRepository:
     async def get(self, project_id: str) -> Project | None:
         stored = self._store.projects.get(project_id)
         return replace(stored) if stored is not None else None
+
+    async def save(self, project: Project) -> None:
+        if project.project_id not in self._store.projects:
+            raise NotFoundError("project", project.project_id)
+        self._store.projects[project.project_id] = replace(project)
 
 
 class InMemoryStoryRepository:
@@ -138,3 +153,31 @@ class InMemoryRunRepository:
         if run.run_id not in self._store.runs:
             raise NotFoundError("run", run.run_id)
         self._store.runs[run.run_id] = replace(run)
+
+
+class InMemoryRunPolicyRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, policy: RunPolicy) -> None:
+        if policy.policy_id in self._store.policies:
+            raise AlreadyExistsError("run_policy", policy.policy_id)
+        self._store.policies[policy.policy_id] = replace(policy)
+
+    async def get(self, policy_id: str) -> RunPolicy | None:
+        stored = self._store.policies.get(policy_id)
+        return replace(stored) if stored is not None else None
+
+
+class InMemoryEnvironmentRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, environment: Environment) -> None:
+        if environment.environment_id in self._store.environments:
+            raise AlreadyExistsError("environment", environment.environment_id)
+        self._store.environments[environment.environment_id] = replace(environment)
+
+    async def get(self, environment_id: str) -> Environment | None:
+        stored = self._store.environments.get(environment_id)
+        return replace(stored) if stored is not None else None

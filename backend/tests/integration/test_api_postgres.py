@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.bootstrap.container import Container
+from tests.conftest import DEFAULT_POLICY_PAYLOAD
 from tests.fakes.workflows import RecordingWorkflowGateway
 from tests.http.test_api_contract import asgi_client
 
@@ -25,6 +26,10 @@ async def test_run_creation_and_replay_against_postgres(
         created = await client.post("/api/v1/projects", json={"name": "Checkout"})
         assert created.status_code == 201
         project_id = created.json()["project_id"]
+        policy = await client.post(
+            f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD
+        )
+        assert policy.status_code == 201
 
         headers = {"Idempotency-Key": "k-http-pg"}
         first = await client.post("/api/v1/runs", json={"project_id": project_id}, headers=headers)

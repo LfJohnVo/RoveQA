@@ -11,6 +11,7 @@ from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.bootstrap.container import Container
 from agentic_qa.interfaces.http.app import create_app
 from agentic_qa.interfaces.http.routers.realtime import CLOSE_REALTIME_UNAVAILABLE
+from tests.conftest import DEFAULT_POLICY_PAYLOAD
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.streams import BrokenRunEventPublisher, InMemoryRunEventPublisher
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
@@ -46,6 +47,8 @@ async def client(
 
 async def start_run(client: httpx.AsyncClient, key: str = "k-ws") -> str:
     project = await client.post("/api/v1/projects", json={"name": "Realtime"})
+    project_id = project.json()["project_id"]
+    await client.post(f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD)
     created = await client.post(
         "/api/v1/runs",
         json={"project_id": project.json()["project_id"]},
@@ -89,6 +92,8 @@ def test_websocket_replays_durable_history_then_streams_live() -> None:
 
     with TestClient(app) as client:
         project = client.post("/api/v1/projects", json={"name": "Realtime"})
+        project_id = project.json()["project_id"]
+        client.post(f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD)
         created = client.post(
             "/api/v1/runs",
             json={"project_id": project.json()["project_id"]},
@@ -109,6 +114,8 @@ def test_websocket_resuming_from_a_cursor_skips_delivered_history() -> None:
 
     with TestClient(app) as client:
         project = client.post("/api/v1/projects", json={"name": "Realtime"})
+        project_id = project.json()["project_id"]
+        client.post(f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD)
         created = client.post(
             "/api/v1/runs",
             json={"project_id": project.json()["project_id"]},
@@ -128,6 +135,8 @@ def test_websocket_without_realtime_still_delivers_the_baseline() -> None:
 
     with TestClient(app) as client:
         project = client.post("/api/v1/projects", json={"name": "Realtime"})
+        project_id = project.json()["project_id"]
+        client.post(f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD)
         created = client.post(
             "/api/v1/runs",
             json={"project_id": project.json()["project_id"]},

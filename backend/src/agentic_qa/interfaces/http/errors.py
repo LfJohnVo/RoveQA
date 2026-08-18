@@ -21,6 +21,7 @@ from agentic_qa.application.errors import (
     IdempotencyConflictError,
     NotFoundError,
 )
+from agentic_qa.application.services.policy_resolution import PolicyNotResolvedError
 from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.runs.run import RunTransitionError
 from agentic_qa.interfaces.http.request_context import REQUEST_ID_HEADER, get_request_id
@@ -62,6 +63,12 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AlreadyExistsError)
     async def _already_exists(_: Request, error: AlreadyExistsError) -> JSONResponse:
         return error_response(status.HTTP_409_CONFLICT, "CONFLICT", str(error))
+
+    @app.exception_handler(PolicyNotResolvedError)
+    async def _policy_not_resolved(_: Request, error: PolicyNotResolvedError) -> JSONResponse:
+        # A run without a resolved policy has no origin allowlist, so refusing is the
+        # only safe answer (docs/13).
+        return error_response(status.HTTP_422_UNPROCESSABLE_CONTENT, "POLICY_DENIED", str(error))
 
     @app.exception_handler(RunTransitionError)
     async def _invalid_transition(_: Request, error: RunTransitionError) -> JSONResponse:

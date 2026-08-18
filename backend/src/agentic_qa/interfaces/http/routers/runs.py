@@ -54,6 +54,8 @@ async def create_run(
         StartRunCommand(
             project_id=payload.project_id,
             idempotency_key=idempotency_key,
+            environment_id=payload.environment_id,
+            run_policy_id=payload.run_policy_id,
             request_id=get_request_id(),
         ),
         publisher=publisher,

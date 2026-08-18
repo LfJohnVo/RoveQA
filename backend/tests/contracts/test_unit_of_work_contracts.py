@@ -11,6 +11,7 @@ import pytest
 from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.domain.projects.project import Project
+from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.runs.run import Run, RunStatus
 from tests.fakes.workflows import RecordingWorkflowGateway
 
@@ -62,7 +63,19 @@ async def test_repositories_of_one_unit_of_work_share_the_transaction(
 ) -> None:
     """A run written next to its project must be atomic with it, not half-committed."""
     async with unit_of_work_factory() as uow:
-        await uow.projects.add(Project(project_id="p-atomic", name="Checkout"))
+        await uow.projects.add(
+            Project(project_id="p-atomic", name="Checkout", default_run_policy_id="pol-atomic")
+        )
+        await uow.policies.add(
+            RunPolicy(
+                policy_id="pol-atomic",
+                project_id="p-atomic",
+                allowed_origins=("http://localhost:3000",),
+                max_duration_seconds=600,
+                max_actions=100,
+                max_model_calls=10,
+            )
+        )
         await uow.commit()
 
     async with unit_of_work_factory() as uow:

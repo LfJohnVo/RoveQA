@@ -18,6 +18,10 @@ class ProjectRepository(Protocol):
 
     async def get(self, project_id: str) -> Project | None: ...
 
+    async def save(self, project: Project) -> None:
+        """Persist changes to an existing project. Raises NotFoundError when gone."""
+        ...
+
 
 class StoryRepository(Protocol):
     async def add(self, story: UserStory) -> None:

@@ -13,10 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
 from agentic_qa.application.ports.events import NewRunEvent, RunEvent
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
+from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
+from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.runs.run import Run
 from agentic_qa.infrastructure.persistence.postgres.mappers import (
+    environment_to_domain,
+    environment_to_model,
+    policy_to_domain,
+    policy_to_model,
     project_to_domain,
     project_to_model,
     run_to_domain,
@@ -25,10 +31,12 @@ from agentic_qa.infrastructure.persistence.postgres.mappers import (
     story_to_model,
 )
 from agentic_qa.infrastructure.persistence.postgres.models import (
+    EnvironmentModel,
     IdempotencyRecordModel,
     ProjectModel,
     RunEventModel,
     RunModel,
+    RunPolicyModel,
     UserStoryModel,
 )
 
@@ -63,6 +71,13 @@ class PostgresProjectRepository:
     async def get(self, project_id: str) -> Project | None:
         model = await self._session.get(ProjectModel, project_id)
         return project_to_domain(model) if model is not None else None
+
+    async def save(self, project: Project) -> None:
+        model = await self._session.get(ProjectModel, project.project_id)
+        if model is None:
+            raise NotFoundError("project", project.project_id)
+        model.name = project.name
+        model.default_run_policy_id = project.default_run_policy_id
 
 
 class PostgresStoryRepository:
@@ -204,3 +219,43 @@ class PostgresRunRepository:
             raise NotFoundError("run", run.run_id)
         model.status = run.status
         model.verdict = run.verdict
+
+
+class PostgresRunPolicyRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, policy: RunPolicy) -> None:
+        if await self.get(policy.policy_id) is not None:
+            raise AlreadyExistsError("run_policy", policy.policy_id)
+        try:
+            async with self._session.begin_nested():
+                self._session.add(policy_to_model(policy))
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                raise AlreadyExistsError("run_policy", policy.policy_id) from error
+            raise
+
+    async def get(self, policy_id: str) -> RunPolicy | None:
+        model = await self._session.get(RunPolicyModel, policy_id)
+        return policy_to_domain(model) if model is not None else None
+
+
+class PostgresEnvironmentRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, environment: Environment) -> None:
+        if await self.get(environment.environment_id) is not None:
+            raise AlreadyExistsError("environment", environment.environment_id)
+        try:
+            async with self._session.begin_nested():
+                self._session.add(environment_to_model(environment))
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                raise AlreadyExistsError("environment", environment.environment_id) from error
+            raise
+
+    async def get(self, environment_id: str) -> Environment | None:
+        model = await self._session.get(EnvironmentModel, environment_id)
+        return environment_to_domain(model) if model is not None else None

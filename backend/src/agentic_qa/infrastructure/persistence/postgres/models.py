@@ -8,6 +8,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -63,6 +64,59 @@ class ProjectModel(Base):
 
     project_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
     name: Mapped[str] = mapped_column(String(NAME_LENGTH), nullable=False)
+    # No FK: the policy references the project, and a circular FK pair would make
+    # both rows impossible to insert first.
+    default_run_policy_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class RunPolicyModel(Base):
+    """Immutable once written: a finished run's rules must not change underneath it."""
+
+    __tablename__ = "run_policies"
+
+    policy_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    allowed_origins: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    upload_path_allowlist: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    destructive_actions: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    allow_file_uploads: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    allow_downloads: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    synthetic_data_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    max_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_actions: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_model_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EnvironmentModel(Base):
+    __tablename__ = "environments"
+
+    environment_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(NAME_LENGTH), nullable=False)
+    default_run_policy_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("run_policies.policy_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -181,6 +235,18 @@ class RunModel(Base):
         ForeignKey("projects.project_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
+    )
+    run_policy_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("run_policies.policy_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    """The policy that governed this run; null only for runs created before Phase 04."""
+
+    environment_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("environments.environment_id", ondelete="RESTRICT"),
+        nullable=True,
     )
     status: Mapped[RunStatus] = mapped_column(_string_enum(RunStatus, "run_status"), nullable=False)
     verdict: Mapped[Verdict | None] = mapped_column(

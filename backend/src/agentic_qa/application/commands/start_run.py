@@ -20,6 +20,7 @@ from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
 from agentic_qa.application.services.event_publishing import publish_best_effort
+from agentic_qa.application.services.policy_resolution import resolve_run_policy
 from agentic_qa.domain.runs.run import Run, RunStatus
 
 
@@ -27,11 +28,20 @@ from agentic_qa.domain.runs.run import Run, RunStatus
 class StartRunCommand:
     project_id: str
     idempotency_key: str
+    environment_id: str | None = None
+    run_policy_id: str | None = None
     request_id: str | None = None
     """Recorded on the run.created event so one id correlates client, API and run."""
 
     def fingerprint(self) -> str:
-        return request_fingerprint(RUN_CREATION_SCOPE, {"project_id": self.project_id})
+        return request_fingerprint(
+            RUN_CREATION_SCOPE,
+            {
+                "project_id": self.project_id,
+                "environment_id": self.environment_id or "",
+                "run_policy_id": self.run_policy_id or "",
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -62,14 +72,33 @@ async def start_run(
     if await uow.projects.get(command.project_id) is None:
         raise NotFoundError("project", command.project_id)
 
-    run = Run(run_id=str(uuid4()), project_id=command.project_id)
+    # No policy, no run: the origin allowlist is the primary control against reaching
+    # services nobody asked for (docs/13), so an unresolvable policy fails typed here
+    # rather than becoming a permissive default later.
+    policy = await resolve_run_policy(
+        uow,
+        project_id=command.project_id,
+        environment_id=command.environment_id,
+        requested_policy_id=command.run_policy_id,
+    )
+
+    run = Run(
+        run_id=str(uuid4()),
+        project_id=command.project_id,
+        environment_id=command.environment_id,
+        run_policy_id=policy.policy_id,
+    )
     run.transition_to(RunStatus.QUEUED)  # accepted; the worker will pick it up
     await uow.runs.add(run)
     event = await uow.events.append(
         NewRunEvent(
             run_id=run.run_id,
             type=RUN_CREATED,
-            payload={"project_id": run.project_id, "status": run.status.value},
+            payload={
+                "project_id": run.project_id,
+                "status": run.status.value,
+                "run_policy_id": policy.policy_id,
+            },
             request_id=command.request_id,
         )
     )

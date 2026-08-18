@@ -18,6 +18,10 @@ from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from agentic_qa.application.commands.create_project import (
+    CreateProjectCommand,
+    create_project,
+)
 from agentic_qa.application.ports.locks import LockManager
 from agentic_qa.application.ports.repositories import (
     ProjectRepository,
@@ -26,6 +30,7 @@ from agentic_qa.application.ports.repositories import (
 )
 from agentic_qa.application.ports.semaphores import ResourceSemaphore
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
+from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.infrastructure.cache.redis.locks import RedisLockManager
 from agentic_qa.infrastructure.cache.redis.semaphores import RedisResourceSemaphore
 from agentic_qa.infrastructure.persistence.postgres.engine import (
@@ -51,6 +56,15 @@ from tests.fakes.unit_of_work import InMemoryUnitOfWork
 
 DEFAULT_TEST_DSN = "postgresql+asyncpg://agentic:agentic@localhost:5432/agentic_qa"
 DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
+
+# A run cannot start without a resolved policy, so tests that start runs seed one.
+DEFAULT_POLICY_PAYLOAD = {
+    "allowed_origins": ["http://localhost:3000"],
+    "max_duration_seconds": 600,
+    "max_actions": 100,
+    "max_model_calls": 10,
+    "set_as_project_default": True,
+}
 """Database 15: coordination tests flush it, so they must never touch a real one."""
 
 # Written by the committing unit-of-work tests; truncated in their teardown.
@@ -223,3 +237,24 @@ async def unit_of_work_factory(
 
     async with postgres_unit_of_work_scope() as factory:
         yield factory
+
+
+async def seed_project_with_default_policy(
+    factory: Callable[[], UnitOfWork], name: str = "Seeded"
+) -> str:
+    """Create a project plus the default policy a run needs to start."""
+    async with factory() as uow:
+        project = await create_project(uow, CreateProjectCommand(name=name))
+        policy = RunPolicy(
+            policy_id=f"pol-{project.project_id}",
+            project_id=project.project_id,
+            allowed_origins=("http://localhost:3000",),
+            max_duration_seconds=600,
+            max_actions=100,
+            max_model_calls=10,
+        )
+        await uow.policies.add(policy)
+        project.default_run_policy_id = policy.policy_id
+        await uow.projects.save(project)
+        await uow.commit()
+    return project.project_id

@@ -9,9 +9,11 @@ from types import TracebackType
 from typing import Self
 
 from tests.fakes.repositories import (
+    InMemoryEnvironmentRepository,
     InMemoryIdempotencyRepository,
     InMemoryProjectRepository,
     InMemoryRunEventLog,
+    InMemoryRunPolicyRepository,
     InMemoryRunRepository,
     InMemoryStore,
     InMemoryStoryRepository,
@@ -48,6 +50,14 @@ class InMemoryUnitOfWork:
     @property
     def events(self) -> InMemoryRunEventLog:
         return InMemoryRunEventLog(self._require_active())
+
+    @property
+    def policies(self) -> InMemoryRunPolicyRepository:
+        return InMemoryRunPolicyRepository(self._require_active())
+
+    @property
+    def environments(self) -> InMemoryEnvironmentRepository:
+        return InMemoryEnvironmentRepository(self._require_active())
 
     async def __aenter__(self) -> Self:
         self._baseline = self._store.snapshot()

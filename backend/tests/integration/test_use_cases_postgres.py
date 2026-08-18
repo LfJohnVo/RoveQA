@@ -6,10 +6,6 @@ persists what those tests assert, including the durable idempotency record.
 
 from collections.abc import Callable
 
-from agentic_qa.application.commands.create_project import (
-    CreateProjectCommand,
-    create_project,
-)
 from agentic_qa.application.commands.create_story import CreateStoryCommand, create_story
 from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.ports.idempotency import RUN_CREATION_SCOPE
@@ -17,6 +13,7 @@ from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.queries.get_project import get_project
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion
 from agentic_qa.domain.runs.run import RunStatus
+from tests.conftest import seed_project_with_default_policy
 from tests.fakes.workflows import RecordingWorkflowGateway
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
@@ -25,14 +22,13 @@ UnitOfWorkFactory = Callable[[], UnitOfWork]
 async def test_project_story_and_run_draft_reach_the_database(
     postgres_unit_of_work_factory: UnitOfWorkFactory,
 ) -> None:
-    async with postgres_unit_of_work_factory() as uow:
-        project = await create_project(uow, CreateProjectCommand(name="Checkout"))
+    project_id = await seed_project_with_default_policy(postgres_unit_of_work_factory, "Checkout")
 
     async with postgres_unit_of_work_factory() as uow:
         story = await create_story(
             uow,
             CreateStoryCommand(
-                project_id=project.project_id,
+                project_id=project_id,
                 actor="registered user",
                 goal="reset the password",
                 acceptance_criteria=(
@@ -47,11 +43,11 @@ async def test_project_story_and_run_draft_reach_the_database(
         result = await start_run(
             uow,
             RecordingWorkflowGateway(),
-            StartRunCommand(project_id=project.project_id, idempotency_key="k-e2e"),
+            StartRunCommand(project_id=project_id, idempotency_key="k-e2e"),
         )
 
     async with postgres_unit_of_work_factory() as uow:
-        assert (await get_project(uow.projects, project.project_id)).name == "Checkout"
+        assert (await get_project(uow.projects, project_id)).name == "Checkout"
 
         stored_story = await uow.stories.get(story.story_id)
         assert stored_story is not None
@@ -73,10 +69,9 @@ async def test_a_retried_request_reuses_the_committed_run(
     postgres_unit_of_work_factory: UnitOfWorkFactory,
 ) -> None:
     """Lost ACK against the real database: the retry must not create a second run."""
-    async with postgres_unit_of_work_factory() as uow:
-        project = await create_project(uow, CreateProjectCommand(name="Checkout"))
+    project_id = await seed_project_with_default_policy(postgres_unit_of_work_factory, "Checkout")
 
-    command = StartRunCommand(project_id=project.project_id, idempotency_key="k-retry")
+    command = StartRunCommand(project_id=project_id, idempotency_key="k-retry")
 
     workflows = RecordingWorkflowGateway()
     async with postgres_unit_of_work_factory() as uow:
