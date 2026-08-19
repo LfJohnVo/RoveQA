@@ -1,6 +1,6 @@
 # Continue RoveQA with Opus 5
 
-Instrucción autosuficiente para la siguiente sesión. Estado al cierre de la sesión anterior (2026-08-19): **Phases 00-07 DONE** (Phase 07: 5/5 gates PASS), vLLM validado sobre GPU real (RTX 5060 Ti) y pipeline corriendo íntegramente en contenedores. 370 tests backend verdes (1 skip: modelo real cuando no hay endpoint). Siguiente: Phase 08 (agent-first CLI).
+Instrucción autosuficiente para la siguiente sesión. Estado al cierre de la sesión anterior (2026-08-19): **Phases 00-07 DONE** y **Phase 08 con sus 7 gates PASS pero sin cerrar** (faltan `run diff`, `run flaky`, `agent install claude`). vLLM validado sobre GPU real (RTX 5060 Ti); todo el pipeline corre en contenedores. 372 tests backend + 59 CLI verdes. Siguiente: terminar Phase 08.
 
 ## Pasos obligatorios, en orden
 
@@ -14,10 +14,10 @@ Instrucción autosuficiente para la siguiente sesión. Estado al cierre de la se
    make migrate
    bash scripts/ci-local.sh
    ```
-   `make up` va primero: desde Phase 01 el gate incluye migraciones y falla si PostgreSQL no está arriba. Todo corre en contenedores; en el host sólo hacen falta `docker compose` y `bash`. `ci-local.sh` debe terminar en "ci-local: all green" (370 tests backend, ~60s). Si algo está rojo, aplica `systematic-debugging` antes de continuar; no asumas que lo rompiste tú ni lo "arregles" a ciegas.
+   `make up` va primero: desde Phase 01 el gate incluye migraciones y falla si PostgreSQL no está arriba. Todo corre en contenedores; en el host sólo hacen falta `docker compose` y `bash`. `ci-local.sh` debe terminar en "ci-local: all green" (372 backend + 59 CLI, ~90s). Si algo está rojo, aplica `systematic-debugging` antes de continuar; no asumas que lo rompiste tú ni lo "arregles" a ciegas.
 6. Continúa EXACTAMENTE desde el `Exact Next Task` del HANDOFF:
-   > Implement Phase 08 slice 1: a `roveqa run` command that starts a run through the public HTTP API and prints a single JSON envelope on stdout, with progress and warnings on stderr — the CLI is another delivery adapter and may not import Playwright, Temporal, LangGraph or the database.
-   Phases 00-07 están cerradas: dominio, persistencia, API, Temporal, eventos, Redis, RunPolicy, browser gateway con recovery, agent graph con checkpointer y resume, adapter de inferencia con router/structured outputs, y TestPlan + verificación de criterios + verdict + reporte YA existen y están testeados. No los rehagas. El comando de arranque es `/implement-phase 08`. Lee `plans/phase-08-agent-first-cli.md` y `docs/25-agent-first-cli.md`.
+   > Implement `roveqa run diff <run-a> <run-b>`: compare two runs by verdict and by `criterion_id`/`step_id`, emitting the deterministic delta before any semantic summary — the plan version each run executed is already recorded, so a diff across plan versions must say so rather than silently comparing different plans.
+   **La CLI ya existe en `cli/`** con `setup`, `doctor`, `project list|get`, `plan scaffold|lint`, `run create|get|wait|cancel|failure|artifact|rerun`, sus contratos, y 59 tests (incluidos subprocess y SIGINT). No la reescribas. Phases 00-07 también están cerradas. Lee `plans/phase-08-agent-first-cli.md` y `docs/25-agent-first-cli.md`.
 7. **No repitas side effects**: el stack compose ya se levantó y validó (volúmenes `roveqa_postgres_data`/`roveqa_falkordb_data` persisten); las imágenes `roveqa-api`/`roveqa-worker`/`roveqa-backend-tests` ya compilan y corren. No re-crees nada de eso salvo que un check demuestre que está roto. No hagas `docker compose down -v` (destruiría datos de Temporal).
 8. **No avances de fase sin gates verdes**. Al cerrar: `/test-and-verify 08`, `/architecture-guard`, actualizar `PROGRESS.md` y `HANDOFF.md`, y DETENTE — no empieces Phase 09 sin instrucción explícita del usuario.
 9. Sigue usando todas las skills y reglas del proyecto: `ponytail` always-on, routing según `docs/21-claude-skill-routing.md`, `.claude/rules/*` por path, ADR para toda decisión estructural nueva. Los vigentes son ADR 0009 (retry ownership / workflow shape) y ADR 0010 (transaction ownership); no los contradigas.
@@ -45,6 +45,10 @@ Instrucción autosuficiente para la siguiente sesión. Estado al cierre de la se
 - La tabla del dominio se llama `recovery_points`, no `checkpoints`: ese nombre lo ocupa LangGraph. `alembic/env.py` excluye las tablas que la librería gestiona.
 - `httpx2` está en dev deps porque el `TestClient` de starlette lo exige (con `filterwarnings=error` su ausencia rompe la suite). No lo borres por parecer redundante con `httpx`.
 - Python 3.13 vía uv (`backend/.python-version`); pnpm 10.34.5 pinneado en `frontend/package.json`. mypy corre en strict sobre `src` y `tests`, y pytest trata los warnings como errores.
+- **La CLI es un delivery adapter**: `cli/test/boundaries.test.ts` falla si importa Playwright/Temporal/LangGraph/PostgreSQL/Redis o los declara como dependencia. No lo relajes.
+- **Un solo sitio escribe stdout** (`emit` en `cli/src/main.ts`) y emitir dos veces lanza. Todo lo demás va a stderr.
+- **Exit 1 ≠ exit 7**: 1 es un verdict no-pass, 7 es un wait timeout con el run vivo.
+- La suite backend usa `agentic_qa_test`, no la base de la aplicación. Si `POSTGRES_TEST_DSN` vuelve a apuntar a `agentic_qa`, correr los tests borra los datos que sirve la API.
 - Para regenerar `uv.lock` sin uv en el host:
   ```bash
   docker run --rm -v "$PWD/backend:/w" -w /w ghcr.io/astral-sh/uv:python3.13-bookworm-slim uv lock

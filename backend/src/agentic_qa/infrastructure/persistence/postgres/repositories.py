@@ -91,6 +91,12 @@ class PostgresProjectRepository:
         model = await self._session.get(ProjectModel, project_id)
         return project_to_domain(model) if model is not None else None
 
+    async def list(self, *, limit: int) -> list[Project]:
+        result = await self._session.execute(
+            select(ProjectModel).order_by(ProjectModel.created_at.desc()).limit(limit)
+        )
+        return [project_to_domain(model) for model in result.scalars()]
+
     async def save(self, project: Project) -> None:
         model = await self._session.get(ProjectModel, project.project_id)
         if model is None:

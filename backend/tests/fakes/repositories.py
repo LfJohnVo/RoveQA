@@ -97,6 +97,9 @@ class InMemoryProjectRepository:
         stored = self._store.projects.get(project_id)
         return replace(stored) if stored is not None else None
 
+    async def list(self, *, limit: int) -> list[Project]:
+        return [replace(project) for project in self._store.projects.values()][:limit]
+
     async def save(self, project: Project) -> None:
         if project.project_id not in self._store.projects:
             raise NotFoundError("project", project.project_id)

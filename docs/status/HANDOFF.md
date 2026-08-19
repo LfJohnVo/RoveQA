@@ -1,25 +1,40 @@
 # Session Handoff
 
-Última sesión: 2026-08-19 (Opus 5). **Phases 02, 03, 04, 05, 06 y 07 completadas** en esta sesión, más la migración del pipeline a contenedores y la validación de vLLM sobre GPU real.
+Última sesión: 2026-08-19 (Opus 5). **Phases 02-07 completadas** y **Phase 08 con sus 7 gates PASS** (5 comandos opcionales pendientes), más la migración del pipeline a contenedores y la validación de vLLM sobre GPU real.
 
 # Current Phase
 
-08 — Agent-first CLI (`plans/phase-08-agent-first-cli.md`). Phase 07 está DONE con sus 5 gates PASS.
+08 — Agent-first CLI (`plans/phase-08-agent-first-cli.md`). **Los 7 acceptance gates están PASS**, pero la fase no está cerrada: faltan `run diff`, `run flaky` y `agent install claude` de la lista de comandos v1.
 
 # Phase Status
 
 - Phases 00, 01, 02, 03, 04, 05, 06, 07: **DONE**.
-- Phase 08: **NOT_STARTED**. No existe la CLI `roveqa`; los contratos que consume (`TestPlan`, endpoints de run y report) ya están publicados.
+- Phase 08: **IN_PROGRESS**. Implementados: `setup`, `doctor`, `project list|get`, `plan scaffold|lint`, `run create|get|wait|cancel|failure|artifact|rerun`. Pendientes: `run diff`, `run flaky`, `agent install claude`.
 
 # Last Stable State
 
 - Git branch `main`.
-- `bash scripts/ci-local.sh` → **all green**: 370 tests backend (1 skip), 1 frontend, migraciones sin drift, build frontend, compose config.
-- Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `0f1607fa06e7`.
+- `bash scripts/ci-local.sh` → **all green**: 372 tests backend (1 skip), 59 CLI, 1 frontend, migraciones sin drift, build frontend, compose config.
+- Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `00dfb54608c5`.
+- La suite usa su propia base `agentic_qa_test`. Antes compartía la de la aplicación y la borraba en cada corrida; el síntoma ("mi proyecto desapareció") no se parecía en nada a la causa.
 - vLLM sirviendo `Qwen/Qwen3-4B-Instruct-2507` bajo el perfil `gpu` (RTX 5060 Ti 16GB, sm_120).
 - Todo gate corre en contenedores. En el host sólo hacen falta `docker compose` y `bash`.
 
 # Architecture Decisions Made
+
+Phase 08 (CLI):
+
+- **Un solo sitio escribe stdout, y escribe exactamente un valor JSON.** Emitir dos veces lanza en vez de producir dos valores que nadie puede parsear. Todo diagnóstico va a stderr, así que un warning que el comando quiere imprimir de verdad no puede corromper lo que un agente parsea.
+- **Los exit codes distinguen una respuesta de su ausencia.** `1` es un verdict terminal no-pass; `7` es un timeout de espera con el run todavía vivo. Colapsarlos dejaría que CI registre un fallo por un run que después pasó.
+- **Esperar no es poseer.** Ctrl-C y el deadline del cliente desacoplan y dicen cómo retomar; sólo `run cancel` para un run.
+- **Una mutación se reintenta sólo con Idempotency-Key, y reusa la misma en cada intento.** Un retry sin key es cómo una respuesta perdida se convierte en dos runs. Un 409 es una respuesta y no se reintenta.
+- **Las responses se validan en runtime, no se castean.** Un verdict desconocido se rechaza porque el exit code se deriva de él y un valor no reconocido se volvería "no pasó" en silencio.
+- **Un bundle está completo o visiblemente incompleto.** Se escribe en un directorio de staging con marcador `.partial` desde el primer byte, el manifest va al final, y sólo entonces se promociona con un rename. Un fallo deja el staging como evidencia y **no** destruye el bundle anterior.
+- **La provenance se comprueba antes de escribir un byte**: todo artifact debe nombrar el mismo `run_id` y `evidence_set_id` que el manifest. Un bundle que mezcla el screenshot de este run con el trace de otro se lee como coherente y no lo es.
+- **El plan importado se versiona por content hash** (docs/12): los mismos bytes son la misma versión, así que enviar un plan es idempotente sin key.
+- **`run rerun` copia la versión de plan del run fuente** en vez de re-resolverla: reejecutar un fallo tiene que ejecutar el mismo plan.
+- **Un artifact id es un identificador, nunca un path**, y el repositorio verifica el hash al leer.
+- **`doctor` sale 8 con la API caída**, no 0 con un problema listado: un doctor que triunfa mientras reporta un setup roto es uno que CI no puede usar.
 
 Phase 07:
 
@@ -38,6 +53,21 @@ GPU/vLLM:
 - Docker Desktop ejecuta bajo WSL2, donde vLLM desactiva pinned memory por defecto; su worker GPU asigna buffers UVA y muere con "UVA is not available". Se habilita con `VLLM_WSL2_ENABLE_PIN_MEMORY=1`, que vLLM sólo permite en kernels WSL2 >= 4.19.121 (este host: 6.6).
 
 # Files Created
+
+CLI (Phase 08), en `cli/`:
+
+- `src/main.ts` (dispatcher y único escritor de stdout), `src/config.ts`, `src/errors.ts`
+- `src/output/{envelope,exit-codes}.ts`, `src/contracts/schemas.ts`
+- `src/client/api.ts` (retry/idempotencia/timeouts/bytes), `src/bundle/materialize.ts`
+- `src/commands/{plan,run,doctor,setup}.ts`
+- Tests: `test/{envelope,config,run,bundle,boundaries,detach}.test.ts`
+
+Backend (Phase 08):
+
+- `application/commands/import_plan.py` (content-hash versioning)
+- `application/queries/failure_context.py`, `interfaces/http/routers/artifacts.py`
+- `alembic/versions/00dfb54608c5_phase_08_artifacts_index.py` (tabla `artifacts`)
+- `infra/postgres/init-test-db.sql`
 
 Backend (Phase 07):
 
@@ -66,7 +96,8 @@ Backend (Phase 07):
 
 # Database/Migrations State
 
-- Migraciones: … → `f9911e78285a` → `603bec952128` (`test_plans` + `runs.plan_id/plan_version`) → **`0f1607fa06e7`** (`criterion_results`). `alembic check` limpio.
+- Migraciones: … → `603bec952128` (`test_plans` + `runs.plan_id/plan_version`) → `0f1607fa06e7` (`criterion_results`) → **`00dfb54608c5`** (`artifacts`). `alembic check` limpio.
+- La tabla `artifacts` guarda **referencias** (identidad, provenance, hash, tamaño); los bytes siguen en el filesystem (docs/11).
 
 # Tests Executed
 
@@ -85,6 +116,18 @@ docker compose --profile gpu up -d vllm
 - `ci-local: all green`. Frontend: eslint, tsc, vitest 1 passed, build OK.
 - **Modelo real**: `tests/inference/test_real_model.py` pasa contra vLLM vivo en la RTX 5060 Ti (1 passed en 4.61s).
 
+# Acceptance Gates (Phase 08)
+
+| Gate | Resultado |
+| --- | --- |
+| Un agente puede `plan lint → run create → run wait → run failure → rerun` sólo con salida machine-readable | **PASS** (verificado contra el stack vivo, arrancando desde `.roveqa/config.json` escrito por `setup`) |
+| Ningún comando invoca Playwright/vLLM/AirLLM/PostgreSQL/Redis/Temporal | **PASS** (`test/boundaries.test.ts` escanea imports estáticos, dinámicos y `require`, además de las dependencias declaradas, y se verifica contra una violación plantada) |
+| Matar la CLI durante `run wait` deja el run intacto | **PASS** (subprocess real + SIGINT: sale 7, imprime "detaching" en stderr y el stub no recibe ningún cancel) |
+| Un retry duplicado no crea side effects duplicados | **PASS** (la key se reusa entre intentos; un 409 no se reintenta) |
+| Los tests de FailureBundle rechazan identidades mezcladas | **PASS** (run distinto y evidence set distinto, ambos rechazados antes de escribir un byte) |
+| `--output json` emite exactamente un valor parseable en todo camino | **PASS** (éxito, error, y con un warning que el comando sí quiere imprimir; validado contra `cli-envelope.schema.json`) |
+| Planes y bundles hacen round-trip por sus schemas | **PASS** |
+
 # Acceptance Gates (Phase 07)
 
 | Gate | Resultado |
@@ -97,6 +140,9 @@ docker compose --profile gpu up -d vllm
 
 # Known Issues
 
+- **Faltan 3 comandos de la lista v1**: `run diff`, `run flaky` y `agent install claude`. Los gates no dependen de ellos, pero la fase no está cerrada.
+- **Los bundles de runs reales no llevan artifacts**: el graph todavía no captura screenshots ni traces, así que el índice está vacío. Los caminos de integridad y atomicidad sí se ejercitan con artifacts reales en tests.
+- `plan lint` valida contra el schema local; no comprueba compatibilidad de versión contra una API remota (el plan lo pide en `doctor`, que hoy sólo compara los schemas que la CLI conoce).
 - `more_work` sigue siendo `False`: un episodio por plan. Un plan que necesite varios episodios llega cuando exista el motivo.
 - `evidence_refs` de `CriterionResult` existe y nadie lo llena todavía: los artifacts de Phase 04 no están enlazados a los resultados. Es lo que falta para que el gate de evidencia sea completo y no sólo trazable por `step_id`/`run_id`.
 - El `RecoveryPoint` sigue con `browser.url` vacío.
@@ -141,11 +187,11 @@ docker compose --profile gpu up -d vllm
 
 # Exact Next Task
 
-Implement Phase 08 slice 1: a `roveqa run` command that starts a run through the public HTTP API and prints a single JSON envelope on stdout, with progress and warnings on stderr — the CLI is another delivery adapter and may not import Playwright, Temporal, LangGraph or the database.
+Implement `roveqa run diff <run-a> <run-b>`: compare two runs by verdict and by `criterion_id`/`step_id`, emitting the deterministic delta before any semantic summary — the plan version each run executed is already recorded, so a diff across plan versions must say so rather than silently comparing different plans.
 
 # Exact Next Command
 
-En Claude Code: `/implement-phase 08`
+En Claude Code: `/implement-phase 08` (continuar; no reempezar)
 
 # Recommended Skills For Next Session
 

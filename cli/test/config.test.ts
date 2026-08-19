@@ -4,7 +4,7 @@
  *     command flag > environment variable > project config > user config > default
  */
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_API_URL, loadConfig } from "../src/config.js";
 import { CliError } from "../src/errors.js";
+import { setup } from "../src/commands/setup.js";
 
 function workspace(files: { project?: object; user?: object } = {}): {
   cwd: string;
@@ -125,5 +126,47 @@ describe("broken config", () => {
     writeFileSync(join(cwd, ".roveqa", "config.json"), "{not json");
 
     expect(() => loadConfig({}, { ROVEQA_HOME: home }, cwd)).toThrow(/not valid JSON/);
+  });
+});
+
+describe("setup", () => {
+  it("writes a project config without ever writing a secret", async () => {
+    const { cwd } = workspace();
+
+    const result = await setup({ cwd, apiUrl: "http://api.test", projectId: "p-1" });
+
+    expect(result.created).toBe(true);
+    const written: unknown = JSON.parse(readFileSync(result.path, "utf8"));
+    expect(written).toEqual({ api_url: "http://api.test", project_id: "p-1" });
+    // There is no flag that could put one here in the first place.
+    expect(Object.keys(written as object)).not.toContain("token");
+  });
+
+  it("merges rather than overwriting what a colleague committed", async () => {
+    const { cwd } = workspace({ project: { api_url: "http://shared.test" } });
+
+    const result = await setup({ cwd, projectId: "p-1" });
+
+    expect(result.config).toEqual({ api_url: "http://shared.test", project_id: "p-1" });
+    expect(result.created).toBe(false);
+  });
+
+  it("refuses to touch a config that already holds a token", async () => {
+    const { cwd } = workspace({ project: { token: "s3cret" } });
+
+    await expect(setup({ cwd, projectId: "p-1" })).rejects.toThrow(/contains a token/);
+  });
+
+  it("refuses to overwrite a file it could not read", async () => {
+    // Overwriting unparseable content would destroy whatever it held.
+    const { cwd } = workspace();
+    mkdirSync(join(cwd, ".roveqa"), { recursive: true });
+    writeFileSync(join(cwd, ".roveqa", "config.json"), "{not json");
+
+    await expect(setup({ cwd, projectId: "p-1" })).rejects.toThrow(/not valid JSON/);
+  });
+
+  it("needs something to write", async () => {
+    await expect(setup({ cwd: workspace().cwd })).rejects.toThrow(/nothing to write/);
   });
 });

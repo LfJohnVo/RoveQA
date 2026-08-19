@@ -24,11 +24,14 @@ import {
   cancelRun,
   createRun,
   failureContext,
+  getProject,
   getRun,
+  listProjects,
   rerun,
   waitForRun,
   type RunState,
 } from "./commands/run.js";
+import { setup } from "./commands/setup.js";
 import { materialize, type BundleManifest } from "./bundle/materialize.js";
 import {
   diagnostic,
@@ -65,6 +68,7 @@ const OPTIONS = {
   "idempotency-key": { type: "string" as const },
   timeout: { type: "string" as const },
   out: { type: "string" as const },
+  limit: { type: "string" as const },
   name: { type: "string" as const },
   help: { type: "boolean" as const },
 };
@@ -128,11 +132,20 @@ async function dispatch(
       return await runFailure(rest, values, requestId, writer);
     case "run rerun":
       return await runRerun(rest, values, requestId);
+    case "run artifact":
+      return await runArtifact(rest, values, requestId, writer);
+    case "project list":
+      return await projectList(values, requestId);
+    case "project get":
+      return await projectGet(rest, values, requestId);
+    case "setup":
+      return await setupCommand(values);
     default:
       throw usage(
         `unknown command: ${[group, action].filter(Boolean).join(" ")}`,
-        "Known commands: doctor, plan scaffold, plan lint, run create, run get, " +
-          "run wait, run cancel, run failure, run rerun",
+        "Known commands: setup, doctor, project list, project get, plan scaffold, " +
+          "plan lint, run create, run get, run wait, run cancel, run failure, " +
+          "run artifact, run rerun",
       );
   }
 }
@@ -347,6 +360,74 @@ async function runRerun(rest: string[], values: Values, requestId: string): Prom
   return {
     data: { ...created, source_run_id: runId },
     text: `run ${created.run_id} reruns ${runId}
+`,
+  };
+}
+
+async function runArtifact(
+  rest: string[],
+  values: Values,
+  requestId: string,
+  writer: Writer,
+): Promise<CommandResult> {
+  const runId = requireRunId(rest);
+  const outDir = asString(values.out);
+  if (outDir === undefined) {
+    throw usage(
+      "an output directory is required",
+      `Try: roveqa run artifact ${runId} --out ./artifacts`,
+    );
+  }
+
+  const { client } = connect(values, requestId);
+  // The same coherent snapshot the bundle uses, so downloading artifacts on their own
+  // cannot pick up evidence from a different run.
+  const manifest = (await failureContext(client, runId)) as BundleManifest;
+  diagnostic(writer, `downloading ${String(manifest.artifacts.length)} artifact(s)`);
+
+  const result = await materialize(manifest, outDir, (artifact) =>
+    client.requestBytes(`/api/v1/artifacts/${encodeURIComponent(artifact.artifact_id)}`),
+  );
+  return {
+    data: { run_id: runId, directory: result.directory, artifact_count: result.artifactCount },
+    text: `${String(result.artifactCount)} artifact(s) written to ${result.directory}
+`,
+  };
+}
+
+async function projectList(values: Values, requestId: string): Promise<CommandResult> {
+  const { client } = connect(values, requestId);
+  const limit = Number(asString(values.limit) ?? "50");
+  const projects = await listProjects(client, limit);
+  return {
+    data: projects,
+    text: projects.map((project) => `${project.project_id}  ${project.name}\n`).join(""),
+  };
+}
+
+async function projectGet(
+  rest: string[],
+  values: Values,
+  requestId: string,
+): Promise<CommandResult> {
+  const projectId = rest[0] ?? asString(values.project);
+  if (projectId === undefined) throw usage("a project id is required");
+  const { client } = connect(values, requestId);
+  const project = await getProject(client, projectId);
+  return { data: project, text: `${project.project_id}  ${project.name}
+` };
+}
+
+async function setupCommand(values: Values): Promise<CommandResult> {
+  const result = await setup({
+    cwd: process.cwd(),
+    apiUrl: asString(values["api-url"]),
+    projectId: asString(values.project),
+    environmentId: asString(values.environment),
+  });
+  return {
+    data: result,
+    text: `${result.created ? "created" : "updated"} ${result.path}
 `,
   };
 }

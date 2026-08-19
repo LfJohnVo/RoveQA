@@ -18,6 +18,11 @@ class ProjectRepository(Protocol):
 
     async def get(self, project_id: str) -> Project | None: ...
 
+    async def list(self, *, limit: int) -> list[Project]:
+        """Newest first, bounded. There is no unbounded listing: a page size is a
+        promise about response size, and "all of them" is not one."""
+        ...
+
     async def save(self, project: Project) -> None:
         """Persist changes to an existing project. Raises NotFoundError when gone."""
         ...

@@ -1,6 +1,8 @@
 """Project endpoints."""
 
-from fastapi import APIRouter, status
+from typing import Annotated
+
+from fastapi import APIRouter, Query, status
 
 from agentic_qa.application.commands.create_project import (
     CreateProjectCommand,
@@ -21,11 +23,24 @@ from agentic_qa.interfaces.http.schemas import (
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
+DEFAULT_PROJECT_PAGE_SIZE = 50
+MAX_PROJECT_PAGE_SIZE = 200
+
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def post_project(payload: CreateProjectRequest, uow: UnitOfWorkDep) -> ProjectResponse:
     project = await create_project(uow, CreateProjectCommand(name=payload.name))
     return ProjectResponse.from_domain(project)
+
+
+@router.get("", response_model=list[ProjectResponse])
+async def list_projects(
+    uow: UnitOfWorkDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_PROJECT_PAGE_SIZE)] = DEFAULT_PROJECT_PAGE_SIZE,
+) -> list[ProjectResponse]:
+    """Bounded by construction: a page size is a promise about response size."""
+    projects = await uow.projects.list(limit=limit)
+    return [ProjectResponse.from_domain(project) for project in projects]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

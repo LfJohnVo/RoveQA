@@ -178,3 +178,39 @@ export async function rerun(
   });
   return parseRunState(response.body);
 }
+
+
+export interface Project {
+  project_id: string;
+  name: string;
+}
+
+function parseProject(value: unknown): Project {
+  if (value === null || typeof value !== "object") {
+    throw new CliError("TRANSPORT_ERROR", "the server returned a project that is not an object");
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.project_id !== "string" || typeof record.name !== "string") {
+    throw new CliError("TRANSPORT_ERROR", "the server returned a project without an identity");
+  }
+  return { project_id: record.project_id, name: record.name };
+}
+
+export async function listProjects(client: ApiClient, limit: number): Promise<Project[]> {
+  const response = await client.request({
+    method: "GET",
+    path: `/api/v1/projects?limit=${String(limit)}`,
+  });
+  if (!Array.isArray(response.body)) {
+    throw new CliError("TRANSPORT_ERROR", "the server returned a project list that is not a list");
+  }
+  return response.body.map(parseProject);
+}
+
+export async function getProject(client: ApiClient, projectId: string): Promise<Project> {
+  const response = await client.request({
+    method: "GET",
+    path: `/api/v1/projects/${encodeURIComponent(projectId)}`,
+  });
+  return parseProject(response.body);
+}

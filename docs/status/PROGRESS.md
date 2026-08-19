@@ -1,6 +1,6 @@
 # Progress
 
-Última actualización: 2026-08-19 — Phase 07 completada; Phases 00-06 completadas, vLLM validado sobre GPU real, pipeline containerizado y blueprint auditado (ver HANDOFF).
+Última actualización: 2026-08-19 — Phase 08 con sus 7 gates PASS (5 comandos opcionales pendientes); Phase 07 completada; Phases 00-06 completadas, vLLM validado sobre GPU real, pipeline containerizado y blueprint auditado (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
@@ -12,7 +12,7 @@
 | 05 | DONE | 3/3 gates PASS: run reanuda desde el último safe checkpoint (worker muere en la página 3, el reemplazo continúa desde ahí contra el checkpointer PostgreSQL real), contexto del planner acotado (500 steps → ventana de 12), y sin side effect duplicado en la crash window. 274 tests; `RunEpisodeActivity` ejecuta el graph y persiste el RecoveryPoint |
 | 06 | DONE | 3/3 gates PASS: output inválido del modelo nunca llega a Playwright (graph real + browser recorder: prosa, acción inexistente, click sin target y completion vacía → 0 acciones ejecutadas), límite de concurrencia demostrado por endpoint contra Redis real e in-memory (peak in-flight ≤ capacity con 6 llamadas y con dos clientes compartiendo presupuesto), y agent system test con fake model obligatorio + modelo real opcional (skip sin `VLLM_BASE_URL`). 324 tests; e2e en la imagen worker: HTTP real al endpoint → schema → policy → Chromium → checkpoint |
 | 07 | DONE | 5/5 gates PASS: una story conocida pasa dos veces seguidas y falla nombrando el criterio incumplido (e2e real contra Chromium + PostgreSQL + target app); el TestPlan valida contra `contracts/test-plan.schema.json` y sobrevive export→import incluido el tipo de los valores de metadata; cada criterio apunta a su plan step y a su run; el reporte se construye desde filas durables y separa `deterministic_observation` de `root_cause_hypothesis`; un criterio sin ancla determinista termina inconclusive sin culpar al producto. 370 tests |
-| 08 | NOT_STARTED | desbloqueada por 07 |
+| 08 | IN_PROGRESS | 7/7 gates PASS: el loop `plan lint → run create → run wait → run failure → run rerun` funciona sólo con salida machine-readable (verificado contra el stack vivo); test automático de boundary (la CLI no importa Playwright/Temporal/LangGraph/PostgreSQL/Redis ni los declara como dependencia); SIGINT durante `run wait` sale 7 y deja el run intacto (subprocess real, el stub no recibe ningún cancel); retry de un trigger perdido reusa la misma Idempotency-Key y un 409 nunca se reintenta; el bundle rechaza identidades mezcladas de run/evidence set; `--output json` emite exactamente un valor en éxito, error y con warnings; planes y bundles hacen round-trip contra sus schemas. 59 tests CLI + 372 backend. **Pendientes**: `run diff`, `run flaky`, `agent install claude`, y `plan lint` no valida todavía contra una API remota |
 | 09 | NOT_STARTED | desbloqueada por 07 |
 | 10 | BLOCKED | requiere APIs de 02/07; CLI 08 recomendado para agent workflow |
 | 11 | NOT_STARTED | desbloqueada por 07 |

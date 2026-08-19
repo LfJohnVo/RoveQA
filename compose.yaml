@@ -11,6 +11,9 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates the suite's own database on first init, so running the tests
+      # cannot drop the tables the API is serving from.
+      - ./infra/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentic} -d ${POSTGRES_DB:-agentic_qa}"]
       interval: 5s
@@ -130,7 +133,9 @@ services:
     profiles: ["gates"]
     environment:
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
-      POSTGRES_TEST_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
+      # A database of its own: the suite creates and drops tables, and pointing it
+      # at the application's database destroys whatever a developer was looking at.
+      POSTGRES_TEST_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_TEST_DB:-agentic_qa_test}
       REDIS_TEST_URL: redis://redis:6379/15
       TEMPORAL_ADDRESS: temporal:7233
       # Same regime as the worker, so a type missing from the checkpoint allowlist
