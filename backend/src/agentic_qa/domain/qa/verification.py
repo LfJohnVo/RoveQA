@@ -77,6 +77,15 @@ class CriterionResult:
     evidence_refs: tuple[str, ...] = field(default=())
     step_id: str | None = None
 
+    model_invocation_id: str | None = None
+    model_name: str | None = None
+    prompt_version: str | None = None
+    """Which model and prompt produced a model-derived judgement (docs/08).
+
+    Absent on a deterministic result, and that absence is itself information: a
+    result with no invocation is one nobody needed a model for.
+    """
+
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "criterion_id", require_identifier(self.criterion_id, field="criterion_id")
@@ -88,6 +97,8 @@ class CriterionResult:
         )
         if self.outcome is CriterionOutcome.MET and self.failure_kind is not None:
             raise InvalidEntityError("a met criterion has no failure kind")
+        if not self.model_derived and self.model_invocation_id is not None:
+            raise InvalidEntityError("a deterministic result cannot name a model invocation")
         if self.outcome is CriterionOutcome.NOT_MET and self.failure_kind is None:
             # Without a kind, a report cannot tell a product defect from a bad plan, and
             # the safe reading (blame the product) is the damaging one.

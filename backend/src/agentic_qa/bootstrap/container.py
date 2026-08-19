@@ -106,5 +106,11 @@ def with_agent_runtime(container: Container, settings: Settings) -> Container:
         raise RuntimeError("the agent runtime needs Redis to bound model concurrency")
 
     http = httpx.AsyncClient()
-    runner = build_episode_runner(settings, router=router, redis=container.redis, http=http)
+    runner = build_episode_runner(
+        settings,
+        router=router,
+        redis=container.redis,
+        http=http,
+        artifacts=container.artifacts,
+    )
     return replace(container, episodes=runner, model_http=http)

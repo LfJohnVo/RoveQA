@@ -3,10 +3,12 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from alembic.runtime.environment import NameFilterParentNames, NameFilterType
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from agentic_qa.infrastructure.agent.langgraph.checkpointer import LIBRARY_OWNED_TABLES
 from agentic_qa.infrastructure.persistence.postgres.models import Base
 
 # this is the Alembic Config object, which provides
@@ -26,20 +28,18 @@ if _dsn:
 
 target_metadata = Base.metadata
 
-# Tables LangGraph's checkpointer creates and migrates itself (`saver.setup()`).
-# They live in the same database but are not ours: without this, autogenerate would
-# propose dropping them on every run, and `alembic check` would never be clean.
-LIBRARY_OWNED_TABLES = frozenset(
-    {
-        "checkpoints",
-        "checkpoint_blobs",
-        "checkpoint_writes",
-        "checkpoint_migrations",
-    }
-)
 
+def include_name(
+    name: str | None,
+    type_: NameFilterType,
+    parent_names: NameFilterParentNames,
+) -> bool:
+    """Alembic's own signature, spelled out.
 
-def include_name(name: str | None, type_: str, parent_names: dict[str, str | None]) -> bool:
+    It was loose enough that a type checker could not confirm this hook matches what
+    alembic will call — and this hook is what keeps autogenerate from proposing to
+    drop the checkpoint tables.
+    """
     if type_ == "table":
         return name not in LIBRARY_OWNED_TABLES
     return True

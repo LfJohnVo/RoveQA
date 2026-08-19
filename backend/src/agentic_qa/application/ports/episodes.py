@@ -8,6 +8,7 @@ LangGraph, and which checkpointer or browser it drives, is entirely behind here.
 from dataclasses import dataclass
 from typing import Protocol
 
+from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep
 from agentic_qa.domain.qa.verification import CriterionResult
@@ -44,6 +45,13 @@ class EpisodeResult:
 
     criterion_results: tuple[CriterionResult, ...] = ()
     """One per plan assertion. Empty for a run with no plan."""
+
+    evidence: tuple[EvidenceRef, ...] = ()
+    """Artifacts captured while the browser was still open. The caller indexes them."""
+
+    observed_url: str | None = None
+    """Where the episode ended. Recovery needs it: rebuilding a browser without
+    knowing where to go lands on a blank page and re-verifies nothing."""
 
 
 class EpisodeRunner(Protocol):

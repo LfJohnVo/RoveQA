@@ -129,6 +129,13 @@ async def _judge_semantically(
             step_id=step.step_id,
         )
 
+    # Named explicitly rather than unpacked from a dict: which field is which is
+    # the kind of thing a type checker should be able to see.
+    invocation = judgement.invocation
+    invocation_id = invocation.invocation_id if invocation is not None else None
+    model_name = invocation.model if invocation is not None else None
+    prompt_version = invocation.prompt_version if invocation is not None else None
+
     if judgement.satisfied is True:
         return CriterionResult(
             criterion_id=criterion_id,
@@ -136,6 +143,9 @@ async def _judge_semantically(
             observation=_labelled(judgement.reasoning, observation),
             model_derived=True,
             step_id=step.step_id,
+            model_invocation_id=invocation_id,
+            model_name=model_name,
+            prompt_version=prompt_version,
         )
 
     if judgement.satisfied is None:
@@ -145,6 +155,9 @@ async def _judge_semantically(
             observation=_labelled(judgement.reasoning or "the model could not tell", observation),
             model_derived=True,
             step_id=step.step_id,
+            model_invocation_id=invocation_id,
+            model_name=model_name,
+            prompt_version=prompt_version,
         )
 
     # The model says no. Recorded as unmet, but the cause stays UNKNOWN: nothing
@@ -157,6 +170,9 @@ async def _judge_semantically(
         failure_kind=FailureKind.UNKNOWN,
         model_derived=True,
         step_id=step.step_id,
+        model_invocation_id=invocation_id,
+        model_name=model_name,
+        prompt_version=prompt_version,
     )
 
 

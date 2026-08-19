@@ -16,6 +16,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
 from agentic_qa.application.ports.models import ModelGateway
@@ -41,10 +42,12 @@ class LangGraphEpisodeRunner:
         model: ModelGateway,
         browser_factory: BrowserFactory,
         checkpointer_factory: CheckpointerFactory,
+        artifacts: ArtifactRepository | None = None,
     ) -> None:
         self._model = model
         self._browser_factory = browser_factory
         self._checkpointer_factory = checkpointer_factory
+        self._artifacts = artifacts
 
     async def run_episode(self, request: EpisodeRequest) -> EpisodeResult:
         async with self._checkpointer_factory() as checkpointer, self._browser_factory() as raw:
@@ -55,6 +58,11 @@ class LangGraphEpisodeRunner:
                 checkpointer=checkpointer,
                 assertions=request.assertions,
                 hints=request.verification_hints,
+                artifacts=self._artifacts,
+                run_id=request.run_id,
+                # One evidence set per episode: a bundle must never mix two, and
+                # deriving the id keeps that true without anyone remembering to.
+                evidence_set_id=f"{request.run_id}-e{request.episode_index}",
             )
             config: RunnableConfig = {"configurable": {"thread_id": thread_id_for(request.run_id)}}
 
@@ -85,6 +93,10 @@ class LangGraphEpisodeRunner:
                 safe_point=final.get("safe_point"),
                 failure_reason=agent.failure_reason,
                 criterion_results=final.get("criterion_results", ()),
+                evidence=final.get("evidence", ()),
+                # Read from the live browser, not from the agent's last observation:
+                # the recovery point has to name where the page actually ended up.
+                observed_url=await raw.current_url(),
             )
 
 

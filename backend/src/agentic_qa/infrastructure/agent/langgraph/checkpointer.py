@@ -37,6 +37,17 @@ from agentic_qa.domain.qa.verification import (
 
 logger = logging.getLogger(__name__)
 
+LIBRARY_OWNED_TABLES = frozenset(
+    {"checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations"}
+)
+"""Tables LangGraph creates and migrates itself through `saver.setup()`.
+
+They live in our database and are not ours. Declared here, next to the rest of the
+LangGraph relationship, so `alembic/env.py` and the migration guard share one list
+instead of drifting apart — a migration that drops one of these destroys the resume
+state of every run in flight.
+"""
+
 CHECKPOINTED_TYPES = (
     AgentState,
     EpisodeSummary,

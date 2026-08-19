@@ -21,6 +21,11 @@ docker compose --profile gates run --rm --quiet-pull backend-tests sh -c "
   mypy
   alembic upgrade head
   alembic check
+  # The suite has its own database, and it is migrated the same way. Relying on
+  # create_all leaves it on whatever schema existed when a table was first made:
+  # a new column never appears, and the failure surfaces as a missing column in a
+  # test rather than as the schema drift it is.
+  POSTGRES_DSN=\"\$POSTGRES_TEST_DSN\" alembic upgrade head
   pytest -q
 "
 

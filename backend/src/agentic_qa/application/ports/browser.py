@@ -25,6 +25,15 @@ class ActionOutcome:
 class BrowserGateway(Protocol):
     async def execute(self, action: BrowserAction) -> ActionOutcome: ...
 
+    async def capture_screenshot(self) -> bytes:
+        """Capture the page as it is now.
+
+        A capability rather than an action outcome: the bytes only exist while the
+        page does, and deciding whether to keep them belongs to the caller. It is
+        read-only, so no policy check gates it — a screenshot changes nothing.
+        """
+        ...
+
     async def current_url(self) -> str | None: ...
 
     async def aclose(self) -> None: ...

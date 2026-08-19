@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 import httpx
 from redis.asyncio import Redis
 
+from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.bootstrap.settings import Settings
@@ -53,7 +54,12 @@ def build_model_router(settings: Settings) -> ModelRouter | None:
 
 
 def build_episode_runner(
-    settings: Settings, *, router: ModelRouter, redis: Redis, http: httpx.AsyncClient
+    settings: Settings,
+    *,
+    router: ModelRouter,
+    redis: Redis,
+    http: httpx.AsyncClient,
+    artifacts: ArtifactRepository | None = None,
 ) -> EpisodeRunner:
     model = VLLMModelGateway(
         router=router,
@@ -75,4 +81,5 @@ def build_episode_runner(
         model=model,
         browser_factory=browser_factory,
         checkpointer_factory=lambda: open_checkpointer(settings.postgres_dsn),
+        artifacts=artifacts,
     )

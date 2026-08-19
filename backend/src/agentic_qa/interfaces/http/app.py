@@ -13,7 +13,14 @@ from agentic_qa.interfaces.http.request_context import (
     accept_inbound_request_id,
     set_request_id,
 )
-from agentic_qa.interfaces.http.routers import artifacts, plans, projects, realtime, runs
+from agentic_qa.interfaces.http.routers import (
+    artifacts,
+    meta,
+    plans,
+    projects,
+    realtime,
+    runs,
+)
 
 
 def create_app(container: Container | None = None) -> FastAPI:
@@ -53,6 +60,7 @@ def create_app(container: Container | None = None) -> FastAPI:
     register_error_handlers(app)
     app.include_router(projects.router)
     app.include_router(artifacts.router)
+    app.include_router(meta.router)
     app.include_router(plans.router)
     app.include_router(runs.router)
     app.include_router(realtime.router)

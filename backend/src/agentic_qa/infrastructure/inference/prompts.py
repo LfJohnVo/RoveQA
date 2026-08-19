@@ -21,6 +21,15 @@ run goes (docs/05).
 from agentic_qa.application.ports.models import PlanningRequest
 from agentic_qa.domain.browser.actions import BrowserActionType
 
+PLANNING_PROMPT_VERSION = "planner.v1"
+JUDGEMENT_PROMPT_VERSION = "judge.v1"
+"""Bumped whenever the wording changes.
+
+A conclusion is only comparable to another if both say which prompt produced them:
+without a version, an eval that improves a prompt cannot tell its own results apart
+from the previous wording's (docs/08).
+"""
+
 MAX_OBSERVATION_CHARS = 4000
 MAX_GOAL_CHARS = 1000
 MAX_DETAIL_CHARS = 200

@@ -22,6 +22,8 @@ export interface DoctorReport {
   api_url: string;
   api_reachable: boolean;
   api_status: string | null;
+  /** Contract versions the server reports, when it is new enough to report them. */
+  api_contracts: Record<string, string> | null;
   config_sources: Record<string, string>;
   problems: string[];
 }
@@ -38,6 +40,7 @@ export async function doctor(
     api_url: config.apiUrl,
     api_reachable: false,
     api_status: null,
+    api_contracts: null,
     config_sources: config.sources,
     problems: [],
   };
@@ -53,6 +56,9 @@ export async function doctor(
     report.problems.push(error instanceof CliError ? error.message : String(error));
   }
 
+  if (report.api_reachable) {
+    await checkContracts(client, report);
+  }
   if (config.projectId === null) {
     report.problems.push("no project id configured: pass --project or set ROVEQA_PROJECT_ID");
   }
@@ -73,6 +79,45 @@ export function problemError(report: DoctorReport): CliError | null {
     nextAction: report.problems[0],
     details: { report: { ...report } },
   });
+}
+
+/**
+ * Compare the contract versions this CLI knows against the ones the server serves.
+ *
+ * A mismatch is reported rather than worked around: a CLI that silently adapts to an
+ * older server produces output whose meaning depends on which server it hit. An older
+ * server that has no such endpoint is not a problem — it simply cannot be checked, and
+ * saying so beats inventing agreement.
+ */
+async function checkContracts(client: ApiClient, report: DoctorReport): Promise<void> {
+  let body: unknown;
+  try {
+    body = (await client.request({ method: "GET", path: "/api/v1/meta/contracts", attempts: 1 }))
+      .body;
+  } catch {
+    report.problems.push(
+      "the server does not report its contract versions; compatibility is unverified",
+    );
+    return;
+  }
+
+  const contracts = (body as { contracts?: unknown } | null)?.contracts;
+  if (contracts === null || typeof contracts !== "object") {
+    report.problems.push("the server returned no contract versions");
+    return;
+  }
+
+  const served = contracts as Record<string, unknown>;
+  report.api_contracts = Object.fromEntries(
+    Object.entries(served).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+
+  if (served.test_plan !== SUPPORTED_PLAN_SCHEMA) {
+    report.problems.push(
+      `plan contract mismatch: this CLI speaks ${SUPPORTED_PLAN_SCHEMA}, ` +
+        `the server speaks ${String(served.test_plan)}`,
+    );
+  }
 }
 
 function describeHealth(body: unknown): string {

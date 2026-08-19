@@ -50,6 +50,7 @@ class RecordingBrowserGateway:
     executed: list[str] = field(default_factory=list)
     fail_intents: set[str] = field(default_factory=set)
     url: str = "http://target.test/"
+    captures: int = 0
 
     async def execute(self, action: BrowserAction) -> ActionOutcome:
         self.executed.append(action.intent)
@@ -57,6 +58,10 @@ class RecordingBrowserGateway:
             self.fail_intents.discard(action.intent)  # fails once, then succeeds
             return ActionOutcome(succeeded=False, current_url=self.url, detail="element missing")
         return ActionOutcome(succeeded=True, current_url=self.url)
+
+    async def capture_screenshot(self) -> bytes:
+        self.captures += 1
+        return b"fake-png-bytes"
 
     async def current_url(self) -> str | None:
         return self.url

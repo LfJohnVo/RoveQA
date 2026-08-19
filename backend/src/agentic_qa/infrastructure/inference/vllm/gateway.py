@@ -17,12 +17,14 @@ would just mean asking it again from further back.
 """
 
 import logging
+from uuid import uuid4
 
 import httpx
 
 from agentic_qa.application.ports.models import (
     CriterionJudgement,
     JudgementRequest,
+    ModelInvocation,
     PlannedAction,
     PlanningRequest,
 )
@@ -36,6 +38,7 @@ from agentic_qa.infrastructure.inference.errors import (
 )
 from agentic_qa.infrastructure.inference.metrics import InferenceMetrics
 from agentic_qa.infrastructure.inference.prompts import (
+    JUDGEMENT_PROMPT_VERSION,
     JUDGEMENT_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_judgement_prompt,
@@ -131,7 +134,15 @@ class VLLMModelGateway:
             return CriterionJudgement(satisfied=None, failure=f"unusable model output: {error}")
 
         return CriterionJudgement(
-            satisfied=_SATISFACTION[judgement.verdict], reasoning=judgement.reasoning
+            satisfied=_SATISFACTION[judgement.verdict],
+            reasoning=judgement.reasoning,
+            # Recorded with the conclusion, not alongside it: a hypothesis separated
+            # from the model and prompt that produced it cannot be re-derived.
+            invocation=ModelInvocation(
+                invocation_id=str(uuid4()),
+                model=self._router.endpoint_for(JUDGEMENT_TASK).model,
+                prompt_version=JUDGEMENT_PROMPT_VERSION,
+            ),
         )
 
     def _client_for(self, task: TaskType) -> VLLMChatClient:

@@ -7,8 +7,14 @@ plumbing.
 
 from dataclasses import dataclass, field
 
+import pytest
+
 from agentic_qa.application.ports.browser import ActionOutcome
-from agentic_qa.application.ports.models import CriterionJudgement, JudgementRequest
+from agentic_qa.application.ports.models import (
+    CriterionJudgement,
+    JudgementRequest,
+    ModelInvocation,
+)
 from agentic_qa.application.services.criterion_verification import verify_criteria
 from agentic_qa.application.services.guarded_browser import (
     ActionDeniedError,
@@ -16,9 +22,14 @@ from agentic_qa.application.services.guarded_browser import (
 )
 from agentic_qa.domain.browser.actions import BrowserAction
 from agentic_qa.domain.browser.policy_guard import PolicyDecision, PolicyViolation
+from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep, PlanStepType
-from agentic_qa.domain.qa.verification import CriterionOutcome, FailureKind
+from agentic_qa.domain.qa.verification import (
+    CriterionOutcome,
+    CriterionResult,
+    FailureKind,
+)
 from tests.fakes.agent import ScriptedModelGateway
 
 
@@ -34,6 +45,9 @@ class PageDouble:
         expected = action.value or ""
         self.checked.append(expected)
         return ActionOutcome(succeeded=expected in self.text, current_url=self.url)
+
+    async def capture_screenshot(self) -> bytes:
+        return b"fake-png-bytes"
 
     async def current_url(self) -> str | None:
         return self.url
@@ -198,3 +212,56 @@ async def test_criteria_are_not_judged_when_the_run_never_reached_them() -> None
     assert "never found" in results[0].observation
     assert browser.checked == [], "the page was checked after the goal failed"
     assert model.judged == []
+
+
+async def test_a_model_judgement_records_which_model_and_prompt_produced_it() -> None:
+    """docs/08: a hypothesis that cannot name its source is not reproducible."""
+
+    @dataclass
+    class TracedModel(ScriptedModelGateway):
+        async def judge(self, request: JudgementRequest) -> CriterionJudgement:
+            return CriterionJudgement(
+                satisfied=False,
+                reasoning="the cart still shows items",
+                invocation=ModelInvocation(
+                    invocation_id="inv-1", model="test-model", prompt_version="judge.v1"
+                ),
+            )
+
+    results = await verify_criteria(
+        (assertion("ac-1", "the cart is empty"),),
+        browser=PageDouble(),
+        model=TracedModel(),
+        hints={},
+    )
+
+    result = results[0]
+    assert result.model_derived is True
+    assert result.model_invocation_id == "inv-1"
+    assert result.model_name == "test-model"
+    assert result.prompt_version == "judge.v1"
+
+
+async def test_a_deterministic_result_names_no_model() -> None:
+    """The absence is information: this result is one nobody needed a model for."""
+    results = await verify_criteria(
+        (assertion("ac-1", "the confirmation shows an order number"),),
+        browser=PageDouble(),
+        model=ScriptedModelGateway(),
+        hints={"ac-1": "Order #"},
+    )
+
+    assert results[0].model_invocation_id is None
+    assert results[0].prompt_version is None
+
+
+def test_a_deterministic_result_cannot_claim_a_model_invocation() -> None:
+    """Guarded in the domain: provenance and `model_derived` cannot disagree."""
+    with pytest.raises(InvalidEntityError, match="cannot name a model invocation"):
+        CriterionResult(
+            criterion_id="ac-1",
+            outcome=CriterionOutcome.MET,
+            observation="the page contains 'Order #'",
+            model_derived=False,
+            model_invocation_id="inv-1",
+        )

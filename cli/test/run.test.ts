@@ -258,7 +258,12 @@ describe("doctor", () => {
   });
 
   it("passes when everything is configured and reachable", async () => {
-    open = await stubServer(() => ({ status: 200, body: { status: "ok" } }));
+    // A healthy server answers both: reachability and which contracts it speaks.
+    open = await stubServer((request) =>
+      request.url === "/api/v1/meta/contracts"
+        ? { status: 200, body: { contracts: { test_plan: "roveqa.test-plan.v1" } } }
+        : { status: 200, body: { status: "ok" } },
+    );
     const config = {
       apiUrl: "http://127.0.0.1",
       projectId: "p-1",
@@ -271,5 +276,58 @@ describe("doctor", () => {
     const report = await doctor(open.client, config, "0.1.0");
 
     expect(problemError(report)).toBeNull();
+  });
+});
+
+describe("contract compatibility", () => {
+  function reachable(contracts: Record<string, string> | null): Handler {
+    return (request) => {
+      if (request.url === "/health") return { status: 200, body: { status: "ok" } };
+      if (request.url === "/api/v1/meta/contracts") {
+        return contracts === null
+          ? { status: 404, body: { detail: "not found" } }
+          : { status: 200, body: { api_version: "v1", contracts } };
+      }
+      return { status: 404, body: {} };
+    };
+  }
+
+  const config = {
+    apiUrl: "http://127.0.0.1",
+    projectId: "p-1",
+    environmentId: null,
+    token: null,
+    requestTimeoutMs: 500,
+    sources: {},
+  };
+
+  it("passes when the CLI and the server speak the same contracts", async () => {
+    open = await stubServer(reachable({ test_plan: "roveqa.test-plan.v1" }));
+
+    const report = await doctor(open.client, config, "0.1.0");
+
+    expect(report.api_contracts).toEqual({ test_plan: "roveqa.test-plan.v1" });
+    expect(problemError(report)).toBeNull();
+  });
+
+  it("reports a mismatch rather than adapting to it", async () => {
+    // A CLI that silently adapts produces output whose meaning depends on which
+    // server it happened to reach.
+    open = await stubServer(reachable({ test_plan: "roveqa.test-plan.v2" }));
+
+    const report = await doctor(open.client, config, "0.1.0");
+
+    expect(problemError(report)?.code).toBe("CONFIG_ERROR");
+    expect(report.problems.join(" ")).toContain("plan contract mismatch");
+  });
+
+  it("says compatibility is unverified against a server too old to report it", async () => {
+    // Not the same as agreement: an unanswerable question is reported as one.
+    open = await stubServer(reachable(null));
+
+    const report = await doctor(open.client, config, "0.1.0");
+
+    expect(report.api_contracts).toBeNull();
+    expect(report.problems.join(" ")).toContain("compatibility is unverified");
   });
 });

@@ -68,6 +68,9 @@ class RecordingGateway:
         self.executed.append(action)
         return ActionOutcome(succeeded=True)
 
+    async def capture_screenshot(self) -> bytes:
+        return b"fake-png-bytes"
+
     async def current_url(self) -> str | None:
         return None
 

@@ -14,13 +14,21 @@
 # Last Stable State
 
 - Git branch `main`.
-- `bash scripts/ci-local.sh` → **all green**: 372 tests backend (1 skip), 100 CLI, 1 frontend, migraciones sin drift, build frontend, compose config.
-- Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `00dfb54608c5`.
+- `bash scripts/ci-local.sh` → **all green**: 379 tests backend (1 skip), 103 CLI, 1 frontend, migraciones sin drift, build frontend, compose config.
+- Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `27a82f4f015d`.
 - La suite usa su propia base `agentic_qa_test`. Antes compartía la de la aplicación y la borraba en cada corrida; el síntoma ("mi proyecto desapareció") no se parecía en nada a la causa.
 - vLLM sirviendo `Qwen/Qwen3-4B-Instruct-2507` bajo el perfil `gpu` (RTX 5060 Ti 16GB, sm_120).
 - Todo gate corre en contenedores. En el host sólo hacen falta `docker compose` y `bash`.
 
 # Architecture Decisions Made
+
+Cierre de deuda antes de Phase 09:
+
+- **La evidencia se captura mientras la página existe.** El graph pide un screenshot antes de juzgar los criterios, lo guarda por el `ArtifactRepository` y devuelve refs; **la activity los indexa** en PostgreSQL. Misma regla que ADR 0009: los nodos deciden, la activity persiste. Un fallo de captura nunca tumba el run — la evidencia vale tenerla y no vale perder una ejecución por ella.
+- **Un evidence set por episodio** (`{run_id}-e{index}`), derivado y no elegido: un bundle no puede mezclar dos, y derivarlo lo garantiza sin que nadie tenga que acordarse.
+- **La acción `SCREENSHOT` capturaba nada y reportaba éxito.** Era una mentira dentro del action set cerrado sobre la que el agente podía actuar.
+- **`model_invocation_id`, modelo y `prompt_version` viajan con la conclusión** (docs/08). Una hipótesis que no puede nombrar su origen no es reproducible ni comparable, y una eval que cambia un prompt no podría distinguir sus resultados de los de la redacción anterior. El dominio prohíbe que un resultado determinista nombre una invocación de modelo.
+- **`GET /api/v1/meta/contracts`** expone las versiones que habla el servidor. `doctor` las compara y reporta un desajuste en vez de adaptarse: una CLI que se adapta en silencio produce salida cuyo significado depende de a qué servidor llegó. Un servidor demasiado antiguo para responder se reporta como *no verificable*, que no es lo mismo que compatible.
 
 Phase 08 (CLI):
 
@@ -96,7 +104,9 @@ Backend (Phase 07):
 
 # Database/Migrations State
 
-- Migraciones: … → `603bec952128` (`test_plans` + `runs.plan_id/plan_version`) → `0f1607fa06e7` (`criterion_results`) → **`00dfb54608c5`** (`artifacts`). `alembic check` limpio.
+- Migraciones: … → `603bec952128` → `0f1607fa06e7` → `00dfb54608c5` (`artifacts`) → **`27a82f4f015d`** (provenance de modelo en `criterion_results`). `alembic check` limpio.
+- **La migración de Phase 05 borraba las tablas de LangGraph.** Autogenerate las capturó antes de que `alembic/env.py` las excluyera. En una base vacía los drops fallan y la cadena entera no se puede aplicar: una instalación nueva era imposible, y sobre una existente el upgrade destruía el estado de resume de cualquier run en vuelo. Eliminados de esa migración (no estaba desplegada en ningún sitio) y añadido `tests/integration/test_migrations_from_empty.py`, que aplica la cadena completa a una base desechable en cada corrida y prohíbe que una migración nombre una tabla de la librería.
+- La suite migra su propia base con `POSTGRES_DSN=$POSTGRES_TEST_DSN alembic upgrade head`: fiarse de `create_all` la dejaba en el schema de cuando se creó una tabla, y una columna nueva nunca aparecía.
 - La tabla `artifacts` guarda **referencias** (identidad, provenance, hash, tamaño); los bytes siguen en el filesystem (docs/11).
 
 # Tests Executed
@@ -142,19 +152,13 @@ docker compose --profile gpu up -d vllm
 
 - `run diff` y `run flaky` no consultan un resumen semántico (el plan lo permite como paso posterior al delta determinista; v1 no tiene summarizer).
 - `run flaky` ejecuta las réplicas en serie. Es lo honesto —réplicas concurrentes interactúan por el estado de la app bajo prueba— pero significa que `--count 20` tarda 20 runs.
-- **Los bundles de runs reales no llevan artifacts**: el graph todavía no captura screenshots ni traces, así que el índice está vacío. Los caminos de integridad y atomicidad sí se ejercitan con artifacts reales en tests.
-- `plan lint` valida contra el schema local; no comprueba compatibilidad de versión contra una API remota (el plan lo pide en `doctor`, que hoy sólo compara los schemas que la CLI conoce).
 - `more_work` sigue siendo `False`: un episodio por plan. Un plan que necesite varios episodios llega cuando exista el motivo.
-- `evidence_refs` de `CriterionResult` existe y nadie lo llena todavía: los artifacts de Phase 04 no están enlazados a los resultados. Es lo que falta para que el gate de evidencia sea completo y no sólo trazable por `step_id`/`run_id`.
-- El `RecoveryPoint` sigue con `browser.url` vacío.
 - `POST /api/v1/plans` con plan inline, `GET /plans/{id}`, `PUT` con `If-Match` y `POST /plans/validate` están documentados y no implementados (docs/12 los marca).
 - Los tests de integración hacen skip si el servicio no responde.
 - La suite tarda ~60s; el e2e de story añade ~15s por su Chromium.
 
 # Technical Debt
 
-- Los prompts no tienen versión explícita; hace falta antes de las evals de docs/08.
-- `model_invocation_id` y prompt/model version no se persisten con las conclusiones del modelo (docs/08 "Evidence boundary").
 - `open_checkpointer` abre y cierra conexión por episodio.
 - El nodo "Retrieve Memory" de docs/06 no existe (Phase 09), a propósito.
 - Sin endpoints de `Environment` ni GET de policies.

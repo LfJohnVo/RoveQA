@@ -272,6 +272,9 @@ def criterion_result_to_domain(model: CriterionResultModel) -> CriterionResult:
         model_derived=model.model_derived,
         evidence_refs=tuple(model.evidence_refs),
         step_id=model.step_id,
+        model_invocation_id=model.model_invocation_id,
+        model_name=model.model_name,
+        prompt_version=model.prompt_version,
     )
 
 
@@ -285,6 +288,9 @@ def criterion_result_to_model(run_id: str, result: CriterionResult) -> Criterion
         observation=result.observation,
         model_derived=result.model_derived,
         evidence_refs=list(result.evidence_refs),
+        model_invocation_id=result.model_invocation_id,
+        model_name=result.model_name,
+        prompt_version=result.prompt_version,
     )
 
 

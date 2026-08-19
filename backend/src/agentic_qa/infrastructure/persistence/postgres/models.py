@@ -349,6 +349,11 @@ class CriterionResultModel(Base):
     observation: Mapped[str] = mapped_column(Text, nullable=False)
     model_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     evidence_refs: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    model_invocation_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH), nullable=True
+    )
+    model_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

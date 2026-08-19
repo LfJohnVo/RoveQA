@@ -57,6 +57,20 @@ class PlannedAction:
 
 
 @dataclass(frozen=True)
+class ModelInvocation:
+    """Provenance for a model-derived conclusion (docs/08 evidence boundary).
+
+    A hypothesis that cannot say which model and which prompt produced it is not
+    reproducible and not comparable: an eval that changes a prompt could not tell its
+    own results from the previous wording's.
+    """
+
+    invocation_id: str
+    model: str
+    prompt_version: str
+
+
+@dataclass(frozen=True)
 class JudgementRequest:
     """Ask a model whether an acceptance criterion looks satisfied.
 
@@ -80,6 +94,9 @@ class CriterionJudgement:
 
     failure: str | None = None
     """Set when no judgement could be obtained at all, as in `PlannedAction`."""
+
+    invocation: ModelInvocation | None = None
+    """Which model and prompt produced this. Absent only when nothing was produced."""
 
     def __post_init__(self) -> None:
         if self.failure is not None and self.satisfied is not None:

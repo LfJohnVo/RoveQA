@@ -122,6 +122,7 @@ class RunActivities:
         )
         activity.heartbeat(params.episode_index)
 
+        await self._index_evidence(params.run_id, result)
         if result.safe_point and result.graph_checkpoint_id:
             await self._record_recovery_point(params, result)
 
@@ -149,6 +150,21 @@ class RunActivities:
             expected=[step.criterion_id for step in plan.assertions if step.criterion_id],
         ).value
 
+    async def _index_evidence(self, run_id: str, result: EpisodeResult) -> None:
+        """Record the artifacts the episode captured.
+
+        The bytes were already written by the repository while the browser was open;
+        this is the durable index a failure bundle reads to answer "what does this run
+        have, and does it all belong to one evidence set" (docs/11).
+        """
+        if not result.evidence:
+            return
+        async with self._container.unit_of_work() as uow:
+            for ref in result.evidence:
+                await uow.artifacts.record(ref)
+            await uow.commit()
+        logger.info("indexed %d artifact(s) for run %s", len(result.evidence), run_id)
+
     async def _record_recovery_point(self, params: EpisodeParams, result: EpisodeResult) -> None:
         async with self._container.unit_of_work() as uow:
             await uow.recovery_points.add(
@@ -160,7 +176,12 @@ class RunActivities:
                         result.safe_point or "", RecoveryTrigger.NAVIGATION_STABLE
                     ),
                     graph_checkpoint_id=result.graph_checkpoint_id or "",
-                    browser=BrowserRecoveryData(url="", last_verified_action=None),
+                    browser=BrowserRecoveryData(
+                        # Where the page actually ended up. Recovery rebuilds a
+                        # browser and navigates here before verifying anything.
+                        url=result.observed_url or "",
+                        last_verified_action=None,
+                    ),
                     created_at=datetime.now(UTC),
                 )
             )

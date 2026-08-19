@@ -47,6 +47,11 @@ class GuardedBrowserGateway:
             raise ActionDeniedError(action, decision)
         return await self._inner.execute(action)
 
+    async def capture_screenshot(self) -> bytes:
+        # Forwarded without a check: capturing the page changes nothing about the
+        # system under test, and evidence of a denied action is worth having.
+        return await self._inner.capture_screenshot()
+
     async def current_url(self) -> str | None:
         return await self._inner.current_url()
 

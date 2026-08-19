@@ -97,6 +97,11 @@ def to_document(report: RunReport) -> dict[str, Any]:
                 "deterministic_observation": None if result.model_derived else result.observation,
                 "root_cause_hypothesis": result.observation if result.model_derived else None,
                 "model_derived": result.model_derived,
+                # Travels with the claim: a hypothesis whose model and prompt are
+                # unknown cannot be re-derived or compared against a later one.
+                "model_invocation_id": result.model_invocation_id,
+                "model_name": result.model_name,
+                "prompt_version": result.prompt_version,
                 "evidence_refs": list(result.evidence_refs),
             }
             for result in report.results

@@ -182,6 +182,11 @@ class PlaywrightBrowserGateway:
         except PlaywrightError:  # context died
             return None
 
+    async def capture_screenshot(self) -> bytes:
+        """The viewport as it is now. Never the full page: a tall page produces an
+        artifact nobody reads and a file nobody wants to store."""
+        return await self._page.screenshot()
+
     async def storage_state(self) -> StorageState:
         """Serializable auth state: what recovery restores instead of replaying a login."""
         return await self._context.storage_state()
@@ -249,7 +254,15 @@ class PlaywrightBrowserGateway:
                     detail="" if matches else f"url mismatch, expected {expected_url}",
                 )
             case BrowserActionType.SCREENSHOT:
-                return ActionOutcome(succeeded=True, current_url=self._page.url)
+                # Actually capture: an action in the closed set that reported
+                # success without doing anything was a lie the agent could act on.
+                # The caller keeps the bytes; here they only prove the page rendered.
+                captured = await self._page.screenshot()
+                return ActionOutcome(
+                    succeeded=True,
+                    current_url=self._page.url,
+                    detail=f"captured {len(captured)} bytes",
+                )
             case BrowserActionType.BACK:
                 await self._page.go_back(timeout=DEFAULT_ACTION_TIMEOUT_MS)
 

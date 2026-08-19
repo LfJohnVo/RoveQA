@@ -19,10 +19,12 @@ placeholder now would be a fake step that proves nothing.
 """
 
 import logging
+from dataclasses import replace
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.models import ModelGateway, PlanningRequest
 from agentic_qa.application.services.criterion_verification import (
@@ -36,6 +38,7 @@ from agentic_qa.domain.agent.state import (
     StepRecord,
 )
 from agentic_qa.domain.browser.actions import BrowserAction
+from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.qa.test_plan import PlanStep
 from agentic_qa.domain.qa.verification import CriterionResult
 
@@ -60,6 +63,9 @@ class GraphState(TypedDict, total=False):
     criterion_results: tuple[CriterionResult, ...]
     """One per plan assertion. The activity persists them and derives the verdict."""
 
+    evidence: tuple[EvidenceRef, ...]
+    """Artifacts captured this episode. The activity indexes them durably."""
+
 
 def build_agent_graph(
     *,
@@ -68,6 +74,9 @@ def build_agent_graph(
     checkpointer: Any = None,
     assertions: tuple[PlanStep, ...] = (),
     hints: dict[str, str] | None = None,
+    artifacts: ArtifactRepository | None = None,
+    run_id: str | None = None,
+    evidence_set_id: str | None = None,
 ) -> Any:
     """Compile the graph over the ports it needs. No adapter types appear here.
 
@@ -75,6 +84,10 @@ def build_agent_graph(
     of the episode, while the browser still holds the page the run finished on — closing
     the session first and judging from artifacts afterwards would mean judging a
     screenshot instead of the application.
+
+    Evidence is captured for the same reason and at the same moment: the bytes only
+    exist while the page does. Storing them is the repository's job and *recording*
+    them durably is the activity's, so the graph returns refs and writes no rows.
     """
 
     async def observe(state: GraphState) -> GraphState:
@@ -191,11 +204,40 @@ def build_agent_graph(
         logger.info("recovery attempt %s for run %s", attempts, agent.run_id)
         return {"agent": agent, "recovery_attempts": attempts, "safe_point": None}
 
+    async def capture(kind: str, step_id: str | None = None) -> EvidenceRef | None:
+        """Store one screenshot, or give up quietly.
+
+        Evidence is worth having and never worth failing a run for: a browser that
+        cannot produce a screenshot has usually already told us something worse
+        through the action outcome.
+        """
+        if artifacts is None or run_id is None or evidence_set_id is None:
+            return None
+        try:
+            image = await browser.capture_screenshot()
+        except Exception as error:  # noqa: BLE001 - any capture failure is non-fatal
+            logger.info("could not capture %s evidence: %s", kind, error)
+            return None
+        return await artifacts.store(
+            run_id=run_id,
+            evidence_set_id=evidence_set_id,
+            kind=kind,
+            filename=f"{kind}-{step_id or 'episode'}.png",
+            content=image,
+            step_id=step_id,
+        )
+
     async def verify_criteria(state: GraphState) -> GraphState:
         """Judge the plan's acceptance criteria against the page the run ended on."""
-        if not assertions:
-            return {"criterion_results": ()}
         agent = state["agent"]
+        # Captured before judging, so the image shows the page the criteria were
+        # judged against rather than whatever a check navigated to afterwards.
+        shot = await capture("screenshot")
+        evidence = (shot,) if shot is not None else ()
+
+        if not assertions:
+            return {"criterion_results": (), "evidence": evidence}
+
         results = await verify_plan_criteria(
             assertions,
             browser=browser,
@@ -203,7 +245,13 @@ def build_agent_graph(
             hints=hints,
             goal_failure=agent.failure_reason,
         )
-        return {"criterion_results": results}
+        if shot is not None:
+            # Every criterion was judged against this one page state, so this is
+            # honestly the evidence for all of them.
+            results = tuple(
+                replace(result, evidence_refs=(shot.artifact_id,)) for result in results
+            )
+        return {"criterion_results": results, "evidence": evidence}
 
     async def close_episode(state: GraphState) -> GraphState:
         agent = state["agent"]
