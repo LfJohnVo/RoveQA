@@ -1,20 +1,20 @@
 # Session Handoff
 
-Última sesión: 2026-08-19 (Opus 5). **Phases 02-07 completadas** y **Phase 08 con sus 7 gates PASS** (5 comandos opcionales pendientes), más la migración del pipeline a contenedores y la validación de vLLM sobre GPU real.
+Última sesión: 2026-08-19 (Opus 5). **Phases 02-08 completadas**, más la migración del pipeline a contenedores y la validación de vLLM sobre GPU real.
 
 # Current Phase
 
-08 — Agent-first CLI (`plans/phase-08-agent-first-cli.md`). **Los 7 acceptance gates están PASS**, pero la fase no está cerrada: faltan `run diff`, `run flaky` y `agent install claude` de la lista de comandos v1.
+09 — Knowledge/memory graph (`plans/phase-09-knowledge-memory.md`). Phase 08 está DONE: 7/7 gates PASS y los 14 comandos v1 implementados.
 
 # Phase Status
 
-- Phases 00, 01, 02, 03, 04, 05, 06, 07: **DONE**.
-- Phase 08: **IN_PROGRESS**. Implementados: `setup`, `doctor`, `project list|get`, `plan scaffold|lint`, `run create|get|wait|cancel|failure|artifact|rerun`. Pendientes: `run diff`, `run flaky`, `agent install claude`.
+- Phases 00 – 08: **DONE**.
+- Phase 09: **NOT_STARTED**. No existe adapter de Graphiti/FalkorDB ni knowledge candidates; `docs/26-adaptive-learning-graph.md` y `.claude/rules/knowledge.md` fijan las reglas antes de escribir código.
 
 # Last Stable State
 
 - Git branch `main`.
-- `bash scripts/ci-local.sh` → **all green**: 372 tests backend (1 skip), 59 CLI, 1 frontend, migraciones sin drift, build frontend, compose config.
+- `bash scripts/ci-local.sh` → **all green**: 372 tests backend (1 skip), 100 CLI, 1 frontend, migraciones sin drift, build frontend, compose config.
 - Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `00dfb54608c5`.
 - La suite usa su propia base `agentic_qa_test`. Antes compartía la de la aplicación y la borraba en cada corrida; el síntoma ("mi proyecto desapareció") no se parecía en nada a la causa.
 - vLLM sirviendo `Qwen/Qwen3-4B-Instruct-2507` bajo el perfil `gpu` (RTX 5060 Ti 16GB, sm_120).
@@ -140,7 +140,8 @@ docker compose --profile gpu up -d vllm
 
 # Known Issues
 
-- **Faltan 3 comandos de la lista v1**: `run diff`, `run flaky` y `agent install claude`. Los gates no dependen de ellos, pero la fase no está cerrada.
+- `run diff` y `run flaky` no consultan un resumen semántico (el plan lo permite como paso posterior al delta determinista; v1 no tiene summarizer).
+- `run flaky` ejecuta las réplicas en serie. Es lo honesto —réplicas concurrentes interactúan por el estado de la app bajo prueba— pero significa que `--count 20` tarda 20 runs.
 - **Los bundles de runs reales no llevan artifacts**: el graph todavía no captura screenshots ni traces, así que el índice está vacío. Los caminos de integridad y atomicidad sí se ejercitan con artifacts reales en tests.
 - `plan lint` valida contra el schema local; no comprueba compatibilidad de versión contra una API remota (el plan lo pide en `doctor`, que hoy sólo compara los schemas que la CLI conoce).
 - `more_work` sigue siendo `False`: un episodio por plan. Un plan que necesite varios episodios llega cuando exista el motivo.
@@ -187,14 +188,14 @@ docker compose --profile gpu up -d vllm
 
 # Exact Next Task
 
-Implement `roveqa run diff <run-a> <run-b>`: compare two runs by verdict and by `criterion_id`/`step_id`, emitting the deterministic delta before any semantic summary — the plan version each run executed is already recorded, so a diff across plan versions must say so rather than silently comparing different plans.
+Implement Phase 09 slice 1: persist durable `KnowledgeCandidate` rows in PostgreSQL from a finished run's verified outcomes, with provenance and reliability, **before** any Graphiti/FalkorDB adapter exists — the graph is a rebuildable projection (`.claude/rules/knowledge.md`), so the durable side has to come first or there is nothing to rebuild from.
 
 # Exact Next Command
 
-En Claude Code: `/implement-phase 08` (continuar; no reempezar)
+En Claude Code: `/implement-phase 09`
 
 # Recommended Skills For Next Session
 
 - `implement-phase` (proceso), `ponytail` (always-on).
-- `api-design-principles` (contrato CLI, exit codes, JSON purity) + `error-handling-patterns`.
+- `adaptive-memory-graph` + `postgresql` (Phase 09 los exige), y `prompt-engineering-patterns` si toca extraction/embeddings.
 - `test-and-verify` + `architecture-guard` al cierre.

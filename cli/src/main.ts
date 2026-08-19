@@ -31,6 +31,9 @@ import {
   waitForRun,
   type RunState,
 } from "./commands/run.js";
+import { diffRuns, loadRunSummary, renderDiff } from "./commands/diff.js";
+import { installClaudeSkill, requireSupportedAgent } from "./commands/agent.js";
+import { measureFlakiness, renderFlaky, validateCount } from "./commands/flaky.js";
 import { setup } from "./commands/setup.js";
 import { materialize, type BundleManifest } from "./bundle/materialize.js";
 import {
@@ -69,6 +72,8 @@ const OPTIONS = {
   timeout: { type: "string" as const },
   out: { type: "string" as const },
   limit: { type: "string" as const },
+  count: { type: "string" as const },
+  force: { type: "boolean" as const },
   name: { type: "string" as const },
   help: { type: "boolean" as const },
 };
@@ -134,18 +139,24 @@ async function dispatch(
       return await runRerun(rest, values, requestId);
     case "run artifact":
       return await runArtifact(rest, values, requestId, writer);
+    case "run diff":
+      return await runDiff(rest, values, requestId);
+    case "run flaky":
+      return await runFlaky(values, requestId, writer);
     case "project list":
       return await projectList(values, requestId);
     case "project get":
       return await projectGet(rest, values, requestId);
     case "setup":
       return await setupCommand(values);
+    case "agent install":
+      return await agentInstall(rest, values);
     default:
       throw usage(
         `unknown command: ${[group, action].filter(Boolean).join(" ")}`,
         "Known commands: setup, doctor, project list, project get, plan scaffold, " +
           "plan lint, run create, run get, run wait, run cancel, run failure, " +
-          "run artifact, run rerun",
+          "run artifact, run diff, run flaky, run rerun, agent install claude",
       );
   }
 }
@@ -395,6 +406,83 @@ async function runArtifact(
   };
 }
 
+async function runDiff(
+  rest: string[],
+  values: Values,
+  requestId: string,
+): Promise<CommandResult> {
+  const [runA, runB] = rest;
+  if (runA === undefined || runB === undefined) {
+    throw usage("two run ids are required", "Try: roveqa run diff <run-a> <run-b>");
+  }
+
+  const { client } = connect(values, requestId);
+  // Sequential rather than concurrent: two reports are cheap, and a failure on the
+  // second should not leave the first request racing an already-failed command.
+  const before = await loadRunSummary(client, runA);
+  const after = await loadRunSummary(client, runB);
+  const diff = diffRuns(before, after);
+
+  return { data: diff, text: renderDiff(diff) };
+}
+
+async function runFlaky(
+  values: Values,
+  requestId: string,
+  writer: Writer,
+): Promise<CommandResult> {
+  const { client, config } = connect(values, requestId);
+  const planPath = asString(values.plan);
+  if (planPath === undefined) {
+    throw usage("a plan file is required", "Try: roveqa run flaky --plan plan.json --count 5");
+  }
+
+  const plan = readPlanFile(planPath);
+  const findings = lintPlan(plan);
+  if (hasErrors(findings)) {
+    throw new CliError("VALIDATION_ERROR", `${planPath} is not a valid test plan`, {
+      nextAction: "Run roveqa plan lint on it and fix the errors.",
+      details: { findings },
+    });
+  }
+
+  const projectId = asString(values.project) ?? config.projectId ?? planProjectId(plan);
+  if (projectId === null) {
+    throw usage("a project id is required", "Pass --project <id> or set it in the plan.");
+  }
+
+  // Imported once, then replayed: every replay must execute the same plan version,
+  // or the measurement is of several plans rather than of one plan's stability.
+  // `--plan-id` keeps repeated measurements under one plan identity; without it each
+  // invocation mints a new one, which is right for a plan nobody has stored yet.
+  const imported = await client.request({
+    method: "POST",
+    path: "/api/v1/plans",
+    body: {
+      plan,
+      ...(asString(values["plan-id"]) ? { plan_id: asString(values["plan-id"]) } : {}),
+    },
+  });
+  const { planId, planVersion } = parsePlanIdentity(imported.body);
+
+  const timeout = asString(values.timeout);
+  const report = await measureFlakiness(
+    client,
+    {
+      projectId,
+      planId,
+      planVersion,
+      count: validateCount(asString(values.count)),
+      timeoutMsPerRun: timeout === undefined ? 300_000 : Number(timeout),
+      environmentId: config.environmentId ?? undefined,
+      memoryPolicy: planMemoryPolicy(plan),
+    },
+    (message) => diagnostic(writer, message),
+  );
+
+  return { data: report, text: renderFlaky(report) };
+}
+
 async function projectList(values: Values, requestId: string): Promise<CommandResult> {
   const { client } = connect(values, requestId);
   const limit = Number(asString(values.limit) ?? "50");
@@ -416,6 +504,23 @@ async function projectGet(
   const project = await getProject(client, projectId);
   return { data: project, text: `${project.project_id}  ${project.name}
 ` };
+}
+
+async function agentInstall(rest: string[], values: Values): Promise<CommandResult> {
+  requireSupportedAgent(rest[0]);
+  const config = loadConfig(configFlags(values));
+  const result = await installClaudeSkill({
+    cwd: process.cwd(),
+    projectId: asString(values.project) ?? config.projectId ?? undefined,
+    apiUrl: config.apiUrl,
+    force: values.force === true,
+  });
+  return {
+    data: result,
+    text:
+      `wrote ${result.skill_path}\n` +
+      `${result.instructions_updated ? "updated" : "left unchanged"} ${result.instructions_path}\n`,
+  };
 }
 
 async function setupCommand(values: Values): Promise<CommandResult> {
@@ -462,8 +567,17 @@ function renderRun(state: RunState): string {
 }
 
 function planProjectId(plan: unknown): string | null {
+  return planField(plan, "project_id");
+}
+
+/** Reported by `run flaky`, because memory moving between replays changes the result. */
+function planMemoryPolicy(plan: unknown): string | undefined {
+  return planField(plan, "memory_policy") ?? undefined;
+}
+
+function planField(plan: unknown, field: string): string | null {
   if (plan === null || typeof plan !== "object") return null;
-  const value = (plan as Record<string, unknown>).project_id;
+  const value = (plan as Record<string, unknown>)[field];
   return typeof value === "string" ? value : null;
 }
 
