@@ -421,6 +421,10 @@ class PostgresArtifactIndex:
                 return
             raise
 
+    async def get(self, artifact_id: str) -> EvidenceRef | None:
+        model = await self._session.get(ArtifactModel, artifact_id)
+        return artifact_to_domain(model) if model is not None else None
+
     async def list_for_run(self, run_id: str) -> list[EvidenceRef]:
         result = await self._session.execute(
             select(ArtifactModel)

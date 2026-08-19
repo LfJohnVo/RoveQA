@@ -271,5 +271,8 @@ class InMemoryArtifactIndex:
     async def record(self, ref: EvidenceRef) -> None:
         self._store.artifacts.setdefault(ref.artifact_id, ref)
 
+    async def get(self, artifact_id: str) -> EvidenceRef | None:
+        return self._store.artifacts.get(artifact_id)
+
     async def list_for_run(self, run_id: str) -> list[EvidenceRef]:
         return [ref for ref in self._store.artifacts.values() if ref.run_id == run_id]

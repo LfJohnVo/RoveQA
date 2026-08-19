@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, WebSocket, status
 
+from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
@@ -73,3 +74,18 @@ def get_event_publisher(
 
 
 EventPublisherDep = Annotated[RunEventPublisher | None, Depends(get_event_publisher)]
+
+
+def get_artifacts(
+    container: Annotated[Container, Depends(get_container)],
+) -> ArtifactRepository:
+    if container.artifacts is None:
+        # Fail loudly rather than reporting a stored artifact as missing.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="artifact storage is not configured",
+        )
+    return container.artifacts
+
+
+ArtifactRepositoryDep = Annotated[ArtifactRepository, Depends(get_artifacts)]

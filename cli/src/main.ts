@@ -20,7 +20,16 @@ import { loadConfig, type Config, type ConfigFlags } from "./config.js";
 import { CliError, unclassified, usage } from "./errors.js";
 import { doctor, problemError } from "./commands/doctor.js";
 import { hasErrors, lintPlan, readPlanFile, scaffoldPlan } from "./commands/plan.js";
-import { cancelRun, createRun, getRun, waitForRun, type RunState } from "./commands/run.js";
+import {
+  cancelRun,
+  createRun,
+  failureContext,
+  getRun,
+  rerun,
+  waitForRun,
+  type RunState,
+} from "./commands/run.js";
+import { materialize, type BundleManifest } from "./bundle/materialize.js";
 import {
   diagnostic,
   emit,
@@ -55,6 +64,7 @@ const OPTIONS = {
   plan: { type: "string" as const },
   "idempotency-key": { type: "string" as const },
   timeout: { type: "string" as const },
+  out: { type: "string" as const },
   name: { type: "string" as const },
   help: { type: "boolean" as const },
 };
@@ -114,10 +124,15 @@ async function dispatch(
       return await runWait(rest, values, requestId, writer);
     case "run cancel":
       return await runCancel(rest, values, requestId);
+    case "run failure":
+      return await runFailure(rest, values, requestId, writer);
+    case "run rerun":
+      return await runRerun(rest, values, requestId);
     default:
       throw usage(
         `unknown command: ${[group, action].filter(Boolean).join(" ")}`,
-        "Known commands: doctor, plan scaffold, plan lint, run create, run get, run wait, run cancel",
+        "Known commands: doctor, plan scaffold, plan lint, run create, run get, " +
+          "run wait, run cancel, run failure, run rerun",
       );
   }
 }
@@ -290,6 +305,49 @@ async function runCancel(rest: string[], values: Values, requestId: string): Pro
     // point, so reporting "cancelled" here would be a lie for a second or two.
     data: { run_id: runId, cancel_requested: true },
     text: `cancellation requested for ${runId}\n`,
+  };
+}
+
+async function runFailure(
+  rest: string[],
+  values: Values,
+  requestId: string,
+  writer: Writer,
+): Promise<CommandResult> {
+  const runId = requireRunId(rest);
+  const outDir = asString(values.out);
+  if (outDir === undefined) {
+    throw usage(
+      "an output directory is required",
+      `Try: roveqa run failure ${runId} --out ./bundle`,
+    );
+  }
+
+  const { client } = connect(values, requestId);
+  const manifest = await failureContext(client, runId);
+  diagnostic(writer, `materializing the failure bundle for ${runId}`);
+
+  const result = await materialize(manifest as BundleManifest, outDir, (artifact) =>
+    // Raw bytes: an artifact is a screenshot or a trace, and JSON-decoding one would
+    // corrupt exactly the evidence the bundle exists to preserve.
+    client.requestBytes(`/api/v1/artifacts/${encodeURIComponent(artifact.artifact_id)}`),
+  );
+
+  return {
+    data: { run_id: runId, ...result },
+    text: `bundle written to ${result.directory} (${result.artifactCount} artifact(s))
+`,
+  };
+}
+
+async function runRerun(rest: string[], values: Values, requestId: string): Promise<CommandResult> {
+  const runId = requireRunId(rest);
+  const { client } = connect(values, requestId);
+  const created = await rerun(client, runId, asString(values["idempotency-key"]));
+  return {
+    data: { ...created, source_run_id: runId },
+    text: `run ${created.run_id} reruns ${runId}
+`,
   };
 }
 

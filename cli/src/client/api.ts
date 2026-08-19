@@ -95,6 +95,37 @@ export class ApiClient {
     throw lastError ?? new CliError("INTERNAL_ERROR", "request loop ended without a result");
   }
 
+  /**
+   * Fetch raw bytes, for artifacts.
+   *
+   * Separate from `request` because an artifact is a screenshot or a trace, and
+   * running it through JSON parsing would corrupt it. No retries: a partial download
+   * is discarded by the caller, which re-materializes the whole bundle.
+   */
+  async requestBytes(path: string): Promise<Buffer> {
+    const url = `${this.options.baseUrl.replace(/\/+$/, "")}${path}`;
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        headers: { "X-Request-Id": this.options.requestId, ...this.authHeader() },
+        signal: AbortSignal.timeout(this.options.timeoutMs),
+      });
+    } catch (error) {
+      throw transportError(url, error);
+    }
+    if (!response.ok) throw await toCliError(response, url);
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_RESPONSE_BYTES) {
+      throw new CliError("RESOURCE_UNAVAILABLE", `artifact exceeds ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    return bytes;
+  }
+
+  private authHeader(): Record<string, string> {
+    return this.options.token === null ? {} : { Authorization: `Bearer ${this.options.token}` };
+  }
+
   private headers(request: RequestOptions): Record<string, string> {
     const headers: Record<string, string> = {
       Accept: "application/json",
@@ -105,10 +136,7 @@ export class ApiClient {
     if (request.idempotencyKey !== undefined) {
       headers["Idempotency-Key"] = request.idempotencyKey;
     }
-    if (this.options.token !== null) {
-      headers.Authorization = `Bearer ${this.options.token}`;
-    }
-    return headers;
+    return { ...headers, ...this.authHeader() };
   }
 }
 

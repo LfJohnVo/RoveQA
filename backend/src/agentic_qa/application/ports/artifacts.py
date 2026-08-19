@@ -51,4 +51,9 @@ class ArtifactIndex(Protocol):
         """Index one artifact. Idempotent by artifact id."""
         ...
 
+    async def get(self, artifact_id: str) -> EvidenceRef | None:
+        """Resolve an id to its reference. Downloads go through this, so an id is
+        never treated as a path."""
+        ...
+
     async def list_for_run(self, run_id: str) -> list[EvidenceRef]: ...

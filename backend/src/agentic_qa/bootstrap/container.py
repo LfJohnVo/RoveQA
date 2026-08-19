@@ -6,17 +6,22 @@ Interfaces can stay a protocol translator and never import a concrete adapter.
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import httpx
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 from temporalio.client import Client
 
+from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
 from agentic_qa.bootstrap.settings import Settings
+from agentic_qa.infrastructure.artifacts.filesystem.repository import (
+    FilesystemArtifactRepository,
+)
 from agentic_qa.infrastructure.cache.redis.streams import RedisRunEventPublisher
 from agentic_qa.infrastructure.persistence.postgres.engine import (
     create_engine,
@@ -41,6 +46,10 @@ class Container:
 
     redis: Redis | None = None
     """Owned connection to Redis, closed with the container."""
+
+    artifacts: ArtifactRepository | None = None
+    """Artifact bytes. Absent means downloads are unavailable, which the endpoint
+    reports rather than pretending an artifact is missing."""
 
     model_http: httpx.AsyncClient | None = None
     """Connection pool for model endpoints, closed with the container."""
@@ -69,6 +78,7 @@ def build_container(settings: Settings) -> Container:
     return Container(
         unit_of_work=lambda: PostgresUnitOfWork(session_factory),
         events=RedisRunEventPublisher(redis),
+        artifacts=FilesystemArtifactRepository(Path(settings.artifact_root)),
         redis=redis,
         engine=engine,
     )

@@ -36,6 +36,8 @@ class Settings:
 
     model_timeout_seconds: float = DEFAULT_MODEL_TIMEOUT_SECONDS
     browser_headless: bool = True
+    artifact_root: str = "/data/runs"
+    """Where artifact bytes live. References are in PostgreSQL; blobs are not."""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -53,6 +55,7 @@ class Settings:
                 "MODEL_TIMEOUT_SECONDS", DEFAULT_MODEL_TIMEOUT_SECONDS
             ),
             browser_headless=not _flag("BROWSER_HEADED"),
+            artifact_root=os.environ.get("ARTIFACT_ROOT", "/data/runs"),
         )
 
 

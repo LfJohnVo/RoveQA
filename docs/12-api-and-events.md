@@ -20,7 +20,8 @@
 ### Test plans
 - `POST /api/v1/stories/{story_id}/plans` — **implementado (Phase 07)**: compila la historia en una nueva versión inmutable del plan y devuelve el documento portable. La compilación es determinista (sin modelo), así que es rápida y no hay nada que poll-ear. Enviar `plan_id` publica una versión nueva de un plan existente; el servidor asigna `plan_version` incremental.
 - `GET /api/v1/plans/{plan_id}/versions/{version}` — **implementado (Phase 07)**: devuelve el documento portable, no una forma propia de la API. Los mismos bytes se pueden guardar a fichero y volver a importar.
-- `POST /api/v1/plans` (plan inline/importado), `PUT /api/v1/plans/{plan_id}` con `If-Match`, `GET /api/v1/plans/{plan_id}` y `POST /api/v1/plans/validate`: pendientes.
+- `POST /api/v1/plans` — **implementado (Phase 08)**: importa un documento portable como versión inmutable. Naturalmente idempotente: la versión es el content hash del documento normalizado, así que reenviar los mismos bytes devuelve `200` con la versión existente en vez de `201` con una segunda. Un cliente que perdió la respuesta puede reintentar sin key.
+- `PUT /api/v1/plans/{plan_id}` con `If-Match`, `GET /api/v1/plans/{plan_id}` y `POST /api/v1/plans/validate`: pendientes. `plan lint` de la CLI cubre la validación offline.
 
 `contracts/test-plan.schema.json` es el contrato portable. Persistir un plan no puede hacerlo imposible de exportar losslessly.
 
@@ -36,12 +37,13 @@ Los planes son inmutables por versión: no existe update. Un run registra `plan_
 - `POST /api/v1/runs/{run_id}/cancel` — explícito y naturalmente idempotente cuando ya está cancelled; nunca inferido desde un disconnect.
 
 **Semántica de los comandos de lifecycle (implementado en Phase 02)**: los tres devuelven `202 Accepted` con `{run_id, accepted}`. Señalan al workflow; **no escriben status**. El status durable cambia cuando el workflow aplica el comando en su siguiente punto seguro, así que un `GET` inmediatamente posterior puede seguir mostrando el estado anterior — eso es correcto, no un bug. Señalar un run ya terminal es un no-op (idempotencia natural).
-- `POST /api/v1/runs/{run_id}/rerun` — nueva ejecución con provenance a run/plan fuente; idempotency key.
+- `POST /api/v1/runs/{run_id}/rerun` — **implementado (Phase 08)**: nueva ejecución que copia la *versión* de plan del run fuente en vez de re-resolverla. Reejecutar un fallo tiene que ejecutar el mismo plan, o el segundo resultado responde a otra pregunta. Requiere `Idempotency-Key`.
 - `GET /api/v1/runs/{run_id}/report` — **implementado (Phase 07)**: reporte construido desde filas durables (run + plan version + criterion results), nunca desde un transcript de modelo. Cada criterio separa `deterministic_observation` de `root_cause_hypothesis`: son claves distintas para que un consumidor pueda filtrar por clave y no por convención.
 - `GET /api/v1/runs/{run_id}/findings`
+- `GET /api/v1/artifacts/{artifact_id}` — **implementado (Phase 08)**: descarga los bytes. El id es un identificador, nunca un path; la referencia durable lo resuelve y el repositorio verifica el hash al leer, así que un artifact corrupto o sustituido se rechaza en vez de servirse como evidencia.
 - `GET /api/v1/runs/{run_id}/artifacts`
 - `GET /api/v1/runs/{run_id}/events?after=&limit=`
-- `GET /api/v1/runs/{run_id}/failure-context` — snapshot/proyección coherente para FailureBundle.
+- `GET /api/v1/runs/{run_id}/failure-context` — **implementado (Phase 08)**: snapshot coherente para FailureBundle, resuelto en una sola consulta desde un run. Cada artifact se comprueba contra el `run_id` y un único `evidence_set_id` antes de salir; mezclar "el último screenshot" con el trace de otro run produce un bundle que se lee como coherente y no lo es.
 
 ### Artifacts
 - `GET /api/v1/artifacts/{artifact_id}` — metadata o streaming/download autorizado según content negotiation/endpoints separados.
