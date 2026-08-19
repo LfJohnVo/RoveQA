@@ -4,9 +4,10 @@ Each adapter owns a session but never commits: the caller controls the transacti
 boundary, so a use case can group writes and keep transactions short.
 """
 
+from collections.abc import Sequence
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,9 @@ from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
+from agentic_qa.domain.qa.verification import CriterionResult
 from agentic_qa.domain.runs.recovery import (
     BrowserRecoveryData,
     RecoveryPoint,
@@ -24,8 +27,12 @@ from agentic_qa.domain.runs.recovery import (
 )
 from agentic_qa.domain.runs.run import Run
 from agentic_qa.infrastructure.persistence.postgres.mappers import (
+    criterion_result_to_domain,
+    criterion_result_to_model,
     environment_to_domain,
     environment_to_model,
+    plan_to_domain,
+    plan_to_model,
     policy_to_domain,
     policy_to_model,
     project_to_domain,
@@ -36,6 +43,7 @@ from agentic_qa.infrastructure.persistence.postgres.mappers import (
     story_to_model,
 )
 from agentic_qa.infrastructure.persistence.postgres.models import (
+    CriterionResultModel,
     EnvironmentModel,
     IdempotencyRecordModel,
     ProjectModel,
@@ -43,6 +51,7 @@ from agentic_qa.infrastructure.persistence.postgres.models import (
     RunEventModel,
     RunModel,
     RunPolicyModel,
+    TestPlanModel,
     UserStoryModel,
 )
 
@@ -317,3 +326,73 @@ def _recovery_to_domain(model: RecoveryPointModel) -> RecoveryPoint:
         ),
         created_at=model.created_at,
     )
+
+
+class PostgresTestPlanRepository:
+    """Plan versions are append-only: no `save`, because a plan changes by versioning."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, plan: TestPlan) -> None:
+        identity = f"{plan.plan_id}@{plan.plan_version}"
+        if await self.get(plan.plan_id, plan.plan_version) is not None:
+            raise AlreadyExistsError("test_plan", identity)
+        try:
+            async with self._session.begin_nested():
+                self._session.add(plan_to_model(plan))
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                raise AlreadyExistsError("test_plan", identity) from error
+            raise
+
+    async def get(self, plan_id: str, plan_version: str) -> TestPlan | None:
+        model = await self._session.get(TestPlanModel, (plan_id, plan_version))
+        return plan_to_domain(model) if model is not None else None
+
+    async def latest(self, plan_id: str) -> TestPlan | None:
+        result = await self._session.execute(
+            select(TestPlanModel)
+            .where(TestPlanModel.plan_id == plan_id)
+            .order_by(TestPlanModel.created_at.desc(), TestPlanModel.plan_version.desc())
+            .limit(1)
+        )
+        model = result.scalar_one_or_none()
+        return plan_to_domain(model) if model is not None else None
+
+    async def list_for_story(self, story_id: str, *, limit: int) -> list[TestPlan]:
+        result = await self._session.execute(
+            select(TestPlanModel)
+            .where(TestPlanModel.source_story_id == story_id)
+            .order_by(TestPlanModel.created_at.desc())
+            .limit(limit)
+        )
+        return [plan_to_domain(model) for model in result.scalars()]
+
+
+class PostgresCriterionResultRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, run_id: str, results: Sequence[CriterionResult]) -> None:
+        """Replace, not append. A retried activity must not leave two answers for one
+        criterion, and the second answer is the one that completed."""
+        if not results:
+            return
+        await self._session.execute(
+            delete(CriterionResultModel)
+            .where(CriterionResultModel.run_id == run_id)
+            .where(
+                CriterionResultModel.criterion_id.in_([result.criterion_id for result in results])
+            )
+        )
+        await self._session.flush()
+        self._session.add_all(criterion_result_to_model(run_id, result) for result in results)
+
+    async def list_for_run(self, run_id: str) -> list[CriterionResult]:
+        result = await self._session.execute(
+            select(CriterionResultModel)
+            .where(CriterionResultModel.run_id == run_id)
+            .order_by(CriterionResultModel.id)
+        )
+        return [criterion_result_to_domain(model) for model in result.scalars()]

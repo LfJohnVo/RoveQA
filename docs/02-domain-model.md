@@ -54,6 +54,20 @@ Cada `AgentAction` con side effect debe registrar:
 - actual outcome
 - artifact refs
 
+## Verificación de criterios (Phase 07)
+`CriterionResult` responde por cada acceptance criterion: `outcome` (`met`/`not_met`/`unverified`),
+`observation`, `failure_kind` y `model_derived`.
+
+- El **tipo de fallo** decide qué puede concluir el run. Sólo `product` justifica verdict `failed`;
+  `environment`/`policy`/`agent_budget`/`model` dan `blocked`; `plan`/`unknown` dan `inconclusive`.
+- **Sólo un check determinista puede acusar al producto.** Un modelo que dice "no se cumple" deja el
+  criterio como `not_met` con `failure_kind=unknown` y `model_derived=true`, lo que termina en
+  inconclusive. La primera vez que este sistema culpe a un producto por algo que sólo creyó un
+  modelo, todos los reportes posteriores se leen con sospecha.
+- Un criterio sin resultado **nunca** se cuenta como cumplido: falta un resultado ⇒ inconclusive.
+- El `verification_hint` de un criterio es el literal que la página debe contener. Su presencia es lo
+  que hace verificable un criterio sin modelo; su ausencia es un problema de plan, no del producto.
+
 ## Important invariants
 - Un `Run` sólo se considera avanzado hasta un recovery point durable confirmado.
 - Un `Finding` debe apuntar a evidencia suficiente para reproducir/inspeccionar.

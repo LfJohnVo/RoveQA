@@ -12,12 +12,14 @@ from typing import Protocol, Self
 from agentic_qa.application.ports.checkpoints import RecoveryPointRepository
 from agentic_qa.application.ports.events import RunEventLog
 from agentic_qa.application.ports.idempotency import IdempotencyRepository
+from agentic_qa.application.ports.plans import TestPlanRepository
 from agentic_qa.application.ports.policies import EnvironmentRepository, RunPolicyRepository
 from agentic_qa.application.ports.repositories import (
     ProjectRepository,
     RunRepository,
     StoryRepository,
 )
+from agentic_qa.application.ports.results import CriterionResultRepository
 
 
 class UnitOfWork(Protocol):
@@ -44,6 +46,12 @@ class UnitOfWork(Protocol):
 
     @property
     def recovery_points(self) -> RecoveryPointRepository: ...
+
+    @property
+    def plans(self) -> TestPlanRepository: ...
+
+    @property
+    def criterion_results(self) -> CriterionResultRepository: ...
 
     async def __aenter__(self) -> Self: ...
 

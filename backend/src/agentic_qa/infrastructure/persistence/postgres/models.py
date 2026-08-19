@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     Text,
@@ -228,6 +229,100 @@ class RecoveryPointModel(Base):
     )
 
 
+class TestPlanModel(Base):
+    """A compiled, immutable plan version (docs/02, `contracts/test-plan.schema.json`).
+
+    Identity is `(plan_id, plan_version)`: a plan evolves by gaining versions, never by
+    being edited, so a finished run can always be read against the rules it ran under.
+
+    The steps live in JSONB rather than a side table on purpose — they are read as a
+    whole document, always for one plan version, and no query filters or joins on an
+    individual step. `criterion_id` inside them stays queryable through JSONB when a
+    report needs it.
+    """
+
+    __tablename__ = "test_plans"
+
+    plan_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    plan_version: Mapped[str] = mapped_column(String(100), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_story_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("user_stories.story_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    """Provenance. `SET NULL` rather than cascade: deleting the story must not erase the
+    plan a finished run was judged by."""
+
+    environment_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("environments.environment_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    run_policy_id: Mapped[str | None] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("run_policies.policy_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    name: Mapped[str] = mapped_column(String(NAME_LENGTH), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    priority: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    memory_policy: Mapped[str] = mapped_column(String(20), nullable=False, default="normal")
+    budget: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    plan_steps: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    plan_metadata: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    """The contract calls this `metadata`; `Base.metadata` is taken by SQLAlchemy, so the
+    column is renamed here and translated back by the mapper."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CriterionResultModel(Base):
+    """One acceptance criterion's outcome for one run (docs/02).
+
+    `model_derived` is a column, not a note in the observation text: a report has to be
+    able to show, per row, whether a claim came from a deterministic check or from a
+    model's opinion — and a query has to be able to exclude the latter.
+    """
+
+    __tablename__ = "criterion_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "criterion_id", name="uq_criterion_results_run_criterion"),
+        CheckConstraint(
+            "outcome IN ('met', 'not_met', 'unverified')", name="ck_criterion_results_outcome"
+        ),
+        CheckConstraint(
+            "(outcome = 'not_met') = (failure_kind IS NOT NULL)",
+            name="ck_criterion_results_failure_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    criterion_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), nullable=False)
+    step_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    observation: Mapped[str] = mapped_column(Text, nullable=False)
+    model_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    evidence_refs: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class IdempotencyRecordModel(Base):
     """Durable dedup for repeatable mutations (docs/12). Never Redis-only.
 
@@ -257,6 +352,17 @@ class RunModel(Base):
             "verdict IS NULL OR status IN ('completed', 'failed', 'cancelled')",
             name="ck_runs_verdict_only_when_terminal",
         ),
+        # Composite: a run points at one plan *version*, not at a plan.
+        ForeignKeyConstraint(
+            ["plan_id", "plan_version"],
+            ["test_plans.plan_id", "test_plans.plan_version"],
+            name="fk_runs_test_plan_version",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(plan_id IS NULL) = (plan_version IS NULL)",
+            name="ck_runs_plan_identity_complete",
+        ),
     )
 
     run_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
@@ -278,6 +384,11 @@ class RunModel(Base):
         ForeignKey("environments.environment_id", ondelete="RESTRICT"),
         nullable=True,
     )
+    plan_id: Mapped[str | None] = mapped_column(String(IDENTIFIER_LENGTH), nullable=True)
+    plan_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    """Which plan version this run was judged by. Recorded, never re-read from "latest":
+    a run finished under version 3 does not become a different result when 4 appears."""
+
     status: Mapped[RunStatus] = mapped_column(_string_enum(RunStatus, "run_status"), nullable=False)
     verdict: Mapped[Verdict | None] = mapped_column(
         _string_enum(Verdict, "run_verdict"), nullable=True

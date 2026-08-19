@@ -59,6 +59,7 @@ class AgentRunWorkflow:
             await self._transition(params.run_id, "running")
 
         episode = params.start_episode
+        verdict: str | None = None
         while True:
             if self._cancel_requested:
                 return await self._finish_cancelled(params.run_id)
@@ -81,6 +82,8 @@ class AgentRunWorkflow:
                 heartbeat_timeout=timedelta(minutes=2),
             )
             episode += 1
+            # Last episode wins: a later episode saw more of the run than an earlier one.
+            verdict = outcome.verdict or verdict
 
             if not outcome.more_work:
                 break
@@ -94,10 +97,12 @@ class AgentRunWorkflow:
                     )
                 )
 
-        # No plan was executed and nothing was verified, so the honest verdict is
-        # inconclusive rather than a pass. Phase 07 derives it from real results.
-        await self._transition(params.run_id, "completed", verdict="inconclusive")
-        return "inconclusive"
+        # A run with no plan verified nothing, so the honest verdict is inconclusive —
+        # never a pass. With a plan, the verdict comes from the criterion results the
+        # activity persisted and derived.
+        final = verdict or "inconclusive"
+        await self._transition(params.run_id, "completed", verdict=final)
+        return final
 
     async def _finish_cancelled(self, run_id: str) -> str:
         await self._transition(run_id, "cancelling")

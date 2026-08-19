@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.test_plan import PlanStep
+from agentic_qa.domain.qa.verification import CriterionResult
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,13 @@ class EpisodeRequest:
     goal: str
     episode_index: int
     policy: RunPolicy
+    assertions: tuple[PlanStep, ...] = ()
+    """The plan's acceptance criteria, evaluated while the browser still holds the
+    page the run finished on."""
+
+    verification_hints: dict[str, str] | None = None
+    """criterion_id -> literal the page must contain. Present hints are what make a
+    result deterministic instead of a model's opinion."""
 
 
 @dataclass(frozen=True)
@@ -32,6 +41,9 @@ class EpisodeResult:
 
     failure_reason: str | None = None
     """Set when the episode ended unresolved. Absence is not proof of success."""
+
+    criterion_results: tuple[CriterionResult, ...] = ()
+    """One per plan assertion. Empty for a run with no plan."""
 
 
 class EpisodeRunner(Protocol):

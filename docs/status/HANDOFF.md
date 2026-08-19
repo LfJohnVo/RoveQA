@@ -1,147 +1,154 @@
 # Session Handoff
 
-Última sesión: 2026-08-18 (Opus 5). **Phases 02, 03, 04, 05 y 06 completadas** en esta sesión, más la migración del pipeline a contenedores.
+Última sesión: 2026-08-19 (Opus 5). **Phases 02, 03, 04, 05, 06 y 07 completadas** en esta sesión, más la migración del pipeline a contenedores y la validación de vLLM sobre GPU real.
 
 # Current Phase
 
-07 — Story workflow (`plans/phase-07-*.md`). Phase 06 está DONE con sus 3 gates PASS.
+08 — Agent-first CLI (`plans/phase-08-agent-first-cli.md`). Phase 07 está DONE con sus 5 gates PASS.
 
 # Phase Status
 
-- Phases 00, 01, 02, 03, 04, 05, 06: **DONE**.
-- Phase 07: **NOT_STARTED**. Hoy un run ejecuta un episodio con un goal por defecto; no hay derivación desde `UserStory` ni verdict real.
+- Phases 00, 01, 02, 03, 04, 05, 06, 07: **DONE**.
+- Phase 08: **NOT_STARTED**. No existe la CLI `roveqa`; los contratos que consume (`TestPlan`, endpoints de run y report) ya están publicados.
 
 # Last Stable State
 
-- Git branch `main`, working tree limpio salvo esta actualización de docs.
-- `bash scripts/ci-local.sh` → **all green**: 324 tests backend (1 skip), 1 frontend, migraciones sin drift, build frontend, compose config.
-- Stack corriendo: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `f9911e78285a` (Phase 06 no añadió tablas).
+- Git branch `main`.
+- `bash scripts/ci-local.sh` → **all green**: 370 tests backend (1 skip), 1 frontend, migraciones sin drift, build frontend, compose config.
+- Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `0f1607fa06e7`.
+- vLLM sirviendo `Qwen/Qwen3-4B-Instruct-2507` bajo el perfil `gpu` (RTX 5060 Ti 16GB, sm_120).
 - Todo gate corre en contenedores. En el host sólo hacen falta `docker compose` y `bash`.
 
 # Architecture Decisions Made
 
-Phase 06:
+Phase 07:
 
-- **El Domain nombra capability, nunca modelos.** `TaskType` → `ModelCapability` → endpoint. `ModelRouter` se indexa por capability, así que Phase 09 (embeddings, `POOLING`) y Phase 11 (AirLLM, `DEEP`) registran endpoints sin tocar nada por encima. Una task sin endpoint falla tipada en vez de degradarse al modelo fast: una respuesta de root-cause servida por el modelo rápido parece bien y vale mucho menos.
-- **Una decisión no obtenida es un tercer resultado.** `PlannedAction` distingue "haz esto" / "no hace falta nada más" / `failure`. Colapsar los dos últimos es cómo un servidor de modelos caído se convierte en un run que reporta éxito.
-- **Fallo tipado, no excepción.** El gateway devuelve `PlannedAction(failure=...)` en vez de lanzar. Lanzar aparecería como crash de activity y dejaría que Temporal reintentara el episodio como fallo de infraestructura (ADR 0009).
-- **`side_effect` lo decide el tipo de acción, no el modelo.** Todo lo que está fuera de `READ_ONLY_ACTIONS` se trata como state-changing aunque el modelo diga `false`; el flag sólo sirve para escalar (una navegación que confirma algo). Un modelo persuadido por contenido de página puede proponer mal una acción legal, nunca una ilegal.
-- **El delimitador del prompt es una pista, no la frontera.** El texto de página puede intentar cerrar su propio bloque. Lo que contiene a un modelo persuadido está abajo y no se negocia: schema cerrado + `GuardedBrowserGateway` + RunPolicy.
-- **Retries de transporte sólo en el cliente** (timeout, connection error, 5xx), acotados por `InferenceBudget`. Un 4xx no se reintenta: es una request que construimos mal y reenviarla manda los mismos bytes. Output inválido tampoco se reintenta ciegamente.
-- **El circuit breaker cuenta fallos de transporte, no respuestas malas.** Un modelo que contesta mal está contestando; tumbar el endpoint por un problema de prompt no ayuda a nadie.
-- **La concurrencia pertenece al servidor, no al llamador.** Semáforo Redis por endpoint, así que dos workers comparten el presupuesto de una GPU. Saturación sostenida → `ModelUnavailableError` con deadline; una cola sin deadline es un run que no termina y no dice por qué.
-- **Una acción denegada por policy cierra el episodio, no se replanifica.** Pedirle al modelo otra ruta después de un rechazo es exactamente el comportamiento que la policy existe para impedir. `StepOutcome.DENIED` (que hasta ahora no producía nadie) distingue el caso de un fallo.
-- **El allowlist de deserialización del checkpoint es explícito.** `CHECKPOINTED_TYPES` + `LANGGRAPH_STRICT_MSGPACK=true`. El default de la librería reconstruye cualquier tipo nombrado en la fila y sólo avisa.
-- **El worker es el único que carga Playwright y modelo.** La API responde preguntas sobre runs; su imagen (`target: runtime`) no lleva Chromium. El worker usa `target: worker`.
+- **El plan dice qué verificar, no cómo hacer clic.** La compilación story→plan es determinista y sin modelo, que es lo que hace reproducible "una story conocida pasa o falla". El agente decide las acciones en runtime; lo que sobrevive es el enlace `criterion_id -> step`, sin el cual un run fallido puede decir "algo se rompió" pero no "este criterio no se cumple".
+- **Sólo un check determinista puede acusar al producto.** Un `verification_hint` es el literal que la página debe contener y produce un `CriterionResult` reproducible; sin hint se pregunta a un modelo y su respuesta queda etiquetada `model_derived`, lo que deja el run inconclusive. La primera vez que este sistema culpe a un producto por algo que sólo creyó un modelo, todos los reportes posteriores se leen con sospecha.
+- **`FailureKind` decide qué puede concluir el run.** Sólo `product` justifica `failed`; environment/policy/agent_budget/model dan `blocked`; plan/unknown dan `inconclusive`. Un criterio sin resultado nunca cuenta como cumplido.
+- **El objective que recibe el planner excluye las assertions.** Un agente al que se le dice "la página de confirmación muestra un número de pedido" puede navegar a una página que lo muestre sin haber hecho el pedido.
+- **La versión del plan se fija al crear el run**, como la policy. Un run terminado bajo la versión 3 no cambia de resultado cuando se publica la 4; la activity lee la versión registrada, nunca "la última".
+- **El verdict se deriva en la activity, desde filas durables**, y sólo el valor cruza a Temporal. Copiar los resultados al history lo haría crecer por episodio, y un verdict calculado desde datos que el workflow nunca vio no podría re-derivarse cuando alguien cuestione el reporte.
+- **Los criterios se evalúan con el browser todavía abierto**, al cerrar el episodio: juzgar después sería juzgar una captura en vez de la aplicación.
+- **El reporte no depende de ningún transcript de modelo** y separa `deterministic_observation` de `root_cause_hypothesis` en claves distintas, para que un consumidor filtre por clave y no por convención.
+
+GPU/vLLM:
+
+- `--guided-decoding-backend` **no existe** en vLLM 0.27; es `--structured-outputs-config`, cuyo backend por defecto (`auto`) resuelve a xgrammar. La compose anterior no habría arrancado.
+- Docker Desktop ejecuta bajo WSL2, donde vLLM desactiva pinned memory por defecto; su worker GPU asigna buffers UVA y muere con "UVA is not available". Se habilita con `VLLM_WSL2_ENABLE_PIN_MEMORY=1`, que vLLM sólo permite en kernels WSL2 >= 4.19.121 (este host: 6.6).
 
 # Files Created
 
-Backend (Phase 06):
+Backend (Phase 07):
 
-- `domain/inference/tasks.py` — `TaskType`, `ModelCapability`, `InferenceBudget`.
-- `infrastructure/inference/`: `router.py`, `schemas.py`, `prompts.py`, `circuit.py`, `metrics.py`, `errors.py`
-- `infrastructure/inference/vllm/`: `client.py` (transporte, timeouts, retry, circuito, semáforo, métricas), `gateway.py` (`ModelGateway`).
-- `bootstrap/agent_runtime.py` — wiring worker-only de modelo + browser + checkpointer.
-- Tests: `tests/inference/{test_schemas,test_router,test_client,test_gateway,test_concurrency,test_real_model}.py`, `tests/agent/test_checkpoint_serialization.py`
+- `domain/qa/test_plan.py` — `TestPlan`, `PlanStep`, `PlanBudget`, `compile_story`, `objective`.
+- `domain/qa/verification.py` — `CriterionResult`, `FailureKind`, `derive_verdict`.
+- `application/contracts/test_plan.py` — documento portable (export/import lossless).
+- `application/commands/compile_plan.py`, `application/ports/plans.py`, `application/ports/results.py`
+- `application/services/criterion_verification.py`, `application/queries/run_report.py`
+- `interfaces/http/routers/plans.py` — stories + plans.
+- `alembic/versions/603bec952128_phase_07_test_plans.py`, `alembic/versions/0f1607fa06e7_phase_07_criterion_results.py`
+- Tests: `tests/qa/{test_test_plan,test_verification,test_criterion_verification,test_story_run_e2e}.py`
 
 # Files Modified
 
-- `application/ports/models.py`: `PlannedAction.failure` con invariante (una decisión fallida no lleva acción).
-- `infrastructure/agent/langgraph/graph.py`: el nodo `plan` distingue fallo de "nada que hacer"; `act` captura `ActionDeniedError`; `verify` registra `DENIED` y cierra.
-- `infrastructure/agent/langgraph/checkpointer.py`: `CHECKPOINTED_TYPES` + `build_serializer()`.
-- `bootstrap/{settings,container}.py`: config de modelo, `with_agent_runtime`, cierre del cliente HTTP.
-- `infrastructure/workflows/temporal/worker.py`: cablea el runtime.
-- `backend/Dockerfile`: stage `worker` (runtime + Chromium).
-- `compose.yaml`: `worker` en el stage nuevo con config de modelo y `LANGGRAPH_STRICT_MSGPACK`; `vllm` con `--model`/guided decoding, volumen de modelos, GPU y puerto 8100 (8000 ya es de la API).
-- `backend/pyproject.toml`: `httpx` y `pydantic` pasan a dependencias de runtime.
-- `.env.example`, `docs/05`, `docs/06`, `docs/08`.
+- `domain/runs/run.py`: `plan_id`/`plan_version` con invariante de identidad completa.
+- `application/ports/models.py`: `judge()` + `JudgementRequest`/`CriterionJudgement`.
+- `application/commands/start_run.py`: resuelve y fija la versión del plan.
+- `infrastructure/agent/langgraph/graph.py`: nodo `verify_criteria` antes de cerrar el episodio.
+- `infrastructure/agent/langgraph/checkpointer.py`: los tipos de verificación entran en `CHECKPOINTED_TYPES`.
+- `infrastructure/workflows/temporal/{activities,contracts,workflows}.py`: goal desde el plan, resultados persistidos, verdict real.
+- `infrastructure/inference/vllm/gateway.py` + `prompts.py`: judgement con structured output.
+- `infrastructure/persistence/postgres/{models,mappers,repositories,unit_of_work}.py`: `test_plans` y `criterion_results`.
+- `interfaces/http/{app,schemas}.py`, `routers/runs.py`: endpoints de plan y `GET /runs/{id}/report`.
+- `compose.yaml`: servicio `vllm` validado en GPU; `contracts/` montado read-only en `backend-tests`.
+- `docs/02`, `docs/12`.
 
 # Database/Migrations State
 
-- Sin migraciones nuevas en Phase 06. Head sigue en **`f9911e78285a`**; `alembic check` limpio.
+- Migraciones: … → `f9911e78285a` → `603bec952128` (`test_plans` + `runs.plan_id/plan_version`) → **`0f1607fa06e7`** (`criterion_results`). `alembic check` limpio.
 
 # Tests Executed
 
 ```
 bash scripts/ci-local.sh
 docker compose --profile gates run --rm backend-tests pytest
-docker compose --profile gates run --rm backend-tests pytest tests/inference/test_concurrency.py -v
-docker compose run --rm -v <scratch>:/check worker python /check/wiring_check.py
-docker compose exec -T api python  # e2e por la API real
+docker compose --profile gates run --rm -e VLLM_BASE_URL=http://vllm:8000 -e VLLM_MODEL=Qwen/Qwen3-4B-Instruct-2507 backend-tests pytest tests/inference/test_real_model.py -v
+docker compose --profile gpu up -d vllm
 ```
 
 # Exact Test Results
 
-- **324 passed, 1 skipped** (el skip es el test opcional contra modelo real, sin `VLLM_BASE_URL`).
-  - `tests/inference` 48 · `tests/domain` 63 · `tests/contracts` 80 · `tests/application` 21 · `tests/http` 29 · `tests/browser` 31 · `tests/agent` 27 · `tests/integration` 16 · `tests/architecture` 10 · `test_health` 2
-- ruff "All checks passed!"; mypy strict "no issues found in 173 source files"; `alembic check` sin drift.
+- **370 passed, 1 skipped** (el skip es el test de modelo real cuando no hay endpoint configurado).
+  - `tests/qa` 46 · `tests/inference` 48 · `tests/domain` 63 · `tests/contracts` 80 · `tests/application` 21 · `tests/http` 29 · `tests/browser` 31 · `tests/agent` 27 · `tests/integration` 16 · `tests/architecture` 10 · `test_health` 2
+- ruff "All checks passed!"; mypy strict "no issues found in 188 source files"; `alembic check` sin drift.
 - `ci-local: all green`. Frontend: eslint, tsc, vitest 1 passed, build OK.
-- e2e por la API con el stack reconstruido: `run: completed inconclusive`, eventos `['run.created', 'run.status.changed', 'run.status.changed']`.
-- e2e en la imagen `worker` con un endpoint OpenAI-compatible de stub: 3 llamadas al modelo (navigate → click → finished), Chromium real, `safe_point=episode_closed` con checkpoint id.
+- **Modelo real**: `tests/inference/test_real_model.py` pasa contra vLLM vivo en la RTX 5060 Ti (1 passed en 4.61s).
 
-# Acceptance Gates (Phase 06)
+# Acceptance Gates (Phase 07)
 
 | Gate | Resultado |
 | --- | --- |
-| Invalid model output no llega a Playwright | **PASS** (graph real + browser recorder: prosa en vez de JSON, `action_type: evaluate`, click sin target y completion vacía → `executed == []` y episodio cerrado con motivo. Más: una acción propuesta por el modelo sigue pasando por la RunPolicy) |
-| Concurrency limit demostrado | **PASS** (8 tests contra semáforo in-memory y Redis real: con capacity 1 y 2, 6 llamadas concurrentes nunca superan el pico declarado; dos clientes independientes comparten el presupuesto del endpoint; saturación con deadline reporta `ModelUnavailableError`) |
-| Agent system test con modelo real opcional y fake obligatorio | **PASS** (fake obligatorio: `tests/inference/test_gateway.py` sobre el graph completo y `tests/agent/test_episode_activity.py` sobre la activity; real opcional: `tests/inference/test_real_model.py`, skip sin endpoint configurado) |
+| Una story conocida pasa/falla de forma reproducible | **PASS** (e2e real: PostgreSQL, checkpointer LangGraph, Chromium y target app. La misma story se ejecuta dos veces y pasa las dos; con una expectativa que la página no confirma, falla nombrando `ac-created` y apuntando a `assert-ac-created`) |
+| El TestPlan valida contra su schema y exporta/importa losslessly | **PASS** (validación contra `contracts/test-plan.schema.json` montado read-only, no una copia; round trip por JSON conservando el tipo de los valores de metadata; versión de contrato desconocida rechazada) |
+| Cada failed criterion apunta a evidence/action timeline del mismo run | **PASS** (`criterion_results` con FK a `runs`, único por `(run_id, criterion_id)`, y `step_id` apuntando al plan step) |
+| Report no depende del transcript completo del LLM | **PASS** (`build_run_report` lee run + plan version + resultados; el documento separa `deterministic_observation` de `root_cause_hypothesis`) |
+| Un plan malo termina blocked/inconclusive en vez de culpar al producto | **PASS** (e2e con criterio sin ancla determinista → inconclusive, `defects == ()`; más 9 tests de `derive_verdict` cubriendo cada `FailureKind`) |
 
 # Known Issues
 
-- **Sin GPU disponible en esta máquina**: el path del modelo real está probado contra un servidor OpenAI-compatible de stub y con `httpx.MockTransport`, no contra vLLM. El tag `VLLM_MODEL` y el backend de guided decoding **no están validados en hardware**; hay que verificarlos en el host con GPU antes de fijarlos.
-- `more_work` siempre es `False`: un episodio por goal. Multi-episodio llega con Phase 07.
-- El `RecoveryPoint` sigue con `browser.url` vacío: el resultado del episodio no devuelve la URL observada.
-- `EpisodeOutcome` no transporta `failure_reason`, así que el workflow cierra en `completed/inconclusive` incluso cuando el episodio falló o fue denegado. Es coherente con lo declarado (el verdict se deriva en Phase 07) pero es lo primero que Phase 07 debe arreglar.
+- `more_work` sigue siendo `False`: un episodio por plan. Un plan que necesite varios episodios llega cuando exista el motivo.
+- `evidence_refs` de `CriterionResult` existe y nadie lo llena todavía: los artifacts de Phase 04 no están enlazados a los resultados. Es lo que falta para que el gate de evidencia sea completo y no sólo trazable por `step_id`/`run_id`.
+- El `RecoveryPoint` sigue con `browser.url` vacío.
+- `POST /api/v1/plans` con plan inline, `GET /plans/{id}`, `PUT` con `If-Match` y `POST /plans/validate` están documentados y no implementados (docs/12 los marca).
 - Los tests de integración hacen skip si el servicio no responde.
-- La suite tarda ~65s.
+- La suite tarda ~60s; el e2e de story añade ~15s por su Chromium.
 
 # Technical Debt
 
-- `open_checkpointer` abre y cierra conexión por episodio; con muchos episodios convendrá un pool.
-- Los prompts viven en `infrastructure/inference/prompts.py` sin versionado explícito. En cuanto haya evals (docs/08) hará falta un identificador de versión de prompt en `model_invocation_id`.
-- `model_invocation_id`, prompt/model version y `model_derived=true` en la evidencia (docs/08 "Evidence boundary") todavía no se persisten; hoy la decisión sólo lleva `rationale`.
+- Los prompts no tienen versión explícita; hace falta antes de las evals de docs/08.
+- `model_invocation_id` y prompt/model version no se persisten con las conclusiones del modelo (docs/08 "Evidence boundary").
+- `open_checkpointer` abre y cierra conexión por episodio.
 - El nodo "Retrieve Memory" de docs/06 no existe (Phase 09), a propósito.
-- Sin endpoints de `Environment`, sin GET de policies, sin presence/heartbeat en Redis.
-- structlog pendiente (docs/14); las métricas de inferencia son contadores en proceso + una línea de log por llamada.
+- Sin endpoints de `Environment` ni GET de policies.
+- structlog pendiente (docs/14).
 
 # Risks
 
-- Phase 07 deriva el verdict de resultados reales. Hoy el workflow devuelve `inconclusive` fijo; cambiarlo toca la máquina de estados de `Run`, que ya prohíbe `COMPLETED` sin verdict.
-- Un modelo real producirá mucha más variedad que el stub: conviene medir `invalid_outputs` (ya se cuenta aparte de `failures`) al integrar el primer modelo de verdad.
+- La primera imagen de vLLM son 37.5GB y el modelo se descarga en el primer arranque: el `start_period` del healthcheck es 600s por eso. Un arranque en frío no es un fallo.
+- El perfil `gpu` reserva la GPU entera; correr vLLM y el gate de browser a la vez compite por memoria de la máquina.
 - Toda activity de Temporal invocada por nombre necesita `result_type` explícito.
-- Si alguien añade un tipo nuevo al estado del graph sin ponerlo en `CHECKPOINTED_TYPES`, el resume se rompe. `tests/agent/test_checkpoint_serialization.py` lo detecta (verificado por mutación: vuelve como `dict`).
+- Un tipo nuevo en el estado del graph que falte en `CHECKPOINTED_TYPES` rompe el resume; `tests/agent/test_checkpoint_serialization.py` lo detecta.
 
 # Decisions Still Open
 
-- Cómo se deriva el `goal` de un episodio desde la historia y sus acceptance criteria (Phase 07).
-- Cómo se decide el verdict a partir de los resultados de episodios.
+- Cómo se enlazan artifacts/evidence_set a cada `CriterionResult`.
+- Si un plan debe poder pedir varios episodios y qué los delimita.
 - Dónde se genera el `evidence_set_id` y cuándo el graph captura screenshots/traces.
 - Estrategia de pooling para el checkpointer.
 
 # Graphify Status
 
-- `graphify-out/graph.json` de la sesión anterior; no refrescado tras Phase 06.
+- `graphify-out/graph.json` desactualizado (anterior a Phase 06). Refrescar antes de fiarse de él.
 
 # Services That Are Working
 
-- postgres (`f9911e78285a` + tablas de LangGraph), redis, temporal + temporal-ui, falkordb, api (`http://localhost:8000/docs`), worker. Chromium vía Playwright dentro de la imagen `worker`.
+- postgres (`0f1607fa06e7` + tablas de LangGraph), redis, temporal + temporal-ui, falkordb, api, worker, vllm (perfil `gpu`). Chromium vía Playwright en la imagen `worker`.
 
 # Services Still Stubbed/Deferred
 
-- `frontend` como servicio compose (Phase 10), `vllm` (definido bajo perfil `gpu`, sin validar en hardware), `vllm-embed` (09), `airllm` (11).
+- `frontend` como servicio compose (Phase 10), `vllm-embed` (09), `airllm` (11).
 
 # Exact Next Task
 
-Implement Phase 07 slice 1: derive an episode `goal` from a `UserStory` and its acceptance criteria instead of the declared default in `EpisodeParams`, so a run executes what the story asks for — the workflow shape and the retry split stay exactly as ADR 0009 fixed them.
+Implement Phase 08 slice 1: a `roveqa run` command that starts a run through the public HTTP API and prints a single JSON envelope on stdout, with progress and warnings on stderr — the CLI is another delivery adapter and may not import Playwright, Temporal, LangGraph or the database.
 
 # Exact Next Command
 
-En Claude Code: `/implement-phase 07`
+En Claude Code: `/implement-phase 08`
 
 # Recommended Skills For Next Session
 
 - `implement-phase` (proceso), `ponytail` (always-on).
-- `backend-slice` + `api-design-principles` para los contratos de historia/verdict.
-- `durability-review` al tocar el workflow.
-- `architecture-guard` + `test-and-verify` al cierre.
+- `api-design-principles` (contrato CLI, exit codes, JSON purity) + `error-handling-patterns`.
+- `test-and-verify` + `architecture-guard` al cierre.

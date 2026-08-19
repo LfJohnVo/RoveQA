@@ -56,5 +56,37 @@ class PlannedAction:
             raise ValueError("a failed decision cannot also carry an action")
 
 
+@dataclass(frozen=True)
+class JudgementRequest:
+    """Ask a model whether an acceptance criterion looks satisfied.
+
+    Last in the verification order (docs/06), never first: this is only reached when no
+    deterministic check could answer.
+    """
+
+    criterion: str
+    observation: str
+
+
+@dataclass(frozen=True)
+class CriterionJudgement:
+    satisfied: bool | None
+    """None means the model could not tell. Kept distinct from False: "I don't know" is
+    not evidence of a defect."""
+
+    reasoning: str = ""
+    model_derived: bool = True
+    """Always true. A judgement is a hypothesis and is labelled as one wherever it goes."""
+
+    failure: str | None = None
+    """Set when no judgement could be obtained at all, as in `PlannedAction`."""
+
+    def __post_init__(self) -> None:
+        if self.failure is not None and self.satisfied is not None:
+            raise ValueError("a failed judgement cannot also carry a verdict")
+
+
 class ModelGateway(Protocol):
     async def next_action(self, request: PlanningRequest) -> PlannedAction: ...
+
+    async def judge(self, request: JudgementRequest) -> CriterionJudgement: ...

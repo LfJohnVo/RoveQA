@@ -38,7 +38,9 @@ class EpisodeParams:
     run_id: str
     episode_index: int
     goal: str = "explore the target application"
-    """Phase 07 derives this from the user story; until then it is a stated default."""
+    """Fallback for a run with no plan (exploratory). A run that names a plan gets its
+    objective from that plan version, resolved in the activity — the workflow stays
+    free of I/O and its history stays free of a full plan document."""
 
 
 @dataclass
@@ -50,3 +52,8 @@ class EpisodeOutcome:
     """
 
     more_work: bool
+
+    verdict: str | None = None
+    """QA verdict derived from the criterion results, or None for a run with no
+    plan. Only the value crosses the boundary: the results themselves are durable in
+    PostgreSQL, and copying them into workflow history would grow it per episode."""

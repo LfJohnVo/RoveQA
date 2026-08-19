@@ -49,7 +49,13 @@ class LangGraphEpisodeRunner:
     async def run_episode(self, request: EpisodeRequest) -> EpisodeResult:
         async with self._checkpointer_factory() as checkpointer, self._browser_factory() as raw:
             guarded = GuardedBrowserGateway(raw, request.policy)
-            graph = build_agent_graph(browser=guarded, model=self._model, checkpointer=checkpointer)
+            graph = build_agent_graph(
+                browser=guarded,
+                model=self._model,
+                checkpointer=checkpointer,
+                assertions=request.assertions,
+                hints=request.verification_hints,
+            )
             config: RunnableConfig = {"configurable": {"thread_id": thread_id_for(request.run_id)}}
 
             resuming = await _has_pending_state(graph, config)
@@ -78,6 +84,7 @@ class LangGraphEpisodeRunner:
                 graph_checkpoint_id=snapshot.config["configurable"].get("checkpoint_id"),
                 safe_point=final.get("safe_point"),
                 failure_reason=agent.failure_reason,
+                criterion_results=final.get("criterion_results", ()),
             )
 
 

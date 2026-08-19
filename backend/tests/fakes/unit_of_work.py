@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Self
 
 from tests.fakes.repositories import (
+    InMemoryCriterionResultRepository,
     InMemoryEnvironmentRepository,
     InMemoryIdempotencyRepository,
     InMemoryProjectRepository,
@@ -18,6 +19,7 @@ from tests.fakes.repositories import (
     InMemoryRunRepository,
     InMemoryStore,
     InMemoryStoryRepository,
+    InMemoryTestPlanRepository,
 )
 
 
@@ -59,6 +61,14 @@ class InMemoryUnitOfWork:
     @property
     def environments(self) -> InMemoryEnvironmentRepository:
         return InMemoryEnvironmentRepository(self._require_active())
+
+    @property
+    def criterion_results(self) -> InMemoryCriterionResultRepository:
+        return InMemoryCriterionResultRepository(self._require_active())
+
+    @property
+    def plans(self) -> InMemoryTestPlanRepository:
+        return InMemoryTestPlanRepository(self._require_active())
 
     @property
     def recovery_points(self) -> InMemoryRecoveryPointRepository:

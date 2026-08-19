@@ -29,6 +29,9 @@ dev = [
     # Required by starlette's TestClient, which warns (and with filterwarnings=error,
     # fails) when only httpx 0.x is available. Test-only: the vLLM adapter uses httpx.
     "httpx2>=2.12.0",
+    # Validates our published contracts against their own JSON Schema files.
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0",
     "python-multipart>=0.0.32",
 ]
 

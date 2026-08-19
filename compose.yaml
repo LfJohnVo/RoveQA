@@ -142,6 +142,9 @@ services:
       - ./backend/src:/app/src
       - ./backend/tests:/app/tests
       - ./backend/alembic:/app/alembic
+      # The published contracts, read-only: the suite validates its output against the
+      # real schema files rather than a copy that could drift away from them.
+      - ./contracts:/app/contracts:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,24 +182,50 @@ services:
   # Heavy inference stays behind profiles so CPU-only development works.
   # The model tag is configuration, not a constant: it depends on the GPU on the host
   # actually running this, so it is set in .env rather than pinned here.
+  # Verified on an RTX 5060 Ti (16GB, sm_120 Blackwell) with driver 610.62.
+  # `--structured-outputs-config` replaced `--guided-decoding-backend` in 0.27; its
+  # default backend ('auto') resolves to xgrammar, which is what makes
+  # `response_format: json_schema` enforced at the server instead of merely requested.
   vllm:
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.27.1-cu129}
     profiles: ["gpu"]
     command:
       - "--model"
-      - "${VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
+      - "${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
+      - "--served-model-name"
+      - "${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
       - "--max-model-len"
       - "${VLLM_MAX_MODEL_LEN:-16384}"
-      # Guided decoding is what makes `response_format: json_schema` enforceable at the
-      # server instead of a request the model may ignore.
-      - "--guided-decoding-backend"
-      - "${VLLM_GUIDED_BACKEND:-xgrammar}"
+      # Weights take ~8GB of the 16GB card; the rest is KV cache and activations.
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.85}"
+      # Matches MODEL_MAX_CONCURRENCY: admitting more sequences than the client will
+      # ever send just reserves KV cache nobody uses.
+      - "--max-num-seqs"
+      - "${VLLM_MAX_NUM_SEQS:-4}"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
+      # Docker Desktop runs containers under WSL2, where vLLM disables pinned memory by
+      # default. Its GPU worker allocates UVA buffers, which need it, so without this
+      # the engine dies at startup with "UVA is not available". Safe here: the switch is
+      # gated on a WSL2 kernel >= 4.19.121 and this host runs 6.6.
+      VLLM_WSL2_ENABLE_PIN_MEMORY: "1"
     volumes:
       - ./data/models:/root/.cache/huggingface
+    # NCCL and the shared-memory allocator need more than Docker's 64MB default.
+    shm_size: "8gb"
     # 8100 on the host: 8000 already belongs to the API, and a port clash would only
     # show up when someone enables this profile.
     ports:
       - "8100:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      # First boot downloads weights and compiles CUDA graphs; later boots are minutes.
+      start_period: 600s
     deploy:
       resources:
         reservations:

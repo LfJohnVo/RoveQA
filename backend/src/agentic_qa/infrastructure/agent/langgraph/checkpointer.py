@@ -29,6 +29,11 @@ from agentic_qa.domain.browser.actions import (
     BrowserActionType,
     IdempotencyStrategy,
 )
+from agentic_qa.domain.qa.verification import (
+    CriterionOutcome,
+    CriterionResult,
+    FailureKind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,9 @@ CHECKPOINTED_TYPES = (
     BrowserActionType,
     ActionTarget,
     IdempotencyStrategy,
+    CriterionResult,
+    CriterionOutcome,
+    FailureKind,
 )
 """Exactly what a checkpoint may reconstruct.
 

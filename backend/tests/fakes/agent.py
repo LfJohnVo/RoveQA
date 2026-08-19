@@ -9,7 +9,12 @@ page.
 from dataclasses import dataclass, field
 
 from agentic_qa.application.ports.browser import ActionOutcome
-from agentic_qa.application.ports.models import PlannedAction, PlanningRequest
+from agentic_qa.application.ports.models import (
+    CriterionJudgement,
+    JudgementRequest,
+    PlannedAction,
+    PlanningRequest,
+)
 from agentic_qa.domain.browser.actions import BrowserAction
 
 
@@ -19,12 +24,23 @@ class ScriptedModelGateway:
 
     script: list[BrowserAction] = field(default_factory=list)
     calls: int = 0
+    judgements: dict[str, bool | None] = field(default_factory=dict)
+    """criterion description -> satisfied. Anything unscripted comes back as unclear,
+    which is what a real model should also say when it cannot tell."""
+
+    judged: list[str] = field(default_factory=list)
 
     async def next_action(self, request: PlanningRequest) -> PlannedAction:
         self.calls += 1
         if not self.script:
             return PlannedAction(action=None, rationale="nothing left to do")
         return PlannedAction(action=self.script.pop(0), rationale="scripted")
+
+    async def judge(self, request: JudgementRequest) -> CriterionJudgement:
+        self.judged.append(request.criterion)
+        return CriterionJudgement(
+            satisfied=self.judgements.get(request.criterion), reasoning="scripted judgement"
+        )
 
 
 @dataclass

@@ -5,7 +5,7 @@ the commit point live in the use case (ADR 0010), and status is only ever writte
 the workflow's activities — never here.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Response, status
 
@@ -16,6 +16,7 @@ from agentic_qa.application.ports.events import (
     MAX_EVENT_PAGE_SIZE,
 )
 from agentic_qa.application.queries.list_run_events import list_run_events
+from agentic_qa.application.queries.run_report import build_run_report, to_document
 from agentic_qa.interfaces.http.dependencies import (
     EventPublisherDep,
     IdempotencyKeyDep,
@@ -56,6 +57,8 @@ async def create_run(
             idempotency_key=idempotency_key,
             environment_id=payload.environment_id,
             run_policy_id=payload.run_policy_id,
+            plan_id=payload.plan_id,
+            plan_version=payload.plan_version,
             request_id=get_request_id(),
         ),
         publisher=publisher,
@@ -138,3 +141,10 @@ async def cancel_run(
     await _ensure_run_exists(run_id, uow)
     await workflows.request_cancel(run_id)
     return RunAcceptedResponse(run_id=run_id, accepted="cancel")
+
+
+@router.get("/{run_id}/report")
+async def read_run_report(run_id: str, uow: UnitOfWorkDep) -> dict[str, Any]:
+    """The run's report, built from durable rows rather than from a model transcript."""
+    report = await build_run_report(uow.runs, uow.plans, uow.criterion_results, run_id=run_id)
+    return to_document(report)

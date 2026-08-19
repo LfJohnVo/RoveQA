@@ -20,7 +20,12 @@ import logging
 
 import httpx
 
-from agentic_qa.application.ports.models import PlannedAction, PlanningRequest
+from agentic_qa.application.ports.models import (
+    CriterionJudgement,
+    JudgementRequest,
+    PlannedAction,
+    PlanningRequest,
+)
 from agentic_qa.application.ports.semaphores import ResourceSemaphore
 from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.inference.tasks import TaskType
@@ -30,14 +35,26 @@ from agentic_qa.infrastructure.inference.errors import (
     NoEndpointConfiguredError,
 )
 from agentic_qa.infrastructure.inference.metrics import InferenceMetrics
-from agentic_qa.infrastructure.inference.prompts import SYSTEM_PROMPT, build_planning_prompt
+from agentic_qa.infrastructure.inference.prompts import (
+    JUDGEMENT_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_judgement_prompt,
+    build_planning_prompt,
+)
 from agentic_qa.infrastructure.inference.router import ModelRouter
-from agentic_qa.infrastructure.inference.schemas import BrowserDecision
+from agentic_qa.infrastructure.inference.schemas import BrowserDecision, VerificationJudgement
 from agentic_qa.infrastructure.inference.vllm.client import VLLMChatClient
 
 logger = logging.getLogger(__name__)
 
 PLANNING_TASK = TaskType.GUI_ACTION
+JUDGEMENT_TASK = TaskType.SEMANTIC_VERIFICATION
+
+_SATISFACTION: dict[str, bool | None] = {
+    "satisfied": True,
+    "not_satisfied": False,
+    "unclear": None,
+}
 
 
 class VLLMModelGateway:
@@ -95,6 +112,27 @@ class VLLMModelGateway:
             )
 
         return PlannedAction(action=action, rationale=decision.rationale)
+
+    async def judge(self, request: JudgementRequest) -> CriterionJudgement:
+        """Semantic verification. Reached only when no deterministic check could answer."""
+        try:
+            client = self._client_for(JUDGEMENT_TASK)
+            judgement = await client.complete_json(
+                task=JUDGEMENT_TASK,
+                system=JUDGEMENT_SYSTEM_PROMPT,
+                user=build_judgement_prompt(request.criterion, request.observation),
+                schema=VerificationJudgement,
+            )
+        except NoEndpointConfiguredError as error:
+            return CriterionJudgement(satisfied=None, failure=str(error))
+        except ModelUnavailableError as error:
+            return CriterionJudgement(satisfied=None, failure=f"model unavailable: {error}")
+        except ModelOutputError as error:
+            return CriterionJudgement(satisfied=None, failure=f"unusable model output: {error}")
+
+        return CriterionJudgement(
+            satisfied=_SATISFACTION[judgement.verdict], reasoning=judgement.reasoning
+        )
 
     def _client_for(self, task: TaskType) -> VLLMChatClient:
         endpoint = self._router.endpoint_for(task)

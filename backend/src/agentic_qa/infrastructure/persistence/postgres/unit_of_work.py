@@ -6,6 +6,7 @@ from typing import Self
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_qa.infrastructure.persistence.postgres.repositories import (
+    PostgresCriterionResultRepository,
     PostgresEnvironmentRepository,
     PostgresIdempotencyRepository,
     PostgresProjectRepository,
@@ -14,6 +15,7 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresRunPolicyRepository,
     PostgresRunRepository,
     PostgresStoryRepository,
+    PostgresTestPlanRepository,
 )
 
 
@@ -61,6 +63,14 @@ class PostgresUnitOfWork:
     @property
     def recovery_points(self) -> PostgresRecoveryPointRepository:
         return PostgresRecoveryPointRepository(self.session)
+
+    @property
+    def criterion_results(self) -> PostgresCriterionResultRepository:
+        return PostgresCriterionResultRepository(self.session)
+
+    @property
+    def plans(self) -> PostgresTestPlanRepository:
+        return PostgresTestPlanRepository(self.session)
 
     async def __aenter__(self) -> Self:
         self._session = self._session_factory()

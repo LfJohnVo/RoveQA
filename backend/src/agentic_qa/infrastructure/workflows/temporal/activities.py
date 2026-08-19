@@ -18,6 +18,8 @@ from agentic_qa.application.errors import NotFoundError
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
 from agentic_qa.application.services.policy_resolution import resolve_run_policy
 from agentic_qa.bootstrap.container import Container
+from agentic_qa.domain.qa.test_plan import TestPlan
+from agentic_qa.domain.qa.verification import derive_verdict
 from agentic_qa.domain.runs.recovery import (
     BrowserRecoveryData,
     RecoveryPoint,
@@ -84,13 +86,38 @@ class RunActivities:
                 environment_id=run.environment_id,
                 requested_policy_id=run.run_policy_id,
             )
+            # The plan version was pinned onto the run at creation, so this reads the
+            # plan the run is judged by — not whichever version is current now.
+            plan = (
+                await uow.plans.get(run.plan_id, run.plan_version)
+                if run.plan_id is not None and run.plan_version is not None
+                else None
+            )
+
+            story = (
+                await uow.stories.get(plan.source_story_id)
+                if plan is not None and plan.source_story_id is not None
+                else None
+            )
+
+        hints = (
+            {
+                criterion.criterion_id: criterion.verification_hint
+                for criterion in story.acceptance_criteria
+                if criterion.verification_hint
+            }
+            if story is not None
+            else {}
+        )
 
         result = await runner.run_episode(
             EpisodeRequest(
                 run_id=params.run_id,
-                goal=params.goal,
+                goal=plan.objective if plan is not None else params.goal,
                 episode_index=params.episode_index,
                 policy=policy,
+                assertions=plan.assertions if plan is not None else (),
+                verification_hints=hints,
             )
         )
         activity.heartbeat(params.episode_index)
@@ -98,7 +125,29 @@ class RunActivities:
         if result.safe_point and result.graph_checkpoint_id:
             await self._record_recovery_point(params, result)
 
-        return EpisodeOutcome(more_work=result.more_work)
+        verdict = await self._record_results(params, plan, result)
+        return EpisodeOutcome(more_work=result.more_work, verdict=verdict)
+
+    async def _record_results(
+        self, params: EpisodeParams, plan: TestPlan | None, result: EpisodeResult
+    ) -> str | None:
+        """Persist criterion results and derive the run's verdict from them.
+
+        The verdict is derived here, from durable results, rather than in the workflow:
+        the workflow must stay free of I/O, and a verdict computed from data it never
+        saw could not be re-derived when someone questions the report.
+        """
+        if plan is None:
+            return None
+
+        async with self._container.unit_of_work() as uow:
+            await uow.criterion_results.record(params.run_id, result.criterion_results)
+            await uow.commit()
+
+        return derive_verdict(
+            result.criterion_results,
+            expected=[step.criterion_id for step in plan.assertions if step.criterion_id],
+        ).value
 
     async def _record_recovery_point(self, params: EpisodeParams, result: EpisodeResult) -> None:
         async with self._container.unit_of_work() as uow:

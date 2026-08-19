@@ -83,6 +83,14 @@ class Run:
 
     environment_id: str | None = None
 
+    plan_id: str | None = None
+    plan_version: str | None = None
+    """The plan version this run is judged by, pinned at creation like the policy.
+
+    Read once and recorded: a run finished under version 3 must not become a different
+    result the day version 4 is published.
+    """
+
     def __post_init__(self) -> None:
         self.run_id = require_identifier(self.run_id, field="run_id")
         self.project_id = require_identifier(self.project_id, field="project_id")
@@ -90,6 +98,11 @@ class Run:
             self.run_policy_id = require_identifier(self.run_policy_id, field="run_policy_id")
         if self.environment_id is not None:
             self.environment_id = require_identifier(self.environment_id, field="environment_id")
+        if (self.plan_id is None) != (self.plan_version is None):
+            # Half an identity points at no particular plan, which is worse than none.
+            raise RunTransitionError("a run references a plan version or no plan at all")
+        if self.plan_id is not None:
+            self.plan_id = require_identifier(self.plan_id, field="plan_id")
 
     def transition_to(self, new_status: RunStatus, verdict: Verdict | None = None) -> None:
         if self.status in TERMINAL_STATUSES:

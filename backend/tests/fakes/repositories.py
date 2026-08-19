@@ -6,6 +6,7 @@ one unit of work share a single `InMemoryStore`, which is what makes the fake
 transaction able to roll back for real.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -16,7 +17,9 @@ from agentic_qa.application.ports.idempotency import IdempotencyRecord
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
+from agentic_qa.domain.qa.verification import CriterionResult
 from agentic_qa.domain.runs.recovery import RecoveryPoint
 from agentic_qa.domain.runs.run import Run
 
@@ -31,6 +34,8 @@ class InMemoryStore:
     policies: dict[str, RunPolicy] = field(default_factory=dict)
     environments: dict[str, Environment] = field(default_factory=dict)
     recovery_points: list[RecoveryPoint] = field(default_factory=list)
+    plans: dict[tuple[str, str], TestPlan] = field(default_factory=dict)
+    criterion_results: dict[str, dict[str, CriterionResult]] = field(default_factory=dict)
 
     def snapshot(self) -> "InMemoryStore":
         return InMemoryStore(
@@ -42,6 +47,10 @@ class InMemoryStore:
             policies=dict(self.policies),
             environments=dict(self.environments),
             recovery_points=list(self.recovery_points),
+            plans=dict(self.plans),
+            criterion_results={
+                run: dict(results) for run, results in self.criterion_results.items()
+            },
         )
 
     def restore(self, snapshot: "InMemoryStore") -> None:
@@ -62,6 +71,12 @@ class InMemoryStore:
         self.environments.update(snapshot.environments)
         self.recovery_points.clear()
         self.recovery_points.extend(snapshot.recovery_points)
+        self.plans.clear()
+        self.plans.update(snapshot.plans)
+        self.criterion_results.clear()
+        self.criterion_results.update(
+            {run: dict(results) for run, results in snapshot.criterion_results.items()}
+        )
 
 
 class InMemoryProjectRepository:
@@ -202,3 +217,43 @@ class InMemoryRecoveryPointRepository:
     async def list_for_run(self, run_id: str, *, limit: int) -> list[RecoveryPoint]:
         matching = [p for p in self._store.recovery_points if p.run_id == run_id]
         return list(reversed(matching))[:limit]
+
+
+class InMemoryTestPlanRepository:
+    """Append-only, like the real one: a plan version is never overwritten."""
+
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, plan: TestPlan) -> None:
+        key = (plan.plan_id, plan.plan_version)
+        if key in self._store.plans:
+            raise AlreadyExistsError("test_plan", f"{plan.plan_id}@{plan.plan_version}")
+        self._store.plans[key] = plan
+
+    async def get(self, plan_id: str, plan_version: str) -> TestPlan | None:
+        return self._store.plans.get((plan_id, plan_version))
+
+    async def latest(self, plan_id: str) -> TestPlan | None:
+        versions = [plan for (pid, _), plan in self._store.plans.items() if pid == plan_id]
+        return versions[-1] if versions else None
+
+    async def list_for_story(self, story_id: str, *, limit: int) -> list[TestPlan]:
+        matches = [plan for plan in self._store.plans.values() if plan.source_story_id == story_id]
+        return list(reversed(matches))[:limit]
+
+
+class InMemoryCriterionResultRepository:
+    """Keyed by criterion, like the real unique constraint: a retried activity replaces
+    its answer instead of leaving two contradictory ones."""
+
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def record(self, run_id: str, results: Sequence[CriterionResult]) -> None:
+        for_run = self._store.criterion_results.setdefault(run_id, {})
+        for result in results:
+            for_run[result.criterion_id] = result
+
+    async def list_for_run(self, run_id: str) -> list[CriterionResult]:
+        return list(self._store.criterion_results.get(run_id, {}).values())

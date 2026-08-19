@@ -21,6 +21,7 @@ from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
 from agentic_qa.application.services.event_publishing import publish_best_effort
 from agentic_qa.application.services.policy_resolution import resolve_run_policy
+from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.runs.run import Run, RunStatus
 
 
@@ -30,6 +31,11 @@ class StartRunCommand:
     idempotency_key: str
     environment_id: str | None = None
     run_policy_id: str | None = None
+    plan_id: str | None = None
+    plan_version: str | None = None
+    """Which plan to run. Without a version the latest is resolved *once*, here, and
+    pinned onto the run: the plan a run is judged by must not change under it."""
+
     request_id: str | None = None
     """Recorded on the run.created event so one id correlates client, API and run."""
 
@@ -40,6 +46,8 @@ class StartRunCommand:
                 "project_id": self.project_id,
                 "environment_id": self.environment_id or "",
                 "run_policy_id": self.run_policy_id or "",
+                "plan_id": self.plan_id or "",
+                "plan_version": self.plan_version or "",
             },
         )
 
@@ -82,11 +90,15 @@ async def start_run(
         requested_policy_id=command.run_policy_id,
     )
 
+    plan = await _resolve_plan(uow, command)
+
     run = Run(
         run_id=str(uuid4()),
         project_id=command.project_id,
         environment_id=command.environment_id,
         run_policy_id=policy.policy_id,
+        plan_id=plan.plan_id if plan else None,
+        plan_version=plan.plan_version if plan else None,
     )
     run.transition_to(RunStatus.QUEUED)  # accepted; the worker will pick it up
     await uow.runs.add(run)
@@ -98,6 +110,8 @@ async def start_run(
                 "project_id": run.project_id,
                 "status": run.status.value,
                 "run_policy_id": policy.policy_id,
+                "plan_id": run.plan_id,
+                "plan_version": run.plan_version,
             },
             request_id=command.request_id,
         )
@@ -117,3 +131,29 @@ async def start_run(
     await publish_best_effort(publisher, event)
     await workflows.start_run(run.run_id, run.project_id)
     return StartRunResult(run=run, replayed=False)
+
+
+async def _resolve_plan(uow: UnitOfWork, command: StartRunCommand) -> TestPlan | None:
+    """Pin the plan version now, or run without a plan (exploratory).
+
+    Resolving "latest" happens exactly once, here. If the activity resolved it per
+    episode instead, publishing a new version mid-run would change what the run is
+    being judged by while it is running.
+    """
+    if command.plan_id is None:
+        if command.plan_version is not None:
+            raise NotFoundError("test_plan", command.plan_version)
+        return None
+
+    plan = (
+        await uow.plans.get(command.plan_id, command.plan_version)
+        if command.plan_version is not None
+        else await uow.plans.latest(command.plan_id)
+    )
+    if plan is None:
+        raise NotFoundError("test_plan", f"{command.plan_id}@{command.plan_version or 'latest'}")
+    if plan.project_id != command.project_id:
+        # A plan from another project would run under this project's policy against
+        # another project's expectations.
+        raise NotFoundError("test_plan", plan.plan_id)
+    return plan

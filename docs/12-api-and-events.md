@@ -18,16 +18,16 @@
 - `POST /api/v1/projects/{project_id}/stories`
 
 ### Test plans
-- `POST /api/v1/plans` — crear definición/version inicial; idempotent trigger.
-- `GET /api/v1/plans/{plan_id}`
-- `GET /api/v1/plans/{plan_id}/versions/{version}`
-- `PUT /api/v1/plans/{plan_id}` — crear nueva versión usando `If-Match`/expected version o equivalente.
-- `POST /api/v1/plans/validate` — validación sin ejecución; opcional si CLI puede validar completamente offline.
+- `POST /api/v1/stories/{story_id}/plans` — **implementado (Phase 07)**: compila la historia en una nueva versión inmutable del plan y devuelve el documento portable. La compilación es determinista (sin modelo), así que es rápida y no hay nada que poll-ear. Enviar `plan_id` publica una versión nueva de un plan existente; el servidor asigna `plan_version` incremental.
+- `GET /api/v1/plans/{plan_id}/versions/{version}` — **implementado (Phase 07)**: devuelve el documento portable, no una forma propia de la API. Los mismos bytes se pueden guardar a fichero y volver a importar.
+- `POST /api/v1/plans` (plan inline/importado), `PUT /api/v1/plans/{plan_id}` con `If-Match`, `GET /api/v1/plans/{plan_id}` y `POST /api/v1/plans/validate`: pendientes.
 
 `contracts/test-plan.schema.json` es el contrato portable. Persistir un plan no puede hacerlo imposible de exportar losslessly.
 
+Los planes son inmutables por versión: no existe update. Un run registra `plan_id + plan_version` al crearse y esa referencia no se vuelve a resolver — un run terminado bajo la versión 3 no cambia de significado cuando se publica la 4.
+
 ### Runs
-- `POST /api/v1/runs` — acepta `plan_id + version` o un TestPlan inline válido. Requiere `Idempotency-Key`.
+- `POST /api/v1/runs` — acepta `plan_id + plan_version` (**implementado**) o un TestPlan inline válido (pendiente). Requiere `Idempotency-Key`. Sin `plan_version` se resuelve la última **una sola vez**, al crear el run, y se fija: lo que juzga a un run no puede cambiar mientras corre. Sin `plan_id` el run es exploratorio y su verdict sólo puede ser inconclusive.
   - **RunPolicy resolution (normativo)**: el servidor resuelve la RunPolicy efectiva en este orden: `run_policy_id` del plan → default del Environment → default del Project. Si ninguna resuelve, la request falla con error tipado. Un run nunca arranca sin una RunPolicy resuelta con `allowed_origins`. El run persiste el policy id/version resuelto como provenance.
   - **Inline plan versioning (normativo)**: si el plan inline no trae `plan_version`, el servidor asigna una versión canónica = content-hash del plan normalizado. Ese valor es el que registran run, evidence y FailureBundle (`plan_version` es required en el manifest).
 - `GET /api/v1/runs/{run_id}` — status/verdict/provenance. Opcional `wait_seconds=1..N` para bounded long-poll y `include_steps=false` por defecto.
@@ -37,6 +37,7 @@
 
 **Semántica de los comandos de lifecycle (implementado en Phase 02)**: los tres devuelven `202 Accepted` con `{run_id, accepted}`. Señalan al workflow; **no escriben status**. El status durable cambia cuando el workflow aplica el comando en su siguiente punto seguro, así que un `GET` inmediatamente posterior puede seguir mostrando el estado anterior — eso es correcto, no un bug. Señalar un run ya terminal es un no-op (idempotencia natural).
 - `POST /api/v1/runs/{run_id}/rerun` — nueva ejecución con provenance a run/plan fuente; idempotency key.
+- `GET /api/v1/runs/{run_id}/report` — **implementado (Phase 07)**: reporte construido desde filas durables (run + plan version + criterion results), nunca desde un transcript de modelo. Cada criterio separa `deterministic_observation` de `root_cause_hypothesis`: son claves distintas para que un consumidor pueda filtrar por clave y no por convención.
 - `GET /api/v1/runs/{run_id}/findings`
 - `GET /api/v1/runs/{run_id}/artifacts`
 - `GET /api/v1/runs/{run_id}/events?after=&limit=`

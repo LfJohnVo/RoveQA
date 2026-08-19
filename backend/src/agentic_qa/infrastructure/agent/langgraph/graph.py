@@ -25,6 +25,9 @@ from langgraph.graph import END, START, StateGraph
 
 from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.models import ModelGateway, PlanningRequest
+from agentic_qa.application.services.criterion_verification import (
+    verify_criteria as verify_plan_criteria,
+)
 from agentic_qa.application.services.guarded_browser import ActionDeniedError
 from agentic_qa.domain.agent.state import (
     AgentState,
@@ -33,6 +36,8 @@ from agentic_qa.domain.agent.state import (
     StepRecord,
 )
 from agentic_qa.domain.browser.actions import BrowserAction
+from agentic_qa.domain.qa.test_plan import PlanStep
+from agentic_qa.domain.qa.verification import CriterionResult
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +57,25 @@ class GraphState(TypedDict, total=False):
     safe_point: str | None
     """Set by Checkpoint; the activity turns it into a durable RecoveryPoint."""
 
+    criterion_results: tuple[CriterionResult, ...]
+    """One per plan assertion. The activity persists them and derives the verdict."""
+
 
 def build_agent_graph(
-    *, browser: BrowserGateway, model: ModelGateway, checkpointer: Any = None
+    *,
+    browser: BrowserGateway,
+    model: ModelGateway,
+    checkpointer: Any = None,
+    assertions: tuple[PlanStep, ...] = (),
+    hints: dict[str, str] | None = None,
 ) -> Any:
-    """Compile the graph over the ports it needs. No adapter types appear here."""
+    """Compile the graph over the ports it needs. No adapter types appear here.
+
+    `assertions` are the plan's acceptance criteria. They are evaluated once, at the end
+    of the episode, while the browser still holds the page the run finished on — closing
+    the session first and judging from artifacts afterwards would mean judging a
+    screenshot instead of the application.
+    """
 
     async def observe(state: GraphState) -> GraphState:
         agent = state["agent"]
@@ -172,6 +191,20 @@ def build_agent_graph(
         logger.info("recovery attempt %s for run %s", attempts, agent.run_id)
         return {"agent": agent, "recovery_attempts": attempts, "safe_point": None}
 
+    async def verify_criteria(state: GraphState) -> GraphState:
+        """Judge the plan's acceptance criteria against the page the run ended on."""
+        if not assertions:
+            return {"criterion_results": ()}
+        agent = state["agent"]
+        results = await verify_plan_criteria(
+            assertions,
+            browser=browser,
+            model=model,
+            hints=hints,
+            goal_failure=agent.failure_reason,
+        )
+        return {"criterion_results": results}
+
     async def close_episode(state: GraphState) -> GraphState:
         agent = state["agent"]
         agent.close_episode(
@@ -187,7 +220,7 @@ def build_agent_graph(
 
     def after_verify(state: GraphState) -> str:
         if state.get("pending_action") is None or state.get("last_denied", False):
-            return "close_episode"
+            return "verify_criteria"
         if state.get("last_outcome_succeeded", False):
             return "checkpoint"
         return "recover"
@@ -195,11 +228,11 @@ def build_agent_graph(
     def after_recover(state: GraphState) -> str:
         agent = state["agent"]
         if agent.failure_reason is not None:
-            return "close_episode"
+            return "verify_criteria"
         return "plan"
 
     def after_checkpoint(state: GraphState) -> str:
-        return "close_episode" if state["agent"].goal_reached else "observe"
+        return "verify_criteria" if state["agent"].goal_reached else "observe"
 
     builder: StateGraph[GraphState, Any, GraphState, GraphState] = StateGraph(GraphState)
     builder.add_node("observe", observe)
@@ -208,6 +241,7 @@ def build_agent_graph(
     builder.add_node("verify", verify)
     builder.add_node("checkpoint", checkpoint)
     builder.add_node("recover", recover)
+    builder.add_node("verify_criteria", verify_criteria)
     builder.add_node("close_episode", close_episode)
 
     builder.add_edge(START, "observe")
@@ -217,6 +251,7 @@ def build_agent_graph(
     builder.add_conditional_edges("verify", after_verify)
     builder.add_conditional_edges("recover", after_recover)
     builder.add_conditional_edges("checkpoint", after_checkpoint)
+    builder.add_edge("verify_criteria", "close_episode")
     builder.add_edge("close_episode", END)
 
     return builder.compile(checkpointer=checkpointer)
