@@ -10,11 +10,13 @@ saved to a file and handed back in.
 """
 
 from typing import Any
+from uuid import uuid4
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
 from agentic_qa.application.commands.compile_plan import CompilePlanCommand, compile_plan
 from agentic_qa.application.commands.create_story import CreateStoryCommand, create_story
+from agentic_qa.application.commands.import_plan import ImportPlanCommand, import_plan
 from agentic_qa.application.contracts.test_plan import to_document
 from agentic_qa.application.errors import NotFoundError
 from agentic_qa.domain.qa.test_plan import PlanBudget
@@ -23,6 +25,7 @@ from agentic_qa.interfaces.http.dependencies import UnitOfWorkDep
 from agentic_qa.interfaces.http.schemas import (
     CompilePlanRequest,
     CreateStoryRequest,
+    ImportPlanRequest,
     StoryResponse,
 )
 
@@ -101,3 +104,26 @@ async def read_plan(plan_id: str, plan_version: str, uow: UnitOfWorkDep) -> dict
     if plan is None:
         raise NotFoundError("test_plan", f"{plan_id}@{plan_version}")
     return to_document(plan)
+
+
+@router.post("/plans", status_code=status.HTTP_201_CREATED)
+async def post_plan_document(
+    payload: ImportPlanRequest, uow: UnitOfWorkDep, response: Response
+) -> dict[str, Any]:
+    """Import a portable plan document as an immutable version.
+
+    Naturally idempotent: the version is the content hash, so re-submitting the same
+    document returns the version that already exists (200) instead of creating a
+    second one (201). A client that lost the first response can retry without a key.
+    """
+    document = dict(payload.plan)
+    if payload.plan_version is not None:
+        document["plan_version"] = payload.plan_version
+
+    result = await import_plan(
+        uow,
+        ImportPlanCommand(document=document, plan_id=payload.plan_id or str(uuid4())),
+    )
+    if not result.created:
+        response.status_code = status.HTTP_200_OK
+    return to_document(result.plan)

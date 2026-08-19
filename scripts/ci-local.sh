@@ -24,6 +24,9 @@ docker compose --profile gates run --rm --quiet-pull backend-tests sh -c "
   pytest -q
 "
 
+echo "== cli: eslint, typecheck, contract tests =="
+docker compose --profile gates run --rm --quiet-pull cli-tests
+
 echo "== frontend: eslint, typecheck, vitest, build =="
 docker compose --profile gates run --rm --quiet-pull frontend-tests
 

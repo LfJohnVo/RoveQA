@@ -228,3 +228,18 @@ class CompilePlanRequest(BaseModel):
     max_actions: int | None = Field(default=None, ge=1, le=10_000)
     max_duration_seconds: int | None = Field(default=None, ge=1, le=172_800)
     max_model_calls: int | None = Field(default=None, ge=0, le=10_000)
+
+
+class ImportPlanRequest(BaseModel):
+    """A portable plan document submitted directly, as the CLI does."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan: dict[str, Any] = Field()
+    plan_id: str | None = Field(default=None, min_length=1, max_length=200)
+    """Absent means a new plan identity is minted. Identity is never derived from the
+    content, or two unrelated plans with the same steps would merge into one."""
+
+    plan_version: str | None = Field(default=None, min_length=1, max_length=100)
+    """Absent means the content hash, which is what makes re-submitting the same
+    document idempotent (docs/12)."""
