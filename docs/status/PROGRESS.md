@@ -1,6 +1,6 @@
 # Progress
 
-Última actualización: 2026-08-18 — Phase 05 completada; Phases 00-04 completadas y blueprint auditado (ver HANDOFF).
+Última actualización: 2026-08-18 — Phase 06 completada; Phases 00-05 completadas, pipeline containerizado y blueprint auditado (ver HANDOFF).
 
 | Phase | Status | Evidence |
 |---|---|---|
@@ -10,8 +10,8 @@
 | 03 | DONE | 3/3 gates PASS: cliente reconecta y recupera baseline durable desde `run_events` (REST + WebSocket con catch-up antes del live), `FLUSHALL` + restart de Redis no cambian status ni historial confirmados, locks expiran/renuevan con ownership token verificado por Lua. 173 tests backend; e2e containerizado con 3 eventos en el log durable y en el stream |
 | 04 | DONE | 5/5 gates PASS: sin JS arbitrario (action set cerrado), origin policy aplicada en dominio y sobre Chromium real, recovery tras crash real con storage state, manifests con provenance verificable (hash/size/streaming), y cross-run imposible por construcción. 247 tests incl. 31 de browser contra Chromium; `ci-local.sh` all green |
 | 05 | DONE | 3/3 gates PASS: run reanuda desde el último safe checkpoint (worker muere en la página 3, el reemplazo continúa desde ahí contra el checkpointer PostgreSQL real), contexto del planner acotado (500 steps → ventana de 12), y sin side effect duplicado en la crash window. 274 tests; `RunEpisodeActivity` ejecuta el graph y persiste el RecoveryPoint |
-| 06 | NOT_STARTED | desbloqueada por 05 |
-| 07 | BLOCKED | requiere 05-06 |
+| 06 | DONE | 3/3 gates PASS: output inválido del modelo nunca llega a Playwright (graph real + browser recorder: prosa, acción inexistente, click sin target y completion vacía → 0 acciones ejecutadas), límite de concurrencia demostrado por endpoint contra Redis real e in-memory (peak in-flight ≤ capacity con 6 llamadas y con dos clientes compartiendo presupuesto), y agent system test con fake model obligatorio + modelo real opcional (skip sin `VLLM_BASE_URL`). 324 tests; e2e en la imagen worker: HTTP real al endpoint → schema → policy → Chromium → checkpoint |
+| 07 | NOT_STARTED | desbloqueada por 06 |
 | 08 | BLOCKED | requiere 02 + 07 contracts |
 | 09 | BLOCKED | requiere 07 |
 | 10 | BLOCKED | requiere APIs de 02/07; CLI 08 recomendado para agent workflow |
@@ -23,5 +23,6 @@
 Statuses permitidos: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 
 Notas:
+- 2026-08-18 (Phase 06): dos defectos encontrados al ejecutar, no al revisar. (1) Una acción denegada por RunPolicy escapaba como excepción desde el graph, lo que hacía que Temporal reintentara el episodio como fallo de infraestructura hasta agotar el timeout de 2h — contra ADR 0009. Ahora se registra como `StepOutcome.DENIED` y cierra el episodio sin replanificar. (2) El checkpointer de LangGraph reconstruía cualquier tipo nombrado en la fila y sólo avisaba; un tipo fuera de la lista vuelve como `dict` y rompe el resume en silencio. Añadido `CHECKPOINTED_TYPES` explícito + `LANGGRAPH_STRICT_MSGPACK=true` en worker y suite, con test de round-trip verificado por mutación.
 - 2026-08-18: auditoría de blueprint (6 dimensiones) previa a Phase 00. 2 BLOCKERs corregidos (label observed/model_derived en MemoryContext; regla de resolución de RunPolicy) y ~15 IMPORTANT (contratos versionados, Verdict domain value, ADR 0009 retry ownership/workflow shape/checkpoints, semántica de origins, credential handling, identity model v1). Ver commit `docs(blueprint): fix audit blockers...`.
 - Blueprint update previo: adaptive memory graph design para Phase 09 (Graphiti + FalkorDB como proyección reconstruible; implementación no iniciada).

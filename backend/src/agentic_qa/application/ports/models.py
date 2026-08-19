@@ -31,12 +31,29 @@ class PlanningRequest:
 
 @dataclass(frozen=True)
 class PlannedAction:
-    """The planner's decision. `action=None` means the goal needs nothing more."""
+    """The planner's decision.
+
+    Three outcomes, deliberately distinguishable:
+
+    - `action` set: do this next.
+    - `action=None, failure=None`: the planner says nothing more is needed.
+    - `failure` set: no decision could be obtained at all.
+
+    Collapsing the last two is how a dead model server turns into a run that reports
+    success. A gateway that could not reach a model, or got output it could not use,
+    must say so here rather than return an empty decision (docs/08).
+    """
 
     action: BrowserAction | None
     rationale: str = ""
     model_derived: bool = True
     """Always true for planner output: a decision is a hypothesis, not an observation."""
+
+    failure: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.failure is not None and self.action is not None:
+            raise ValueError("a failed decision cannot also carry an action")
 
 
 class ModelGateway(Protocol):

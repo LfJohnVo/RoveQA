@@ -95,12 +95,21 @@ services:
   worker:
     build:
       context: ./backend
-      target: runtime
+      target: worker
     command: ["python", "-m", "agentic_qa.infrastructure.workflows.temporal.worker"]
     environment:
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
       REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233
+      # Absent by default: without a model endpoint the worker still runs and reports
+      # that no agent runtime is configured, instead of faking decisions.
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-}
+      VLLM_MODEL: ${VLLM_MODEL:-}
+      MODEL_MAX_CONCURRENCY: ${MODEL_MAX_CONCURRENCY:-2}
+      MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-60}
+      # A checkpoint may only rebuild the types we listed. Anything else in the
+      # checkpoint table is refused instead of imported.
+      LANGGRAPH_STRICT_MSGPACK: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,6 +133,9 @@ services:
       POSTGRES_TEST_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
       REDIS_TEST_URL: redis://redis:6379/15
       TEMPORAL_ADDRESS: temporal:7233
+      # Same regime as the worker, so a type missing from the checkpoint allowlist
+      # fails the suite instead of somebody's recovery.
+      LANGGRAPH_STRICT_MSGPACK: "true"
     volumes:
       # Source is mounted so a change is tested without a rebuild; the virtualenv
       # lives at /opt/venv precisely so this mount cannot hide it.
@@ -165,15 +177,33 @@ services:
     command: ["sh", "-c", "corepack enable pnpm && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test && pnpm build"]
 
   # Heavy inference stays behind profiles so CPU-only development works.
-  # Model/image pinning happens in Phase 06 (generation) and Phase 09 (embeddings)
-  # after validating GPU compatibility on the target host.
+  # The model tag is configuration, not a constant: it depends on the GPU on the host
+  # actually running this, so it is set in .env rather than pinned here.
   vllm:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
     profiles: ["gpu"]
-    environment:
-      VLLM_MODEL: ${VLLM_MODEL:-configure-me}
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-16384}"
+      # Guided decoding is what makes `response_format: json_schema` enforceable at the
+      # server instead of a request the model may ignore.
+      - "--guided-decoding-backend"
+      - "${VLLM_GUIDED_BACKEND:-xgrammar}"
+    volumes:
+      - ./data/models:/root/.cache/huggingface
+    # 8100 on the host: 8000 already belongs to the API, and a port clash would only
+    # show up when someone enables this profile.
     ports:
-      - "8000:8000"
+      - "8100:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
 
   vllm-embed:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}

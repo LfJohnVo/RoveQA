@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.models import ModelGateway, PlanningRequest
+from agentic_qa.application.services.guarded_browser import ActionDeniedError
 from agentic_qa.domain.agent.state import (
     AgentState,
     EpisodeSummary,
@@ -44,6 +45,9 @@ class GraphState(TypedDict, total=False):
     pending_action: BrowserAction | None
     last_outcome_succeeded: bool
     last_detail: str
+    last_denied: bool
+    """Refused by policy. Distinguished from a failure because it must not be retried."""
+
     recovery_attempts: int
     safe_point: str | None
     """Set by Checkpoint; the activity turns it into a durable RecoveryPoint."""
@@ -77,7 +81,12 @@ def build_agent_graph(
             # ended unresolved — reporting success here would be claiming a verdict
             # nobody verified.
             last_step = agent.recent_steps[-1] if agent.recent_steps else None
-            if last_step is not None and last_step.outcome is StepOutcome.FAILED:
+            if decision.failure is not None:
+                # No decision was obtained: unreachable model, unusable output, no
+                # capacity. The episode ends unresolved instead of inventing a step.
+                agent.failure_reason = decision.failure
+                agent.goal_reached = False
+            elif last_step is not None and last_step.outcome is StepOutcome.FAILED:
                 agent.failure_reason = (
                     last_step.detail or "the last action failed and no recovery was proposed"
                 )
@@ -89,11 +98,23 @@ def build_agent_graph(
     async def act(state: GraphState) -> GraphState:
         action = state.get("pending_action")
         if action is None:
-            return {"last_outcome_succeeded": True, "last_detail": ""}
-        outcome = await browser.execute(action)
+            return {"last_outcome_succeeded": True, "last_detail": "", "last_denied": False}
+        try:
+            outcome = await browser.execute(action)
+        except ActionDeniedError as denied:
+            # A policy refusal is a fact about the run, not a malfunction. Letting it
+            # escape would surface as an activity crash and let Temporal retry the
+            # episode, re-proposing an action the policy will refuse again (ADR 0009).
+            logger.warning("policy denied %s: %s", action.type, denied.decision.detail)
+            return {
+                "last_outcome_succeeded": False,
+                "last_detail": denied.decision.detail,
+                "last_denied": True,
+            }
         return {
             "last_outcome_succeeded": outcome.succeeded,
             "last_detail": outcome.detail,
+            "last_denied": False,
         }
 
     async def verify(state: GraphState) -> GraphState:
@@ -108,14 +129,28 @@ def build_agent_graph(
             return {"agent": agent}
 
         succeeded = state.get("last_outcome_succeeded", False)
+        denied = state.get("last_denied", False)
+        if denied:
+            outcome = StepOutcome.DENIED
+        elif succeeded:
+            outcome = StepOutcome.SUCCEEDED
+        else:
+            outcome = StepOutcome.FAILED
+
         agent.record_step(
             StepRecord(
                 index=agent.step_index + 1,
                 intent=action.intent,
-                outcome=StepOutcome.SUCCEEDED if succeeded else StepOutcome.FAILED,
+                outcome=outcome,
                 detail=state.get("last_detail", ""),
             )
         )
+        if denied:
+            # Stop rather than re-plan. Letting the agent look for another way to do
+            # what the policy just refused is exactly the behaviour the policy exists
+            # to prevent.
+            agent.failure_reason = f"policy denied {action.type}: {state.get('last_detail', '')}"
+            agent.goal_reached = False
         return {"agent": agent}
 
     async def checkpoint(state: GraphState) -> GraphState:
@@ -151,7 +186,7 @@ def build_agent_graph(
         return {"agent": agent, "safe_point": "episode_closed"}
 
     def after_verify(state: GraphState) -> str:
-        if state.get("pending_action") is None:
+        if state.get("pending_action") is None or state.get("last_denied", False):
             return "close_episode"
         if state.get("last_outcome_succeeded", False):
             return "checkpoint"

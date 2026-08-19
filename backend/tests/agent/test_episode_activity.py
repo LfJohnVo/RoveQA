@@ -33,7 +33,7 @@ from agentic_qa.infrastructure.persistence.postgres.engine import (
 from agentic_qa.infrastructure.persistence.postgres.models import Base
 from agentic_qa.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 from agentic_qa.infrastructure.workflows.temporal.activities import RunActivities
-from agentic_qa.infrastructure.workflows.temporal.contracts import EpisodeParams
+from agentic_qa.infrastructure.workflows.temporal.contracts import EpisodeOutcome, EpisodeParams
 from tests.conftest import postgres_test_dsn
 from tests.fakes.agent import RecordingBrowserGateway, ScriptedModelGateway
 
@@ -167,7 +167,13 @@ def test_without_a_configured_runtime_the_activity_says_so_instead_of_pretending
 
 
 def test_the_activity_enforces_the_runs_policy_on_the_browser() -> None:
-    """The runner wraps the gateway, so an off-origin action cannot reach the browser."""
+    """The runner wraps the gateway, so an off-origin action cannot reach the browser.
+
+    The denial ends the episode instead of escaping as an exception. If it escaped,
+    Temporal would see an infrastructure failure and retry the activity — re-proposing
+    an action the policy will refuse again, for as long as the retry budget allows
+    (ADR 0009: Temporal retries infrastructure failures, not decisions).
+    """
     browser = RecordingBrowserGateway(url=f"{ALLOWED_ORIGIN}/page/1")
     off_origin = BrowserAction(
         type=BrowserActionType.NAVIGATE,
@@ -175,18 +181,18 @@ def test_the_activity_enforces_the_runs_policy_on_the_browser() -> None:
         target=ActionTarget(url="https://evil.test/steal"),
     )
 
-    async def main() -> list[str]:
+    async def main() -> tuple[list[str], EpisodeOutcome]:
         async with prepared_container(browser, [off_origin]) as (container, run_id):
-            with pytest.raises(Exception):  # noqa: B017 - denial surfaces as an error
-                await ActivityEnvironment().run(
-                    RunActivities(container).run_episode,
-                    EpisodeParams(run_id=run_id, episode_index=0),
-                )
-            return browser.executed
+            outcome = await ActivityEnvironment().run(
+                RunActivities(container).run_episode,
+                EpisodeParams(run_id=run_id, episode_index=0),
+            )
+            return browser.executed, outcome
 
     try:
-        executed = run_with_compatible_loop(main)
+        executed, outcome = run_with_compatible_loop(main)
     except (OSError, psycopg.OperationalError) as error:
         pytest.skip(f"PostgreSQL not reachable: {error}")
 
     assert executed == []  # the denied action never reached the browser
+    assert outcome.more_work is False

@@ -13,6 +13,17 @@ Crear recovery point después de eventos semánticamente significativos: login v
 ### Checkpoint model reconciliation
 El checkpointer de LangGraph (PostgreSQL) persiste el estado del graph en cada superstep y es un detalle de infraestructura. La tabla `checkpoints` del dominio almacena filas `RecoveryPoint` que referencian un checkpoint id de LangGraph (`CheckpointReference`) más datos de recovery del browser (storage state ref, URL, page fingerprint, last verified action). Resume = cargar el último checkpoint LangGraph, verificar preconditions contra el `RecoveryPoint` más reciente y aplicar verify-before-retry a cualquier action dentro de la uncertainty window. Ver ADR 0009.
 
+### Checkpoint deserialization allowlist
+`CHECKPOINTED_TYPES` (en `infrastructure/agent/langgraph/checkpointer.py`) declara exactamente qué
+tipos puede reconstruir un checkpoint, y `LANGGRAPH_STRICT_MSGPACK=true` está activo en worker y en
+la suite. El default permisivo de la librería reconstruye cualquier tipo nombrado en la fila y sólo
+avisa: eso deja que quien escriba en la tabla de checkpoints nombre cualquier tipo importable, y
+convierte un futuro cambio de default en un resume roto.
+
+Un tipo ausente de la lista no lanza: vuelve como `dict` y rompe el resume más adelante. Por eso el
+round-trip se testea directamente (`tests/agent/test_checkpoint_serialization.py`) y no sólo a
+través de un resume.
+
 ## Retry ownership
 Exactamente una capa posee cada retry loop (ver ADR 0009):
 - **Temporal** reintenta sólo fallos de infraestructura (worker muerto, I/O transitorio) y siempre reanuda a través del checkpoint LangGraph + verify-before-retry; nunca re-ejecuta acciones semánticas a ciegas.

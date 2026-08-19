@@ -7,10 +7,13 @@ dependencies = [
     "alembic>=1.19.1",
     "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
+    # Runtime, not just test tooling: the vLLM adapter talks OpenAI-compatible HTTP.
+    "httpx>=0.28.1",
     "langgraph>=1.2.11",
     "langgraph-checkpoint-postgres>=3.1.2",
     "playwright>=1.62.0",
     "psycopg[binary,pool]>=3.3.4",
+    "pydantic>=2.12.4",
     "redis>=8.1.0",
     "sqlalchemy[asyncio]>=2.0",
     "temporalio>=1.31.0",
@@ -23,7 +26,8 @@ dev = [
     "mypy>=1.14",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
-    "httpx>=0.28.1",
+    # Required by starlette's TestClient, which warns (and with filterwarnings=error,
+    # fails) when only httpx 0.x is available. Test-only: the vLLM adapter uses httpx.
     "httpx2>=2.12.0",
     "python-multipart>=0.0.32",
 ]

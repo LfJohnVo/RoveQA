@@ -3,10 +3,10 @@
 The worker is replaceable. Nothing about a run lives only in its memory — status and
 progress are durable in PostgreSQL and Temporal, so killing it loses no run.
 
-The agent runtime is deliberately not wired here yet: executing an episode needs a
-ModelGateway, and the only implementation is the deterministic test double. Phase 06
-brings the vLLM adapter and passes it into the container; until then the activity
-reports that no runtime is configured rather than running a scripted pretence.
+The agent runtime is wired here and only here. The API process never loads Playwright
+or calls a model; it answers questions about runs. If no model endpoint is configured,
+the worker still starts and the activity reports that no runtime is available, rather
+than running a scripted pretence.
 """
 
 import asyncio
@@ -15,7 +15,7 @@ import logging
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from agentic_qa.bootstrap.container import build_container
+from agentic_qa.bootstrap.container import build_container, with_agent_runtime
 from agentic_qa.bootstrap.settings import Settings
 from agentic_qa.infrastructure.workflows.temporal.activities import RunActivities
 from agentic_qa.infrastructure.workflows.temporal.contracts import TASK_QUEUE
@@ -36,7 +36,7 @@ def build_worker(client: Client, activities: RunActivities, task_queue: str = TA
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = Settings.from_env()
-    container = build_container(settings)
+    container = with_agent_runtime(build_container(settings), settings)
     client = await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
     worker = build_worker(client, RunActivities(container), settings.temporal_task_queue)
     logger.info("worker listening on %s", settings.temporal_task_queue)

@@ -5,8 +5,9 @@ Interfaces can stay a protocol translator and never import a concrete adapter.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+import httpx
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 from temporalio.client import Client
@@ -35,11 +36,14 @@ class Container:
     """Realtime fan-out. Absent means clients fall back to durable REST catch-up."""
 
     episodes: EpisodeRunner | None = None
-    """Absent until a model gateway exists (Phase 06); the worker then says so
-    honestly instead of pretending to run an agent."""
+    """Absent when no model endpoint is configured; the worker then says so honestly
+    instead of pretending to run an agent."""
 
     redis: Redis | None = None
     """Owned connection to Redis, closed with the container."""
+
+    model_http: httpx.AsyncClient | None = None
+    """Connection pool for model endpoints, closed with the container."""
 
     engine: AsyncEngine | None = None
     """Present only for containers that own a database connection pool.
@@ -53,6 +57,8 @@ class Container:
             await self.engine.dispose()
         if self.redis is not None:
             await self.redis.aclose()
+        if self.model_http is not None:
+            await self.model_http.aclose()
 
 
 def build_container(settings: Settings) -> Container:
@@ -70,10 +76,25 @@ def build_container(settings: Settings) -> Container:
 
 async def connect_workflows(container: Container, settings: Settings) -> Container:
     client = await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
-    return Container(
-        unit_of_work=container.unit_of_work,
-        workflows=TemporalWorkflowGateway(client, settings.temporal_task_queue),
-        events=container.events,
-        redis=container.redis,
-        engine=container.engine,
+    return replace(
+        container, workflows=TemporalWorkflowGateway(client, settings.temporal_task_queue)
     )
+
+
+def with_agent_runtime(container: Container, settings: Settings) -> Container:
+    """Add the agent runtime. Worker-only: the API never plans or drives a browser.
+
+    Imported lazily so the API process does not load Playwright and LangGraph just to
+    answer a status query.
+    """
+    from agentic_qa.bootstrap.agent_runtime import build_episode_runner, build_model_router
+
+    router = build_model_router(settings)
+    if router is None:
+        return container
+    if container.redis is None:
+        raise RuntimeError("the agent runtime needs Redis to bound model concurrency")
+
+    http = httpx.AsyncClient()
+    runner = build_episode_runner(settings, router=router, redis=container.redis, http=http)
+    return replace(container, episodes=runner, model_http=http)

@@ -22,6 +22,16 @@ RUN uv sync --frozen --no-dev
 CMD ["python", "-c", "import agentic_qa; print(f'agentic_qa {agentic_qa.__version__} image OK')"]
 
 
+# Worker stage: the runtime plus a real Chromium.
+#
+# Only the worker drives a browser, so the API image stays free of ~400MB of browser
+# and system libraries it would never open.
+FROM runtime AS worker
+RUN playwright install --with-deps chromium
+
+CMD ["python", "-m", "agentic_qa.infrastructure.workflows.temporal.worker"]
+
+
 # Development/test stage: dev dependencies plus a real Chromium.
 #
 # Running the suite here rather than on the host is what removes the Windows-only

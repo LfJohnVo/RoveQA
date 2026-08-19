@@ -1,136 +1,147 @@
 # Session Handoff
 
-Última sesión: 2026-08-18 (Opus 5). **Phases 02, 03, 04 y 05 completadas** en esta sesión.
+Última sesión: 2026-08-18 (Opus 5). **Phases 02, 03, 04, 05 y 06 completadas** en esta sesión, más la migración del pipeline a contenedores.
 
 # Current Phase
 
-06 — vLLM model adapter/router (`plans/phase-06-vllm-router.md`). Phase 05 está DONE con sus 3 gates PASS.
+07 — Story workflow (`plans/phase-07-*.md`). Phase 06 está DONE con sus 3 gates PASS.
 
 # Phase Status
 
-- Phases 00, 01, 02, 03, 04, 05: **DONE**.
-- Phase 06: **NOT_STARTED**. No existe adapter de vLLM ni router de modelos; el único `ModelGateway` es el doble determinista de tests.
+- Phases 00, 01, 02, 03, 04, 05, 06: **DONE**.
+- Phase 07: **NOT_STARTED**. Hoy un run ejecuta un episodio con un goal por defecto; no hay derivación desde `UserStory` ni verdict real.
 
 # Last Stable State
 
 - Git branch `main`, working tree limpio salvo esta actualización de docs.
-- `bash scripts/ci-local.sh` → **all green**: 274 tests backend, 1 frontend, migraciones sin drift, build frontend, compose config.
-- Stack corriendo: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `f9911e78285a`.
+- `bash scripts/ci-local.sh` → **all green**: 324 tests backend (1 skip), 1 frontend, migraciones sin drift, build frontend, compose config.
+- Stack corriendo: postgres, redis, temporal, temporal-ui, falkordb, api, worker. Schema en `f9911e78285a` (Phase 06 no añadió tablas).
+- Todo gate corre en contenedores. En el host sólo hacen falta `docker compose` y `bash`.
 
 # Architecture Decisions Made
 
-Phase 05:
+Phase 06:
 
-- **Los nodos deciden, la activity persiste.** El graph marca `safe_point`; el `RecoveryPoint` durable lo escribe la activity, donde existe el checkpoint id real. Así el código replayable no hace escrituras a base de datos.
-- **`recovery_points`, no `checkpoints`**: el saver de LangGraph posee una tabla con ese nombre exacto y colisionaban (`column "thread_id" does not exist`). `alembic/env.py` declara además las tablas que la librería gestiona, para que autogenerate no proponga borrarlas.
-- **Recover es el único dueño del retry semántico** (ADR 0009), con tope de intentos: un step que nunca funciona cierra el episodio en vez de girar.
-- **El silencio del planner no es verificación.** Si una acción falló y el planner luego no propone nada, el episodio se cierra como fallido con el motivo, no como éxito. (Era un bug real, encontrado por un test.)
-- **Puerto `EpisodeRunner`**: la activity resuelve la policy, pide el episodio y anota el resultado; qué motor lo ejecuta queda detrás del port.
-- **El runner recibe el browser ya envuelto en la policy**, así que no puede pasar un gateway sin guardia al graph.
-- **El worker no configura agent runtime todavía**: ejecutar un episodio necesita un `ModelGateway` real y el único que existe es el doble de tests. La activity dice "no runtime configurado" en vez de simular. Phase 06 lo suministra.
-- **Windows: psycopg async exige `SelectorEventLoop`, Playwright exige `Proactor`** (verificado, no supuesto). Como el graph depende del *port* del browser, la durabilidad se prueba con un doble y el browser real se prueba aparte; en Linux comparten loop.
+- **El Domain nombra capability, nunca modelos.** `TaskType` → `ModelCapability` → endpoint. `ModelRouter` se indexa por capability, así que Phase 09 (embeddings, `POOLING`) y Phase 11 (AirLLM, `DEEP`) registran endpoints sin tocar nada por encima. Una task sin endpoint falla tipada en vez de degradarse al modelo fast: una respuesta de root-cause servida por el modelo rápido parece bien y vale mucho menos.
+- **Una decisión no obtenida es un tercer resultado.** `PlannedAction` distingue "haz esto" / "no hace falta nada más" / `failure`. Colapsar los dos últimos es cómo un servidor de modelos caído se convierte en un run que reporta éxito.
+- **Fallo tipado, no excepción.** El gateway devuelve `PlannedAction(failure=...)` en vez de lanzar. Lanzar aparecería como crash de activity y dejaría que Temporal reintentara el episodio como fallo de infraestructura (ADR 0009).
+- **`side_effect` lo decide el tipo de acción, no el modelo.** Todo lo que está fuera de `READ_ONLY_ACTIONS` se trata como state-changing aunque el modelo diga `false`; el flag sólo sirve para escalar (una navegación que confirma algo). Un modelo persuadido por contenido de página puede proponer mal una acción legal, nunca una ilegal.
+- **El delimitador del prompt es una pista, no la frontera.** El texto de página puede intentar cerrar su propio bloque. Lo que contiene a un modelo persuadido está abajo y no se negocia: schema cerrado + `GuardedBrowserGateway` + RunPolicy.
+- **Retries de transporte sólo en el cliente** (timeout, connection error, 5xx), acotados por `InferenceBudget`. Un 4xx no se reintenta: es una request que construimos mal y reenviarla manda los mismos bytes. Output inválido tampoco se reintenta ciegamente.
+- **El circuit breaker cuenta fallos de transporte, no respuestas malas.** Un modelo que contesta mal está contestando; tumbar el endpoint por un problema de prompt no ayuda a nadie.
+- **La concurrencia pertenece al servidor, no al llamador.** Semáforo Redis por endpoint, así que dos workers comparten el presupuesto de una GPU. Saturación sostenida → `ModelUnavailableError` con deadline; una cola sin deadline es un run que no termina y no dice por qué.
+- **Una acción denegada por policy cierra el episodio, no se replanifica.** Pedirle al modelo otra ruta después de un rechazo es exactamente el comportamiento que la policy existe para impedir. `StepOutcome.DENIED` (que hasta ahora no producía nadie) distingue el caso de un fallo.
+- **El allowlist de deserialización del checkpoint es explícito.** `CHECKPOINTED_TYPES` + `LANGGRAPH_STRICT_MSGPACK=true`. El default de la librería reconstruye cualquier tipo nombrado en la fila y sólo avisa.
+- **El worker es el único que carga Playwright y modelo.** La API responde preguntas sobre runs; su imagen (`target: runtime`) no lleva Chromium. El worker usa `target: worker`.
 
 # Files Created
 
-Backend (Phase 05):
+Backend (Phase 06):
 
-- `domain/agent/state.py`, `domain/runs/recovery.py`
-- `application/ports/checkpoints.py`, `models.py`, `episodes.py`
-- `infrastructure/agent/langgraph/`: `checkpointer.py`, `graph.py`, `episode_runner.py`
-- `alembic/versions/f9911e78285a_phase_05_recovery_points.py`
-- Tests: `tests/agent/{test_state_and_recovery,test_checkpointer,test_graph,test_graph_resume,test_episode_activity}.py`, `tests/fakes/agent.py`
+- `domain/inference/tasks.py` — `TaskType`, `ModelCapability`, `InferenceBudget`.
+- `infrastructure/inference/`: `router.py`, `schemas.py`, `prompts.py`, `circuit.py`, `metrics.py`, `errors.py`
+- `infrastructure/inference/vllm/`: `client.py` (transporte, timeouts, retry, circuito, semáforo, métricas), `gateway.py` (`ModelGateway`).
+- `bootstrap/agent_runtime.py` — wiring worker-only de modelo + browser + checkpointer.
+- Tests: `tests/inference/{test_schemas,test_router,test_client,test_gateway,test_concurrency,test_real_model}.py`, `tests/agent/test_checkpoint_serialization.py`
 
 # Files Modified
 
-- `infrastructure/workflows/temporal/{activities,contracts,worker}.py`: `run_episode` real, `EpisodeParams.goal`, nota de wiring pendiente.
-- `bootstrap/container.py`: campo `episodes`.
-- `infrastructure/persistence/postgres/*` y `tests/fakes/*`: repositorio de recovery points.
-- `alembic/env.py`: tablas propiedad de LangGraph excluidas.
-- `docs/11-data-and-artifacts.md`: renombrado documentado.
-- `backend/pyproject.toml`: `langgraph`, `langgraph-checkpoint-postgres`, `psycopg[binary,pool]`.
+- `application/ports/models.py`: `PlannedAction.failure` con invariante (una decisión fallida no lleva acción).
+- `infrastructure/agent/langgraph/graph.py`: el nodo `plan` distingue fallo de "nada que hacer"; `act` captura `ActionDeniedError`; `verify` registra `DENIED` y cierra.
+- `infrastructure/agent/langgraph/checkpointer.py`: `CHECKPOINTED_TYPES` + `build_serializer()`.
+- `bootstrap/{settings,container}.py`: config de modelo, `with_agent_runtime`, cierre del cliente HTTP.
+- `infrastructure/workflows/temporal/worker.py`: cablea el runtime.
+- `backend/Dockerfile`: stage `worker` (runtime + Chromium).
+- `compose.yaml`: `worker` en el stage nuevo con config de modelo y `LANGGRAPH_STRICT_MSGPACK`; `vllm` con `--model`/guided decoding, volumen de modelos, GPU y puerto 8100 (8000 ya es de la API).
+- `backend/pyproject.toml`: `httpx` y `pydantic` pasan a dependencias de runtime.
+- `.env.example`, `docs/05`, `docs/06`, `docs/08`.
 
 # Database/Migrations State
 
-- Migraciones: … → `6c4d6570f65c` → **`f9911e78285a`** (`recovery_points`). `alembic check` limpio.
-- Tablas propias: projects, environments, run_policies, user_stories, acceptance_criteria, runs, run_events, recovery_points, idempotency_records. LangGraph crea las suyas con `setup()`.
+- Sin migraciones nuevas en Phase 06. Head sigue en **`f9911e78285a`**; `alembic check` limpio.
 
 # Tests Executed
 
 ```
-cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
-cd backend && uv run alembic upgrade head && uv run alembic check
 bash scripts/ci-local.sh
-graphify . --code-only
+docker compose --profile gates run --rm backend-tests pytest
+docker compose --profile gates run --rm backend-tests pytest tests/inference/test_concurrency.py -v
+docker compose run --rm -v <scratch>:/check worker python /check/wiring_check.py
+docker compose exec -T api python  # e2e por la API real
 ```
 
 # Exact Test Results
 
-- **274 tests backend passed** (0 failed, warnings-as-errors activo):
-  - `tests/domain` 59 · `tests/contracts` 80 · `tests/application` 21 · `tests/http` 29 · `tests/browser` 31 · `tests/agent` 26 · `tests/integration` 16 · `tests/architecture` 10 · `tests/test_health.py` 2
-- ruff "All checks passed!"; mypy strict "no issues found in 155 source files"; `alembic check` sin drift.
-- Frontend: eslint OK, tsc OK, vitest 1 passed, build OK. `ci-local.sh`: "ci-local: all green".
+- **324 passed, 1 skipped** (el skip es el test opcional contra modelo real, sin `VLLM_BASE_URL`).
+  - `tests/inference` 48 · `tests/domain` 63 · `tests/contracts` 80 · `tests/application` 21 · `tests/http` 29 · `tests/browser` 31 · `tests/agent` 27 · `tests/integration` 16 · `tests/architecture` 10 · `test_health` 2
+- ruff "All checks passed!"; mypy strict "no issues found in 173 source files"; `alembic check` sin drift.
+- `ci-local: all green`. Frontend: eslint, tsc, vitest 1 passed, build OK.
+- e2e por la API con el stack reconstruido: `run: completed inconclusive`, eventos `['run.created', 'run.status.changed', 'run.status.changed']`.
+- e2e en la imagen `worker` con un endpoint OpenAI-compatible de stub: 3 llamadas al modelo (navigate → click → finished), Chromium real, `safe_point=episode_closed` con checkpoint id.
 
-# Acceptance Gates (Phase 05)
+# Acceptance Gates (Phase 06)
 
 | Gate | Resultado |
 | --- | --- |
-| Run retoma desde último safe checkpoint | **PASS** (3 tests: el worker muere en la página 3 y el reemplazo continúa desde ahí sin repetir 1 y 2; el estado sobrevive a una conexión nueva; la activity persiste el RecoveryPoint con el checkpoint id real) |
-| Active context no crece linealmente con steps | **PASS** (3 tests: ventana de 12 acotada, 500 steps → 10 summaries, y el planner nunca recibe más que la ventana) |
-| No duplicate side effect en crash window test | **PASS** (2 tests: el efecto que aterrizó antes del crash se observa en vez de repetirse — exactamente un registro) |
+| Invalid model output no llega a Playwright | **PASS** (graph real + browser recorder: prosa en vez de JSON, `action_type: evaluate`, click sin target y completion vacía → `executed == []` y episodio cerrado con motivo. Más: una acción propuesta por el modelo sigue pasando por la RunPolicy) |
+| Concurrency limit demostrado | **PASS** (8 tests contra semáforo in-memory y Redis real: con capacity 1 y 2, 6 llamadas concurrentes nunca superan el pico declarado; dos clientes independientes comparten el presupuesto del endpoint; saturación con deadline reporta `ModelUnavailableError`) |
+| Agent system test con modelo real opcional y fake obligatorio | **PASS** (fake obligatorio: `tests/inference/test_gateway.py` sobre el graph completo y `tests/agent/test_episode_activity.py` sobre la activity; real opcional: `tests/inference/test_real_model.py`, skip sin endpoint configurado) |
 
 # Known Issues
 
-- **El worker no ejecuta episodios todavía** porque no hay `ModelGateway` real (Phase 06). Es una decisión explícita, no un olvido: la activity lo reporta.
-- El `RecoveryPoint` que escribe la activity lleva `browser.url` vacío: el graph aún no devuelve la URL observada en el resultado del episodio. Rellenarlo es trabajo de Phase 06/07 cuando el episodio tenga navegación real.
-- `more_work` siempre es `False`: un episodio por goal. La planificación multi-episodio llega con el workflow de historias (Phase 07).
-- Windows: conflicto de event loops ya descrito; los tests que combinan checkpointer y browser en un proceso no existen (y en Linux no harían falta).
+- **Sin GPU disponible en esta máquina**: el path del modelo real está probado contra un servidor OpenAI-compatible de stub y con `httpx.MockTransport`, no contra vLLM. El tag `VLLM_MODEL` y el backend de guided decoding **no están validados en hardware**; hay que verificarlos en el host con GPU antes de fijarlos.
+- `more_work` siempre es `False`: un episodio por goal. Multi-episodio llega con Phase 07.
+- El `RecoveryPoint` sigue con `browser.url` vacío: el resultado del episodio no devuelve la URL observada.
+- `EpisodeOutcome` no transporta `failure_reason`, así que el workflow cierra en `completed/inconclusive` incluso cuando el episodio falló o fue denegado. Es coherente con lo declarado (el verdict se deriva en Phase 07) pero es lo primero que Phase 07 debe arreglar.
 - Los tests de integración hacen skip si el servicio no responde.
-- La suite tarda ~1 min por browser + checkpointer.
+- La suite tarda ~65s.
 
 # Technical Debt
 
 - `open_checkpointer` abre y cierra conexión por episodio; con muchos episodios convendrá un pool.
+- Los prompts viven en `infrastructure/inference/prompts.py` sin versionado explícito. En cuanto haya evals (docs/08) hará falta un identificador de versión de prompt en `model_invocation_id`.
+- `model_invocation_id`, prompt/model version y `model_derived=true` en la evidencia (docs/08 "Evidence boundary") todavía no se persisten; hoy la decisión sólo lleva `rationale`.
 - El nodo "Retrieve Memory" de docs/06 no existe (Phase 09), a propósito.
 - Sin endpoints de `Environment`, sin GET de policies, sin presence/heartbeat en Redis.
-- `test-target-app` vive en `backend/tests/target_app/`.
-- structlog pendiente (docs/14).
+- structlog pendiente (docs/14); las métricas de inferencia son contadores en proceso + una línea de log por llamada.
 
 # Risks
 
-- Phase 06 debe inyectar el `ModelGateway` real en el container **sin** cambiar la forma del workflow (ADR 0009) ni el reparto de retries: el modelo no debe reintentar por su cuenta.
-- El planner real devolverá acciones que hay que validar contra el action set cerrado; el `GuardedBrowserGateway` ya bloquea lo que la policy prohíbe, pero un modelo que proponga basura debe fallar de forma tipada.
+- Phase 07 deriva el verdict de resultados reales. Hoy el workflow devuelve `inconclusive` fijo; cambiarlo toca la máquina de estados de `Run`, que ya prohíbe `COMPLETED` sin verdict.
+- Un modelo real producirá mucha más variedad que el stub: conviene medir `invalid_outputs` (ya se cuenta aparte de `failures`) al integrar el primer modelo de verdad.
 - Toda activity de Temporal invocada por nombre necesita `result_type` explícito.
-- CI en Linux pendiente (Phase 13).
+- Si alguien añade un tipo nuevo al estado del graph sin ponerlo en `CHECKPOINTED_TYPES`, el resume se rompe. `tests/agent/test_checkpoint_serialization.py` lo detecta (verificado por mutación: vuelve como `dict`).
 
 # Decisions Still Open
 
-- Cómo se deriva el `goal` de un episodio (hoy es un default declarado en `EpisodeParams`; Phase 07 lo saca de la historia).
+- Cómo se deriva el `goal` de un episodio desde la historia y sus acceptance criteria (Phase 07).
+- Cómo se decide el verdict a partir de los resultados de episodios.
 - Dónde se genera el `evidence_set_id` y cuándo el graph captura screenshots/traces.
 - Estrategia de pooling para el checkpointer.
 
 # Graphify Status
 
-- `graphify-out/graph.json` refrescado (code-only, incremental).
+- `graphify-out/graph.json` de la sesión anterior; no refrescado tras Phase 06.
 
 # Services That Are Working
 
-- postgres (`f9911e78285a` + tablas de LangGraph), redis, temporal + temporal-ui, falkordb, api (`http://localhost:8000/docs`), worker. Chromium vía Playwright.
+- postgres (`f9911e78285a` + tablas de LangGraph), redis, temporal + temporal-ui, falkordb, api (`http://localhost:8000/docs`), worker. Chromium vía Playwright dentro de la imagen `worker`.
 
 # Services Still Stubbed/Deferred
 
-- `frontend` como servicio compose (Phase 10), `vllm` (06), `vllm-embed` (09), `airllm` (11).
+- `frontend` como servicio compose (Phase 10), `vllm` (definido bajo perfil `gpu`, sin validar en hardware), `vllm-embed` (09), `airllm` (11).
 
 # Exact Next Task
 
-Implement Phase 06 slice 1: add a `ModelGateway` adapter for an OpenAI-compatible vLLM endpoint that returns *structured* planned actions validated against the closed browser action set, rejecting malformed model output with a typed error instead of coercing it — the graph already consumes this port, so nothing above it changes.
+Implement Phase 07 slice 1: derive an episode `goal` from a `UserStory` and its acceptance criteria instead of the declared default in `EpisodeParams`, so a run executes what the story asks for — the workflow shape and the retry split stay exactly as ADR 0009 fixed them.
 
 # Exact Next Command
 
-En Claude Code: `/implement-phase 06`
+En Claude Code: `/implement-phase 07`
 
 # Recommended Skills For Next Session
 
 - `implement-phase` (proceso), `ponytail` (always-on).
-- `prompt-engineering-patterns` (structured outputs, versionado de prompts, defensa ante prompt injection) + `error-handling-patterns`.
-- `durability-review` si la inferencia entra en una activity larga.
+- `backend-slice` + `api-design-principles` para los contratos de historia/verdict.
+- `durability-review` al tocar el workflow.
 - `architecture-guard` + `test-and-verify` al cierre.

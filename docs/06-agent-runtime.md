@@ -31,6 +31,15 @@ No crear microservicios por rol. Son nodes/capabilities:
 - Experience Consolidator / Memory Writer
 - Memory Feedback Recorder
 
+## Outcomes de un step
+`StepOutcome` distingue tres cosas que no deben colapsarse:
+- `SUCCEEDED` → Checkpoint.
+- `FAILED` → Recover (retry semántico acotado, ver ADR 0009).
+- `DENIED` → cierre del episodio. Una acción rechazada por la RunPolicy no se reintenta ni se
+  replanifica: volver a pedirle al modelo otra ruta es exactamente el comportamiento que la policy
+  existe para impedir. Tampoco escapa como excepción, porque eso haría que Temporal reintentara el
+  episodio como fallo de infraestructura.
+
 ## Verification priority
 1. Deterministic assertion.
 2. Structural DOM/accessibility assertion.
