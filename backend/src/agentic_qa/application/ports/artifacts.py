@@ -36,3 +36,19 @@ class ArtifactRepository(Protocol):
     async def read(self, ref: EvidenceRef) -> bytes:
         """Read an artifact back, verifying it still matches its recorded hash."""
         ...
+
+
+class ArtifactIndex(Protocol):
+    """Durable index of captured artifacts (docs/11: references in the database).
+
+    Separate from `ArtifactRepository` because the two answer different questions:
+    the repository owns bytes, this owns "what does run X have, and does it all
+    belong to the same evidence set". A failure bundle cannot be checked for
+    contamination without the second.
+    """
+
+    async def record(self, ref: EvidenceRef) -> None:
+        """Index one artifact. Idempotent by artifact id."""
+        ...
+
+    async def list_for_run(self, run_id: str) -> list[EvidenceRef]: ...

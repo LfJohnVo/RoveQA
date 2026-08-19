@@ -153,3 +153,28 @@ export async function cancelRun(client: ApiClient, runId: string): Promise<void>
     idempotencyKey: randomUUID(),
   });
 }
+
+
+/** Fetch the coherent failure snapshot the bundle is materialized from. */
+export async function failureContext(client: ApiClient, runId: string): Promise<unknown> {
+  const response = await client.request({
+    method: "GET",
+    path: `/api/v1/runs/${encodeURIComponent(runId)}/failure-context`,
+  });
+  return response.body;
+}
+
+export async function rerun(
+  client: ApiClient,
+  runId: string,
+  idempotencyKey?: string,
+): Promise<RunState> {
+  // A rerun is a mutation, so it carries a key. Deriving the key from the source run
+  // id would make a second, deliberate rerun impossible.
+  const response = await client.request({
+    method: "POST",
+    path: `/api/v1/runs/${encodeURIComponent(runId)}/rerun`,
+    idempotencyKey: idempotencyKey ?? randomUUID(),
+  });
+  return parseRunState(response.body);
+}

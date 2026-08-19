@@ -9,6 +9,7 @@ commit must lose the write, never persist half of it.
 from types import TracebackType
 from typing import Protocol, Self
 
+from agentic_qa.application.ports.artifacts import ArtifactIndex
 from agentic_qa.application.ports.checkpoints import RecoveryPointRepository
 from agentic_qa.application.ports.events import RunEventLog
 from agentic_qa.application.ports.idempotency import IdempotencyRepository
@@ -52,6 +53,9 @@ class UnitOfWork(Protocol):
 
     @property
     def criterion_results(self) -> CriterionResultRepository: ...
+
+    @property
+    def artifacts(self) -> ArtifactIndex: ...
 
     async def __aenter__(self) -> Self: ...
 

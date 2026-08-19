@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Self
 
 from tests.fakes.repositories import (
+    InMemoryArtifactIndex,
     InMemoryCriterionResultRepository,
     InMemoryEnvironmentRepository,
     InMemoryIdempotencyRepository,
@@ -61,6 +62,10 @@ class InMemoryUnitOfWork:
     @property
     def environments(self) -> InMemoryEnvironmentRepository:
         return InMemoryEnvironmentRepository(self._require_active())
+
+    @property
+    def artifacts(self) -> InMemoryArtifactIndex:
+        return InMemoryArtifactIndex(self._require_active())
 
     @property
     def criterion_results(self) -> InMemoryCriterionResultRepository:

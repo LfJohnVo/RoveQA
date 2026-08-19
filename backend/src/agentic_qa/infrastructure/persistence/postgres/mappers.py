@@ -4,6 +4,7 @@ ORM model != domain entity (docs/03). Mapping stays here so a schema change cann
 leak into the domain.
 """
 
+from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
@@ -22,6 +23,7 @@ from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionResult,
 from agentic_qa.domain.runs.run import Run
 from agentic_qa.infrastructure.persistence.postgres.models import (
     AcceptanceCriterionModel,
+    ArtifactModel,
     CriterionResultModel,
     EnvironmentModel,
     ProjectModel,
@@ -283,4 +285,32 @@ def criterion_result_to_model(run_id: str, result: CriterionResult) -> Criterion
         observation=result.observation,
         model_derived=result.model_derived,
         evidence_refs=list(result.evidence_refs),
+    )
+
+
+def artifact_to_domain(model: ArtifactModel) -> EvidenceRef:
+    return EvidenceRef(
+        artifact_id=model.artifact_id,
+        run_id=model.run_id,
+        evidence_set_id=model.evidence_set_id,
+        kind=model.kind,
+        relative_path=model.relative_path,
+        sha256=model.sha256,
+        size_bytes=model.size_bytes,
+        captured_at=model.captured_at,
+        step_id=model.step_id,
+    )
+
+
+def artifact_to_model(ref: EvidenceRef) -> ArtifactModel:
+    return ArtifactModel(
+        artifact_id=ref.artifact_id,
+        run_id=ref.run_id,
+        evidence_set_id=ref.evidence_set_id,
+        kind=ref.kind,
+        relative_path=ref.relative_path,
+        sha256=ref.sha256,
+        size_bytes=ref.size_bytes,
+        step_id=ref.step_id,
+        captured_at=ref.captured_at,
     )

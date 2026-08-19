@@ -285,6 +285,37 @@ class TestPlanModel(Base):
     )
 
 
+class ArtifactModel(Base):
+    """A reference to one captured artifact. The bytes stay on the filesystem.
+
+    docs/11 is explicit that operational tables hold references, not screenshots: a
+    row here is identity, provenance and integrity (hash, size), and the blob lives
+    where blobs belong.
+
+    `evidence_set_id` is a column rather than an inference, because the rule a failure
+    bundle must enforce — one run, one evidence set — can only be checked against
+    something that was recorded at capture time.
+    """
+
+    __tablename__ = "artifacts"
+    __table_args__ = (UniqueConstraint("run_id", "relative_path", name="uq_artifacts_run_path"),)
+
+    artifact_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence_set_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), nullable=False)
+    kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class CriterionResultModel(Base):
     """One acceptance criterion's outcome for one run (docs/02).
 

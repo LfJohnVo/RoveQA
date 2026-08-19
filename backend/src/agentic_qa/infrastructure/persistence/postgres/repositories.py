@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
 from agentic_qa.application.ports.events import NewRunEvent, RunEvent
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
+from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
@@ -27,6 +28,8 @@ from agentic_qa.domain.runs.recovery import (
 )
 from agentic_qa.domain.runs.run import Run
 from agentic_qa.infrastructure.persistence.postgres.mappers import (
+    artifact_to_domain,
+    artifact_to_model,
     criterion_result_to_domain,
     criterion_result_to_model,
     environment_to_domain,
@@ -43,6 +46,7 @@ from agentic_qa.infrastructure.persistence.postgres.mappers import (
     story_to_model,
 )
 from agentic_qa.infrastructure.persistence.postgres.models import (
+    ArtifactModel,
     CriterionResultModel,
     EnvironmentModel,
     IdempotencyRecordModel,
@@ -396,3 +400,31 @@ class PostgresCriterionResultRepository:
             .order_by(CriterionResultModel.id)
         )
         return [criterion_result_to_domain(model) for model in result.scalars()]
+
+
+class PostgresArtifactIndex:
+    """Durable index of captured artifacts. The bytes live on the filesystem."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, ref: EvidenceRef) -> None:
+        # Idempotent by artifact id: an activity that retried after a lost
+        # acknowledgement must not index the same capture twice.
+        if await self._session.get(ArtifactModel, ref.artifact_id) is not None:
+            return
+        try:
+            async with self._session.begin_nested():
+                self._session.add(artifact_to_model(ref))
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                return
+            raise
+
+    async def list_for_run(self, run_id: str) -> list[EvidenceRef]:
+        result = await self._session.execute(
+            select(ArtifactModel)
+            .where(ArtifactModel.run_id == run_id)
+            .order_by(ArtifactModel.captured_at, ArtifactModel.artifact_id)
+        )
+        return [artifact_to_domain(model) for model in result.scalars()]

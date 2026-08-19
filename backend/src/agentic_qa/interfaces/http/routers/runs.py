@@ -15,6 +15,7 @@ from agentic_qa.application.ports.events import (
     DEFAULT_EVENT_PAGE_SIZE,
     MAX_EVENT_PAGE_SIZE,
 )
+from agentic_qa.application.queries.failure_context import load_failure_context, to_manifest
 from agentic_qa.application.queries.list_run_events import list_run_events
 from agentic_qa.application.queries.run_report import build_run_report, to_document
 from agentic_qa.interfaces.http.dependencies import (
@@ -148,3 +149,56 @@ async def read_run_report(run_id: str, uow: UnitOfWorkDep) -> dict[str, Any]:
     """The run's report, built from durable rows rather than from a model transcript."""
     report = await build_run_report(uow.runs, uow.plans, uow.criterion_results, run_id=run_id)
     return to_document(report)
+
+
+@router.get("/{run_id}/failure-context")
+async def read_failure_context(run_id: str, uow: UnitOfWorkDep) -> dict[str, object]:
+    """One coherent snapshot for a FailureBundle.
+
+    Assembled from a single run in one query rather than from separate "latest"
+    lookups, which is how a bundle ends up pairing one run's screenshot with another
+    run's console log.
+    """
+    context = await load_failure_context(
+        uow.runs, uow.criterion_results, uow.artifacts, run_id=run_id
+    )
+    return to_manifest(context)
+
+
+@router.post("/{run_id}/rerun", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
+async def rerun(
+    run_id: str,
+    idempotency_key: IdempotencyKeyDep,
+    uow: UnitOfWorkDep,
+    workflows: WorkflowGatewayDep,
+    publisher: EventPublisherDep,
+    response: Response,
+) -> RunResponse:
+    """Start a new run of exactly what the source run executed.
+
+    The plan *version* is copied, not re-resolved: rerunning a failure has to execute
+    the same plan, or the second result answers a different question than the first.
+    A new run id is minted because a rerun is a new execution with its own evidence,
+    and overwriting the original would destroy the failure being investigated.
+    """
+    source = await uow.runs.get(run_id)
+    if source is None:
+        raise NotFoundError("run", run_id)
+
+    result = await start_run(
+        uow,
+        workflows,
+        StartRunCommand(
+            project_id=source.project_id,
+            idempotency_key=idempotency_key,
+            environment_id=source.environment_id,
+            run_policy_id=source.run_policy_id,
+            plan_id=source.plan_id,
+            plan_version=source.plan_version,
+            request_id=get_request_id(),
+        ),
+        publisher=publisher,
+    )
+    if result.replayed:
+        response.status_code = status.HTTP_200_OK
+    return RunResponse.from_domain(result.run)

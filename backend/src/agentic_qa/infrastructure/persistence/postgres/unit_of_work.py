@@ -6,6 +6,7 @@ from typing import Self
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_qa.infrastructure.persistence.postgres.repositories import (
+    PostgresArtifactIndex,
     PostgresCriterionResultRepository,
     PostgresEnvironmentRepository,
     PostgresIdempotencyRepository,
@@ -63,6 +64,10 @@ class PostgresUnitOfWork:
     @property
     def recovery_points(self) -> PostgresRecoveryPointRepository:
         return PostgresRecoveryPointRepository(self.session)
+
+    @property
+    def artifacts(self) -> PostgresArtifactIndex:
+        return PostgresArtifactIndex(self.session)
 
     @property
     def criterion_results(self) -> PostgresCriterionResultRepository:

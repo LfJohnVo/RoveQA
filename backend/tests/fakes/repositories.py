@@ -14,6 +14,7 @@ from uuid import uuid4
 from agentic_qa.application.errors import AlreadyExistsError, NotFoundError
 from agentic_qa.application.ports.events import NewRunEvent, RunEvent
 from agentic_qa.application.ports.idempotency import IdempotencyRecord
+from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
@@ -36,6 +37,7 @@ class InMemoryStore:
     recovery_points: list[RecoveryPoint] = field(default_factory=list)
     plans: dict[tuple[str, str], TestPlan] = field(default_factory=dict)
     criterion_results: dict[str, dict[str, CriterionResult]] = field(default_factory=dict)
+    artifacts: dict[str, EvidenceRef] = field(default_factory=dict)
 
     def snapshot(self) -> "InMemoryStore":
         return InMemoryStore(
@@ -51,6 +53,7 @@ class InMemoryStore:
             criterion_results={
                 run: dict(results) for run, results in self.criterion_results.items()
             },
+            artifacts=dict(self.artifacts),
         )
 
     def restore(self, snapshot: "InMemoryStore") -> None:
@@ -77,6 +80,8 @@ class InMemoryStore:
         self.criterion_results.update(
             {run: dict(results) for run, results in snapshot.criterion_results.items()}
         )
+        self.artifacts.clear()
+        self.artifacts.update(snapshot.artifacts)
 
 
 class InMemoryProjectRepository:
@@ -257,3 +262,14 @@ class InMemoryCriterionResultRepository:
 
     async def list_for_run(self, run_id: str) -> list[CriterionResult]:
         return list(self._store.criterion_results.get(run_id, {}).values())
+
+
+class InMemoryArtifactIndex:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def record(self, ref: EvidenceRef) -> None:
+        self._store.artifacts.setdefault(ref.artifact_id, ref)
+
+    async def list_for_run(self, run_id: str) -> list[EvidenceRef]:
+        return [ref for ref in self._store.artifacts.values() if ref.run_id == run_id]
