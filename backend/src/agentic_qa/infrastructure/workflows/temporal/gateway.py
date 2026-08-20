@@ -20,11 +20,11 @@ class TemporalWorkflowGateway:
         self._client = client
         self._task_queue = task_queue
 
-    async def start_run(self, run_id: str, project_id: str) -> None:
+    async def start_run(self, run_id: str, project_id: str, *, explore: bool = False) -> None:
         try:
             await self._client.start_workflow(
                 "AgentRunWorkflow",
-                RunParams(run_id=run_id, project_id=project_id),
+                RunParams(run_id=run_id, project_id=project_id, explore=explore),
                 id=workflow_id_for(run_id),
                 task_queue=self._task_queue,
             )

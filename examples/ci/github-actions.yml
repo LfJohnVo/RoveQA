@@ -1,0 +1,76 @@
+# Running a RoveQA plan from CI, with a verdict a machine can act on.
+#
+# Copy into `.github/workflows/`. The RoveQA installation is assumed to be reachable at
+# `ROVEQA_API_URL`; this workflow is a client, not a deployment.
+name: qa
+
+on:
+  workflow_dispatch:
+  schedule:
+    # A regression suite is worth running when nobody is watching. Scheduling it inside
+    # RoveQA (`POST /projects/{id}/schedules`) is the other option, and the better one if
+    # the run should survive this repository being quiet.
+    - cron: "0 2 * * *"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      ROVEQA_API_URL: ${{ secrets.ROVEQA_API_URL }}
+      ROVEQA_PROJECT_ID: ${{ secrets.ROVEQA_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the CLI
+        run: npm install -g roveqa-cli-0.1.0.tgz
+
+      - name: Check the installation before trusting it
+        # Exits non-zero when the API is unreachable or the contracts disagree, which is
+        # a different failure from a run that found a defect — and it fails here, before
+        # anything is started.
+        run: roveqa doctor --output json
+
+      - name: Validate the plan against the published schema
+        run: roveqa plan lint qa/plan.json --output json
+
+      - name: Start the run
+        id: start
+        # The key is derived from the commit, so a retried job finds its own run instead
+        # of starting a second one.
+        run: |
+          roveqa run create --plan qa/plan.json \
+            --idempotency-key "ci-${{ github.sha }}" \
+            --output json > created.json
+          echo "run_id=$(node -e 'console.log(require("./created.json").data.run_id)')" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for a verdict
+        id: wait
+        # `|| true` only to capture the code; the adapter re-raises it below. Exit 7 means
+        # the wait expired and the run is still going — never a pass, never a failure.
+        run: |
+          set +e
+          roveqa run wait "${{ steps.start.outputs.run_id }}" --timeout 30m --output json > verdict.json
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Collect the evidence when it did not pass
+        if: steps.wait.outputs.code != '0'
+        run: roveqa run failure "${{ steps.start.outputs.run_id }}" --out bundle --output json || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: roveqa-evidence
+          path: |
+            verdict.json
+            bundle/
+
+      - name: Report, and fail with the code the CLI gave
+        if: always()
+        # Shipped with the CLI, so there is nothing to vendor into this repository.
+        run: |
+          ADAPTER="$(dirname "$(readlink -f "$(which roveqa)")")/../examples/verdict-to-junit.mjs"
+          node "$ADAPTER" verdict.json "${{ steps.wait.outputs.code }}" > junit.xml

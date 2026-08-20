@@ -16,6 +16,23 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Type safety. The same settings the CLI runs under: this codebase forbids
+       `any` and blind casts, and without `strict` the compiler cannot enforce that. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+
+    /* Import the layers by name so a boundary violation is visible in the import
+       line itself rather than buried in a trail of `../../..`. */
+    "paths": {
+      "@domain/*": ["./src/domain/*"],
+      "@application/*": ["./src/application/*"],
+      "@infrastructure/*": ["./src/infrastructure/*"],
+      "@viewmodels/*": ["./src/viewmodels/*"],
+      "@views/*": ["./src/views/*"]
+    },
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,

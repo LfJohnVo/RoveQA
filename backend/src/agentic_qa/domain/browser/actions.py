@@ -88,9 +88,9 @@ class BrowserAction:
 
         if self.type is BrowserActionType.NAVIGATE and not self.target.url:
             raise InvalidEntityError("navigate requires a target url")
-        if self.type in _NEEDS_TARGET and self.target.is_empty():
+        if self.type in NEEDS_TARGET and self.target.is_empty():
             raise InvalidEntityError(f"{self.type} requires a semantic target")
-        if self.type in _NEEDS_VALUE and not self.value:
+        if self.type in NEEDS_VALUE and not self.value:
             raise InvalidEntityError(f"{self.type} requires a value")
 
         if self.side_effect:
@@ -106,7 +106,7 @@ class BrowserAction:
             raise InvalidEntityError(f"{self.type} changes state and must declare side_effect")
 
 
-_NEEDS_TARGET = frozenset(
+NEEDS_TARGET = frozenset(
     {
         BrowserActionType.CLICK,
         BrowserActionType.FILL,
@@ -118,8 +118,14 @@ _NEEDS_TARGET = frozenset(
         BrowserActionType.EXTRACT,
     }
 )
+"""Actions that cannot be performed without knowing *what* to act on.
 
-_NEEDS_VALUE = frozenset(
+Public because the planner has to be told: a requirement the model is never shown is
+one it will fail to meet, and the rejection lands after the decision is made rather
+than before. `prompts.py` renders this set so the wording cannot drift from the rule.
+"""
+
+NEEDS_VALUE = frozenset(
     {
         BrowserActionType.FILL,
         BrowserActionType.SELECT,
@@ -129,3 +135,4 @@ _NEEDS_VALUE = frozenset(
         BrowserActionType.ASSERT_URL,
     }
 )
+"""Actions that carry text of their own. Rendered into the prompt for the same reason."""

@@ -60,6 +60,7 @@ async def create_run(
             run_policy_id=payload.run_policy_id,
             plan_id=payload.plan_id,
             plan_version=payload.plan_version,
+            explore=payload.explore,
             request_id=get_request_id(),
         ),
         publisher=publisher,

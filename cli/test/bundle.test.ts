@@ -1,10 +1,12 @@
 /**
  * FailureBundle integrity and atomic materialization.
  *
- * Two properties, both of which fail silently if nobody checks them: a bundle never
- * mixes evidence from two runs, and a bundle directory is never quietly partial.
+ * Three properties, all of which fail silently if nobody checks them: a bundle never
+ * mixes evidence from two runs, its files are the files its manifest describes, and a
+ * bundle directory is never quietly partial.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +17,7 @@ import { CliError } from "../src/errors.js";
 import {
   MANIFEST_NAME,
   PARTIAL_MARKER,
+  assertBytesMatch,
   assertCoherent,
   materialize,
   safeJoin,
@@ -23,7 +26,9 @@ import {
 } from "../src/bundle/materialize.js";
 
 const SCREENSHOT = Buffer.from("not really a png");
-const SHA_OF_SCREENSHOT = "ab".repeat(32);
+// The real digest of the bytes above. It used to be a placeholder, which nothing
+// noticed because nothing compared it to anything.
+const SHA_OF_SCREENSHOT = createHash("sha256").update(SCREENSHOT).digest("hex");
 
 function artifact(overrides: Partial<BundleArtifact> = {}): BundleArtifact {
   return {
@@ -89,6 +94,32 @@ describe("provenance", () => {
 
   it("accepts a coherent manifest", () => {
     expect(() => assertCoherent(manifest())).not.toThrow();
+  });
+});
+
+describe("integrity", () => {
+  it("refuses bytes that do not hash to what the manifest declares", async () => {
+    // A hash nobody compares is decoration. The bundle is what a reader trusts
+    // afterwards, so a body that was truncated or rewritten in flight must not reach
+    // the disk under a manifest that says otherwise.
+    const destination = join(workspace(), "failure");
+
+    await expect(
+      materialize(manifest(), destination, () => Promise.resolve(Buffer.from("tampered bytes!!"))),
+    ).rejects.toThrow(/hashes to/);
+
+    expect(existsSync(destination)).toBe(false);
+    expect(existsSync(join(`${destination}.staging`, PARTIAL_MARKER))).toBe(true);
+  });
+
+  it("refuses a truncated download before hashing it", () => {
+    expect(() => assertBytesMatch(artifact(), SCREENSHOT.subarray(0, 4))).toThrow(
+      /downloaded as 4 bytes/,
+    );
+  });
+
+  it("accepts the bytes the manifest describes", () => {
+    expect(() => assertBytesMatch(artifact(), SCREENSHOT)).not.toThrow();
   });
 });
 

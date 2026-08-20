@@ -17,6 +17,7 @@ from redis.asyncio import Redis
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import BrowserGateway
+from agentic_qa.application.ports.deep_analysis import DeepAnalyst
 from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.bootstrap.settings import Settings
 from agentic_qa.domain.inference.tasks import InferenceBudget, ModelCapability
@@ -24,21 +25,28 @@ from agentic_qa.infrastructure.agent.langgraph.checkpointer import open_checkpoi
 from agentic_qa.infrastructure.agent.langgraph.episode_runner import LangGraphEpisodeRunner
 from agentic_qa.infrastructure.browser.playwright.gateway import start_browser_session
 from agentic_qa.infrastructure.cache.redis.semaphores import RedisResourceSemaphore
+from agentic_qa.infrastructure.inference.airllm.gateway import AirLLMDeepAnalyst
 from agentic_qa.infrastructure.inference.router import ModelEndpoint, ModelRouter
 from agentic_qa.infrastructure.inference.vllm.gateway import VLLMModelGateway
 
 logger = logging.getLogger(__name__)
 
 FAST_ENDPOINT_NAME = "vllm-fast"
+DEEP_ENDPOINT_NAME = "deep"
 
 
 def build_model_router(settings: Settings) -> ModelRouter | None:
-    """None when no endpoint is configured — an honest absence, not a fake model."""
-    if not settings.vllm_base_url or not settings.vllm_model:
-        logger.info("no model endpoint configured; the worker will not run episodes")
-        return None
-    return ModelRouter(
-        [
+    """None when no endpoint is configured at all — an honest absence, not a fake model.
+
+    The capabilities are genuinely independent, and each absence costs exactly one
+    thing. No fast endpoint means no episodes; no deep endpoint means no hypotheses.
+    A machine configured with only the deep model — the sensible way to run analysis on
+    a second box — still gets a router, because refusing to build one there would make
+    a fully configured capability unreachable.
+    """
+    endpoints = []
+    if settings.vllm_base_url and settings.vllm_model:
+        endpoints.append(
             ModelEndpoint(
                 name=FAST_ENDPOINT_NAME,
                 base_url=settings.vllm_base_url,
@@ -47,10 +55,43 @@ def build_model_router(settings: Settings) -> ModelRouter | None:
                 max_concurrency=settings.model_max_concurrency,
                 budget=InferenceBudget(timeout_seconds=settings.model_timeout_seconds),
             )
-        ]
-        # DEEP (AirLLM, Phase 11) and POOLING (embeddings, Phase 09) endpoints register
-        # here too; the router is already indexed by capability to receive them.
-    )
+        )
+    else:
+        logger.info("no fast model endpoint configured; the worker will not run episodes")
+
+    if settings.deep_base_url and settings.deep_model:
+        endpoints.append(
+            ModelEndpoint(
+                name=DEEP_ENDPOINT_NAME,
+                base_url=settings.deep_base_url,
+                model=settings.deep_model,
+                capability=ModelCapability.DEEP,
+                # One at a time: a model streamed layer by layer already owns the card
+                # it runs on, and a second concurrent call would just make both slower.
+                max_concurrency=1,
+                budget=InferenceBudget(
+                    timeout_seconds=settings.deep_timeout_seconds,
+                    max_output_tokens=settings.deep_max_output_tokens,
+                    # No transport retry. Re-sending a call that costs minutes doubles
+                    # the wait for an endpoint that has already shown it cannot answer.
+                    max_attempts=1,
+                ),
+            )
+        )
+    else:
+        logger.info("no deep endpoint configured; failure triage runs without hypotheses")
+
+    return ModelRouter(endpoints) if endpoints else None
+
+
+def build_deep_analyst(
+    *, router: ModelRouter, redis: Redis, http: httpx.AsyncClient
+) -> DeepAnalyst | None:
+    """None when nothing serves DEEP. Callers treat that as "no hypothesis", never as
+    an error: deep analysis is an addition to a run's findings, not a precondition."""
+    if not router.serves(ModelCapability.DEEP):
+        return None
+    return AirLLMDeepAnalyst(router=router, http=http, semaphore=RedisResourceSemaphore(redis))
 
 
 def build_episode_runner(

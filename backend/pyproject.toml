@@ -7,6 +7,10 @@ dependencies = [
     "alembic>=1.19.1",
     "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
+    # The learned-memory projection (ADR 0008). The `falkordb` extra brings the graph
+    # driver; the LLM and embedder are injected explicitly so no hosted provider
+    # becomes a runtime dependency by default.
+    "graphiti-core[falkordb]>=0.29.3",
     # Runtime, not just test tooling: the vLLM adapter talks OpenAI-compatible HTTP.
     "httpx>=0.28.1",
     "langgraph>=1.2.11",

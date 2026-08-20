@@ -16,6 +16,7 @@ from agentic_qa.application.ports.models import (
     PlanningRequest,
 )
 from agentic_qa.domain.browser.actions import BrowserAction
+from agentic_qa.domain.exploration.state import Affordance, PageState
 
 
 @dataclass
@@ -51,6 +52,8 @@ class RecordingBrowserGateway:
     fail_intents: set[str] = field(default_factory=set)
     url: str = "http://target.test/"
     captures: int = 0
+    affordances: list[Affordance] = field(default_factory=list)
+    described: int = 0
 
     async def execute(self, action: BrowserAction) -> ActionOutcome:
         self.executed.append(action.intent)
@@ -65,6 +68,15 @@ class RecordingBrowserGateway:
 
     async def current_url(self) -> str | None:
         return self.url
+
+    async def describe_page(self) -> PageState:
+        """Whatever the test put in `affordances`, at the current url.
+
+        Empty by default, which is a page offering nothing — the honest fake for a
+        test that is not about exploration.
+        """
+        self.described += 1
+        return PageState(url=self.url, affordances=tuple(self.affordances))
 
     async def aclose(self) -> None:
         return None

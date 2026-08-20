@@ -1,0 +1,38 @@
+{
+  "schema_version": "roveqa.failure-bundle.v1",
+  "bundle_id": "00000000-0000-4000-8000-000000bund1e",
+  "run_id": "00000000-0000-4000-8000-000000000run",
+  "evidence_set_id": "00000000-0000-4000-8000-000000000run-e0",
+  "project_id": "00000000-0000-4000-8000-000000000001",
+  "plan_id": "00000000-0000-4000-8000-00000000p1an",
+  "plan_version": "1",
+  "target_url": "https://app.example.test/checkout",
+  "target_fingerprint": null,
+  "verdict": "failed",
+  "failure_kind": "product",
+  "failed_step_index": 1,
+  "failed_step_id": "assert-confirmed",
+  "captured_at": "2026-08-20T12:00:00Z",
+  "deterministic_observation": "the page did not contain \"Order confirmed\"",
+  "root_cause_hypothesis": {
+    "text": "the payment service rejects orders over a threshold",
+    "model_derived": true,
+    "confidence": 0.6
+  },
+  "recommended_fix_target": {
+    "reference": "checkout/payment.ts",
+    "rationale": "the only caller of the rejecting endpoint",
+    "model_derived": true
+  },
+  "artifacts": [
+    {
+      "artifact_id": "00000000-0000-4000-8000-0000000sh0t",
+      "kind": "screenshot",
+      "relative_path": "artifacts/screenshot-assert-confirmed.png",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 4254,
+      "run_id": "00000000-0000-4000-8000-000000000run",
+      "evidence_set_id": "00000000-0000-4000-8000-000000000run-e0"
+    }
+  ]
+}

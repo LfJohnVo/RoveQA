@@ -70,7 +70,10 @@ DEFAULT_POLICY_PAYLOAD = {
 # Written by the committing unit-of-work tests; truncated in their teardown.
 COMMITTED_TABLES = (
     "projects, environments, run_policies, user_stories, acceptance_criteria, "
-    "runs, run_events, recovery_points, idempotency_records"
+    "runs, run_events, recovery_points, idempotency_records, artifacts, "
+    "criterion_results, knowledge_candidates, memory_feedback, graph_sync_state, "
+    "failure_clusters, failure_cluster_members, cluster_hypotheses, "
+    "explored_states, exploration_runs"
 )
 
 # The schema is created once per pytest process; engines stay per-test so every

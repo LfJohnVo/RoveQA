@@ -105,3 +105,23 @@ class VerificationJudgement(BaseModel):
     reasoning: str = Field(default="", max_length=2000)
     model_derived: Literal[True] = True
     """Structural reminder that a judgement is a hypothesis, not evidence."""
+
+
+class ClusterAnalysis(BaseModel):
+    """A deep model's reading of one failure cluster (docs/08 ROOT_CAUSE_ANALYSIS).
+
+    Notice what it cannot say: nothing about which failures belong to the cluster. The
+    membership is decided deterministically before this is asked, and a schema with no
+    field for it is how a plausible re-grouping never overwrites the evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    probable_cause: str = Field(max_length=2000)
+    recommended_check: str = Field(max_length=1000)
+    """What would confirm or kill the hypothesis. Required, because a cause nobody can
+    check is prose rather than a finding."""
+
+    confidence: Literal["low", "medium", "high"]
+    model_derived: Literal[True] = True
+    """Structural reminder that this is an interpretation, not an observation."""

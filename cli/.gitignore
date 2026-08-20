@@ -1,3 +1,5 @@
 dist/
 contracts/
 node_modules/
+# Packed tarballs: a build output, produced by `npm pack` for install drills.
+*.tgz

@@ -1,0 +1,11 @@
+{
+  "schema_version": "roveqa.cli.v1",
+  "request_id": "00000000-0000-4000-8000-00000000re91",
+  "data": {
+    "run_id": "00000000-0000-4000-8000-000000000run",
+    "status": "completed",
+    "verdict": "failed",
+    "plan_id": "00000000-0000-4000-8000-00000000p1an",
+    "plan_version": "1"
+  }
+}

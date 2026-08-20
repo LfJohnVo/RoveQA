@@ -34,7 +34,17 @@ import {
 import { diffRuns, loadRunSummary, renderDiff } from "./commands/diff.js";
 import { installClaudeSkill, requireSupportedAgent } from "./commands/agent.js";
 import { measureFlakiness, renderFlaky, validateCount } from "./commands/flaky.js";
+import { parseDurationMs } from "./duration.js";
 import { setup } from "./commands/setup.js";
+import {
+  memoryRebuild,
+  memoryStatus,
+  memorySync,
+  memoryValidate,
+  renderRebuild,
+  renderStatus,
+  renderValidation,
+} from "./commands/memory.js";
 import { materialize, type BundleManifest } from "./bundle/materialize.js";
 import {
   diagnostic,
@@ -46,7 +56,13 @@ import {
   type OutputMode,
   type Writer,
 } from "./output/envelope.js";
-import { EXIT_OK, exitCodeFor, exitCodeForVerdict, isTerminalVerdict } from "./output/exit-codes.js";
+import {
+  EXIT_NON_PASS_VERDICT,
+  EXIT_OK,
+  exitCodeFor,
+  exitCodeForVerdict,
+  isTerminalVerdict,
+} from "./output/exit-codes.js";
 
 export const CLI_VERSION = "0.1.0";
 
@@ -106,6 +122,49 @@ export async function run(argv: string[], writer: Writer = processWriter): Promi
   }
 }
 
+const COMMANDS: ReadonlyArray<{ name: string; summary: string }> = [
+  { name: "setup", summary: "write .roveqa/config.json for this directory" },
+  { name: "doctor", summary: "check the API, the contracts and this configuration" },
+  { name: "project list", summary: "list projects" },
+  { name: "project get", summary: "one project" },
+  { name: "plan scaffold", summary: "print a starter TestPlan" },
+  { name: "plan lint", summary: "validate a TestPlan file against the published schema" },
+  { name: "run create", summary: "start a run (reuses --idempotency-key on retry)" },
+  { name: "run get", summary: "durable status and verdict" },
+  { name: "run wait", summary: "wait for a terminal verdict; detaching never cancels" },
+  { name: "run cancel", summary: "ask the run to stop at its next safe point" },
+  { name: "run rerun", summary: "run the same plan version again" },
+  { name: "run failure", summary: "materialise a FailureBundle for a failed run" },
+  { name: "run artifact", summary: "download one artifact by id" },
+  { name: "run diff", summary: "compare two runs criterion by criterion" },
+  { name: "run flaky", summary: "repeat a run and report stability" },
+  { name: "memory status", summary: "what this project has learned, and what is projected" },
+  { name: "memory validate", summary: "report disagreement without repairing it" },
+  { name: "memory sync", summary: "drain the projection backlog" },
+  { name: "memory rebuild", summary: "rebuild the projection from PostgreSQL" },
+  { name: "agent install", summary: "install the verification skill for a coding agent" },
+];
+
+function helpText(): string {
+  const width = Math.max(...COMMANDS.map((command) => command.name.length));
+  const lines = COMMANDS.map(
+    (command) => `  ${command.name.padEnd(width)}  ${command.summary}`,
+  );
+  return [
+    "roveqa — agent-first client for RoveQA",
+    "",
+    "Usage: roveqa <command> [options]",
+    "",
+    ...lines,
+    "",
+    "Global: --output json|text  --api-url  --project  --environment",
+    "        --timeout <n>[ms|s|m|h]  (a bare number is milliseconds)",
+    "",
+    "Every command answers with one JSON value on stdout under --output json;",
+    "progress and warnings go to stderr. Exit codes are part of the contract.",
+  ].join("\n");
+}
+
 async function dispatch(
   positionals: string[],
   values: Values,
@@ -114,8 +173,15 @@ async function dispatch(
 ): Promise<CommandResult> {
   const [group, action, ...rest] = positionals;
 
-  if (values.help === true || group === undefined) {
-    throw usage("no command given", "Try: roveqa doctor --output json");
+  if (values.help === true) {
+    // Asking for help and succeeding is not a usage error. It comes back as an ordinary
+    // success envelope so an agent can read the command list the same way it reads every
+    // other answer, and a person installing the binary for the first time can find out
+    // what it does without reading the source.
+    return { data: { commands: COMMANDS }, text: helpText() };
+  }
+  if (group === undefined) {
+    throw usage("no command given", "Try: roveqa --help");
   }
 
   switch (`${group} ${action ?? ""}`.trim()) {
@@ -151,12 +217,21 @@ async function dispatch(
       return await setupCommand(values);
     case "agent install":
       return await agentInstall(rest, values);
+    case "memory status":
+      return await memoryStatusCommand(values, requestId);
+    case "memory validate":
+      return await memoryValidateCommand(values, requestId);
+    case "memory rebuild":
+      return await memoryRebuildCommand(values, requestId);
+    case "memory sync":
+      return await memorySyncCommand(values, requestId);
     default:
       throw usage(
         `unknown command: ${[group, action].filter(Boolean).join(" ")}`,
         "Known commands: setup, doctor, project list, project get, plan scaffold, " +
           "plan lint, run create, run get, run wait, run cancel, run failure, " +
-          "run artifact, run diff, run flaky, run rerun, agent install claude",
+          "run artifact, run diff, run flaky, run rerun, agent install claude, " +
+          "memory status, memory validate, memory rebuild, memory sync",
       );
   }
 }
@@ -299,13 +374,13 @@ async function runWait(
 
   try {
     const outcome = await waitForRun(client, runId, {
-      ...(timeout === undefined ? {} : { timeoutMs: Number(timeout) }),
+      ...(timeout === undefined ? {} : { timeoutMs: parseDurationMs(timeout, 0) }),
       signal: controller.signal,
     });
 
     if (outcome.timedOut) {
       throw new CliError("WAIT_TIMEOUT", `run ${runId} is still ${outcome.run.status}`, {
-        nextAction: `roveqa run wait ${runId} --timeout <ms>`,
+        nextAction: `roveqa run wait ${runId} --timeout 10m`,
         details: { run_id: runId, status: outcome.run.status, verdict: null },
       });
     }
@@ -473,7 +548,7 @@ async function runFlaky(
       planId,
       planVersion,
       count: validateCount(asString(values.count)),
-      timeoutMsPerRun: timeout === undefined ? 300_000 : Number(timeout),
+      timeoutMsPerRun: parseDurationMs(timeout, 300_000),
       environmentId: config.environmentId ?? undefined,
       memoryPolicy: planMemoryPolicy(plan),
     },
@@ -481,6 +556,56 @@ async function runFlaky(
   );
 
   return { data: report, text: renderFlaky(report) };
+}
+
+/**
+ * The scope every memory command needs.
+ *
+ * Required rather than defaulted to "all projects": memory is scoped per project and
+ * environment, and a rebuild that guessed the scope could rewrite the wrong project's
+ * projection.
+ */
+function memoryScope(values: Values): { projectId: string; environmentId: string } {
+  const config = loadConfig(configFlags(values));
+  const projectId = asString(values.project) ?? config.projectId;
+  if (projectId === null || projectId === undefined) {
+    throw usage("a project id is required", "Pass --project <id> or set ROVEQA_PROJECT_ID.");
+  }
+  return { projectId, environmentId: asString(values.environment) ?? "default" };
+}
+
+async function memoryStatusCommand(values: Values, requestId: string): Promise<CommandResult> {
+  const { projectId, environmentId } = memoryScope(values);
+  const { client } = connect(values, requestId);
+  const status = await memoryStatus(client, projectId, environmentId);
+  return { data: status, text: renderStatus(status) };
+}
+
+async function memoryValidateCommand(values: Values, requestId: string): Promise<CommandResult> {
+  const { projectId, environmentId } = memoryScope(values);
+  const { client } = connect(values, requestId);
+  const validation = await memoryValidate(client, projectId, environmentId);
+  return {
+    data: validation,
+    text: renderValidation(validation),
+    // A validate that reports problems and exits 0 is one CI cannot gate on. The
+    // whole report still travels in the envelope, so nothing is lost by failing.
+    exitCode: validation.healthy ? EXIT_OK : EXIT_NON_PASS_VERDICT,
+  };
+}
+
+async function memoryRebuildCommand(values: Values, requestId: string): Promise<CommandResult> {
+  const { projectId, environmentId } = memoryScope(values);
+  const { client } = connect(values, requestId);
+  const report = await memoryRebuild(client, projectId, environmentId);
+  return { data: report, text: renderRebuild(report) };
+}
+
+async function memorySyncCommand(values: Values, requestId: string): Promise<CommandResult> {
+  const { projectId, environmentId } = memoryScope(values);
+  const { client } = connect(values, requestId);
+  const report = await memorySync(client, projectId, environmentId);
+  return { data: report, text: renderRebuild(report) };
 }
 
 async function projectList(values: Values, requestId: string): Promise<CommandResult> {

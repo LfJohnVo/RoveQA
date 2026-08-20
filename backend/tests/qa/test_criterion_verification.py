@@ -23,6 +23,7 @@ from agentic_qa.application.services.guarded_browser import (
 from agentic_qa.domain.browser.actions import BrowserAction
 from agentic_qa.domain.browser.policy_guard import PolicyDecision, PolicyViolation
 from agentic_qa.domain.errors import InvalidEntityError
+from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep, PlanStepType
 from agentic_qa.domain.qa.verification import (
@@ -51,6 +52,10 @@ class PageDouble:
 
     async def current_url(self) -> str | None:
         return self.url
+
+    async def describe_page(self) -> PageState:
+        # Nothing offered: these tests are about verifying a criterion, not exploring.
+        return PageState(url=self.url)
 
     async def aclose(self) -> None:
         return None

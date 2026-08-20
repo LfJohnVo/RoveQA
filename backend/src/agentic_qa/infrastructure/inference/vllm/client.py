@@ -1,4 +1,8 @@
-"""OpenAI-compatible chat client for one vLLM endpoint.
+"""OpenAI-compatible chat client for one model endpoint.
+
+Named for vLLM because that is what it was written against, but it talks the
+protocol rather than the product: the deep endpoint (Phase 11) is served the same
+way and reuses this rather than growing a second HTTP path to keep safe.
 
 Everything about *talking to one model server safely* lives here: admission control,
 timeouts, bounded transport retries, the circuit breaker and metrics. The caller gets
@@ -39,10 +43,15 @@ logger = logging.getLogger(__name__)
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
-SLOT_TTL_SECONDS = 120.0
-"""Lease on a model slot. Longer than any single call's timeout, so a slot is never
-reclaimed while its call is still running, but short enough that a killed worker frees
-capacity on its own."""
+MIN_SLOT_TTL_SECONDS = 120.0
+SLOT_TTL_MARGIN = 2.0
+"""Lease on a model slot, derived from the endpoint's own timeout.
+
+It has to outlast the call it protects: a lease that expires while the call is still
+running hands the slot to somebody else and puts two requests on a box sized for one.
+A deep endpoint answers in minutes, so a fixed constant cannot be right for both it and
+the fast one. The margin keeps the lease longer than the call while still short enough
+that a killed worker frees capacity on its own."""
 
 SLOT_POLL_SECONDS = 0.05
 
@@ -113,7 +122,9 @@ class VLLMChatClient:
             reservation = await self._semaphore.acquire(
                 endpoint.slot_resource,
                 capacity=endpoint.max_concurrency,
-                ttl_seconds=SLOT_TTL_SECONDS,
+                ttl_seconds=max(
+                    MIN_SLOT_TTL_SECONDS, endpoint.budget.timeout_seconds * SLOT_TTL_MARGIN
+                ),
             )
             if reservation is not None:
                 return reservation

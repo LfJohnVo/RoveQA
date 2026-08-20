@@ -9,10 +9,10 @@ not as a bespoke API shape. The same bytes an agent gets from this endpoint can 
 saved to a file and handed back in.
 """
 
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 
 from agentic_qa.application.commands.compile_plan import CompilePlanCommand, compile_plan
 from agentic_qa.application.commands.create_story import CreateStoryCommand, create_story
@@ -30,6 +30,11 @@ from agentic_qa.interfaces.http.schemas import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["plans"])
+
+DEFAULT_STORY_PAGE_SIZE = 50
+MAX_STORY_PAGE_SIZE = 200
+"""Bounded like every other listing: a project accumulates stories for as long as it
+is tested, and a response whose size nobody chose is one that eventually times out."""
 
 
 @router.post(
@@ -58,6 +63,29 @@ async def post_story(
             forbidden_outcomes=tuple(payload.forbidden_outcomes),
         ),
     )
+    return StoryResponse.from_domain(story)
+
+
+@router.get("/projects/{project_id}/stories", response_model=list[StoryResponse])
+async def list_stories(
+    project_id: str,
+    uow: UnitOfWorkDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_STORY_PAGE_SIZE)] = DEFAULT_STORY_PAGE_SIZE,
+) -> list[StoryResponse]:
+    """One project's stories, bounded.
+
+    Read-only and paged: a project accumulates stories for as long as it is tested, and
+    an unbounded list is a response whose size nobody chose (docs/11).
+    """
+    stories = await uow.stories.list_for_project(project_id, limit=limit)
+    return [StoryResponse.from_domain(story) for story in stories]
+
+
+@router.get("/stories/{story_id}", response_model=StoryResponse)
+async def read_story(story_id: str, uow: UnitOfWorkDep) -> StoryResponse:
+    story = await uow.stories.get(story_id)
+    if story is None:
+        raise NotFoundError("story", story_id)
     return StoryResponse.from_domain(story)
 
 

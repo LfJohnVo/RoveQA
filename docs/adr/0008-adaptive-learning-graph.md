@@ -19,6 +19,16 @@ Usar **Graphiti + FalkorDB** como proyección temporal de conocimiento reusable 
 - Fingerprint/version mismatch, contradiction o policy mismatch obliga a revalidar o descartar memoria.
 - Fallo/pérdida del graph store degrada rendimiento/aprendizaje, no la durabilidad ni correctness del run.
 
+## Implementation notes (Phase 09)
+Refinamientos descubiertos al implementar, dentro del marco de la decisión:
+
+- **Graphiti aporta el modelo de grafo y el driver; no la ingestión ni el search.** `add_episode`/`add_triplet` usan un LLM para descubrir entidades y decidir cuándo dos son la misma. Ese trabajo no existe aquí: los candidates llegan estructurados desde PostgreSQL y su identidad es un `dedup_key` determinista. Delegar identidad a un modelo pondría una conjetura a cargo de qué cuenta como el mismo hecho. Los nodos se escriben directo con UUID derivado del `candidate_id`, lo que además hace cada write idempotente y un rebuild reproducible.
+- **El search es una query full-text propia, no el pipeline de Graphiti.** Ese pipeline existe para fusionar métodos de retrieval y reordenar con cross-encoder; nosotros queremos lo contrario — una lista de candidate ids con scope, ordenada después de forma determinista por reliability/freshness/compatibility en el Domain. Un rerank con modelo pondría una inferencia delante del retrieval de cada run y haría el camino warm más lento que el cold que debe superar.
+- **No se construye el objeto `Graphiti`.** Su constructor crea un cliente LLM y un embedder OpenAI para cualquier slot vacío. No teniendo el objeto no hay slot que dejar vacío, así que un deployment local-first no puede adquirir una dependencia hosted por omisión. Verificado por test.
+- **`group_id` es un digest opaco.** Graphiti restringe el charset y sanitizar no sería inyectivo; además FalkorDB indexa `group_id` como full text, así que un valor con `-`/`_` nunca coincide con la frase exacta. Los valores legibles viajan en cada nodo (`project_id`, `environment_id`).
+- **Los índices los crea el adapter, no la librería.** `build_indices_and_constraints()` emite índices compuestos de relación que FalkorDB 4.20.3 rechaza *cerrando la conexión*, lo que aborta el resto del loop; la víctima era justo el índice full-text de `Entity` que usa el search.
+- **El payload no se copia al grafo.** Ya está redactado, pero duplicar contenido derivado de página en un segundo store agrega una segunda fuente de fuga sin beneficio de retrieval: el search matchea sobre el summary.
+
 ## Consequences
 ### Positive
 - Reutilización de rutas y playbooks entre runs.

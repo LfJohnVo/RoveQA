@@ -12,9 +12,14 @@ from dataclasses import dataclass, field
 class RecordingWorkflowGateway:
     started: list[tuple[str, str]] = field(default_factory=list)
     signals: list[tuple[str, str]] = field(default_factory=list)
+    explored: list[str] = field(default_factory=list)
+    """Runs asked to explore. Recorded separately so a test can tell an exploration
+    from a planned run without reading past the API boundary."""
 
-    async def start_run(self, run_id: str, project_id: str) -> None:
+    async def start_run(self, run_id: str, project_id: str, *, explore: bool = False) -> None:
         self.started.append((run_id, project_id))
+        if explore:
+            self.explored.append(run_id)
 
     async def request_pause(self, run_id: str) -> None:
         self.signals.append((run_id, "pause"))
@@ -32,7 +37,7 @@ class FailingWorkflowGateway:
 
     started: list[tuple[str, str]] = field(default_factory=list)
 
-    async def start_run(self, run_id: str, project_id: str) -> None:
+    async def start_run(self, run_id: str, project_id: str, *, explore: bool = False) -> None:
         raise RuntimeError("temporal unreachable")
 
     async def request_pause(self, run_id: str) -> None: ...

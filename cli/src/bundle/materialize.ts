@@ -16,6 +16,7 @@
  * than having no bundle at all.
  */
 
+import { createHash } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
@@ -108,6 +109,36 @@ export function safeJoin(root: string, relativePath: string): string {
   return target;
 }
 
+/**
+ * Check that the downloaded bytes are the bytes the manifest describes.
+ *
+ * The manifest carries a `sha256` and a `size_bytes` per artifact. Until they are
+ * compared they are decoration: a truncated download, a proxy that rewrote a body or
+ * an artifact replaced since the manifest was built would all land in the bundle
+ * under a hash that says otherwise. Whoever reads the bundle later has no way to tell
+ * — the manifest is what they trust — so the check belongs here, before the write.
+ */
+export function assertBytesMatch(artifact: BundleArtifact, bytes: Buffer): void {
+  if (bytes.length !== artifact.size_bytes) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `artifact ${artifact.artifact_id} downloaded as ${bytes.length} bytes, ` +
+        `but the manifest declares ${artifact.size_bytes}`,
+      { nextAction: "Refusing to write a bundle whose contents contradict its manifest." },
+    );
+  }
+
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (digest !== artifact.sha256) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `artifact ${artifact.artifact_id} hashes to ${digest}, ` +
+        `but the manifest declares ${artifact.sha256}`,
+      { nextAction: "Refusing to write a bundle whose contents contradict its manifest." },
+    );
+  }
+}
+
 export interface ArtifactFetcher {
   (artifact: BundleArtifact): Promise<Buffer>;
 }
@@ -136,8 +167,10 @@ export async function materialize(
   try {
     for (const artifact of manifest.artifacts) {
       const target = safeJoin(staging, artifact.relative_path);
+      const bytes = await fetch(artifact);
+      assertBytesMatch(artifact, bytes);
       await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, await fetch(artifact));
+      await writeFile(target, bytes);
     }
 
     // Projections of the manifest, for readers who want one field without parsing

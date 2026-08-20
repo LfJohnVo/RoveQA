@@ -111,7 +111,9 @@ class VLLMModelGateway:
                 reason="invalid_action",
             )
             return PlannedAction(
-                action=None, failure=f"planner proposed an invalid action: {error}"
+                action=None,
+                failure=f"planner proposed an invalid action: {error}",
+                rejected=True,
             )
 
         return PlannedAction(action=action, rationale=decision.rationale)

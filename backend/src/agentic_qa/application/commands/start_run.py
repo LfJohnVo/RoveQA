@@ -36,6 +36,15 @@ class StartRunCommand:
     """Which plan to run. Without a version the latest is resolved *once*, here, and
     pinned onto the run: the plan a run is judged by must not change under it."""
 
+    explore: bool = False
+    """Whether this run explores instead of following a plan.
+
+    Explicit, not inferred. A plan-less run has always meant "work towards this goal
+    with the planner", and quietly turning that into a deterministic crawl would remove
+    a capability nobody asked to lose. Exploring is a different job — no model, a
+    frontier, a state map — so it is a different request.
+    """
+
     request_id: str | None = None
     """Recorded on the run.created event so one id correlates client, API and run."""
 
@@ -48,6 +57,10 @@ class StartRunCommand:
                 "run_policy_id": self.run_policy_id or "",
                 "plan_id": self.plan_id or "",
                 "plan_version": self.plan_version or "",
+                # In the fingerprint: the same key asking for an exploration and asking
+                # for a planned run are different requests, and the second must be a
+                # typed conflict rather than a replay of the first.
+                "explore": "true" if self.explore else "false",
             },
         )
 
@@ -129,7 +142,7 @@ async def start_run(
     # Durable first, side effects second. Starting is itself idempotent, so a retry
     # after a lost acknowledgement cannot produce a second workflow.
     await publish_best_effort(publisher, event)
-    await workflows.start_run(run.run_id, run.project_id)
+    await workflows.start_run(run.run_id, run.project_id, explore=command.explore)
     return StartRunResult(run=run, replayed=False)
 
 

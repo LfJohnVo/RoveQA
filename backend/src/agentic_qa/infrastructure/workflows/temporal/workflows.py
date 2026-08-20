@@ -18,9 +18,14 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from agentic_qa.infrastructure.workflows.temporal.contracts import (
+        AnalyzeFailuresParams,
+        ConsolidateParams,
         EpisodeOutcome,
         EpisodeParams,
         RunParams,
+        ScheduledRunParams,
+        StartScheduledRunParams,
+        SyncGraphParams,
         TransitionParams,
     )
 
@@ -28,6 +33,11 @@ with workflow.unsafe.imports_passed_through():
 EPISODES_BEFORE_CONTINUE_AS_NEW = 200
 
 _STATUS_ACTIVITY_RETRY = RetryPolicy(maximum_attempts=5)
+
+_CONSOLIDATION_RETRY = RetryPolicy(maximum_attempts=2)
+"""Barely retried. The activity already swallows its own failures, so an attempt that
+reaches Temporal at all is an infrastructure problem, and the verdict this workflow
+exists to produce is durable before it runs."""
 
 
 @workflow.defn(name="AgentRunWorkflow")
@@ -76,7 +86,11 @@ class AgentRunWorkflow:
             # converter returns raw JSON and the annotation below would be a lie.
             outcome: EpisodeOutcome = await workflow.execute_activity(
                 "run_episode",
-                EpisodeParams(run_id=params.run_id, episode_index=episode),
+                EpisodeParams(
+                    run_id=params.run_id,
+                    episode_index=episode,
+                    explore=params.explore,
+                ),
                 result_type=EpisodeOutcome,
                 start_to_close_timeout=timedelta(hours=2),
                 heartbeat_timeout=timedelta(minutes=2),
@@ -94,6 +108,7 @@ class AgentRunWorkflow:
                         run_id=params.run_id,
                         project_id=params.project_id,
                         start_episode=episode,
+                        explore=params.explore,
                     )
                 )
 
@@ -102,6 +117,38 @@ class AgentRunWorkflow:
         # activity persisted and derived.
         final = verdict or "inconclusive"
         await self._transition(params.run_id, "completed", verdict=final)
+
+        # After the verdict is durable, never before: learning is a consequence of a
+        # finished run, and a run must not report differently because of what it did
+        # or did not manage to remember.
+        await workflow.execute_activity(
+            "consolidate_experience",
+            ConsolidateParams(run_id=params.run_id),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=_CONSOLIDATION_RETRY,
+        )
+
+        # Then the projection: it is derived from what consolidation just committed,
+        # and a graph that is down must not be able to delay a verdict that is already
+        # durable.
+        await workflow.execute_activity(
+            "sync_knowledge_graph",
+            SyncGraphParams(),
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=_CONSOLIDATION_RETRY,
+        )
+
+        # Last, and the slowest by an order of magnitude. Grouping the failures needs no
+        # model, but explaining the largest clusters may spend minutes per cluster in a
+        # model streamed layer by layer — so it runs after everything a reader needs is
+        # already durable, and heartbeats while it works.
+        await workflow.execute_activity(
+            "analyze_failures",
+            AnalyzeFailuresParams(run_id=params.run_id),
+            start_to_close_timeout=timedelta(hours=1),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=_CONSOLIDATION_RETRY,
+        )
         return final
 
     async def _finish_cancelled(self, run_id: str) -> str:
@@ -116,3 +163,45 @@ class AgentRunWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_STATUS_ACTIVITY_RETRY,
         )
+
+
+_SCHEDULED_START_RETRY = RetryPolicy(maximum_attempts=3)
+
+
+@workflow.defn(name="ScheduledRunWorkflow")
+class ScheduledRunWorkflow:
+    """What a schedule actually starts.
+
+    A schedule cannot start `AgentRunWorkflow` directly: that workflow expects a run
+    that already exists durably, and ADR 0010 puts the row and its idempotency record
+    before the workflow, never after. So a firing creates the run first — in an
+    activity, because that is a database write — and the run's own workflow is started
+    from there exactly as an API-triggered run is.
+
+    Thin on purpose. Everything durable about the run belongs to `AgentRunWorkflow`;
+    this exists only to turn "it is 2am" into a run id.
+
+    Known limitation: this completes as soon as the run is created, so the schedule's
+    overlap policy sees a firing that lasted a second rather than a run that lasted an
+    hour. A regression slower than its own interval will therefore stack. Fixing it
+    means making the run a child of this workflow, which is a bigger change than the
+    problem currently justifies.
+    """
+
+    @workflow.run
+    async def run(self, params: ScheduledRunParams) -> str:
+        # The firing's own workflow id: derived by Temporal from the schedule and the
+        # scheduled time, so it is stable across retries of this firing and different
+        # for the next one. Exactly the identity run creation needs, and deterministic,
+        # which `uuid4()` here would not be.
+        key = workflow.info().workflow_id
+        # Annotated because activities called by name return the converter's Any;
+        # the same reason `run_episode` above declares its result type.
+        run_id: str = await workflow.execute_activity(
+            "start_scheduled_run",
+            StartScheduledRunParams(idempotency_key=key, schedule=params),
+            result_type=str,
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=_SCHEDULED_START_RETRY,
+        )
+        return run_id

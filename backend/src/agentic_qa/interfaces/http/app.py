@@ -15,11 +15,15 @@ from agentic_qa.interfaces.http.request_context import (
 )
 from agentic_qa.interfaces.http.routers import (
     artifacts,
+    exploration,
+    memory,
     meta,
     plans,
     projects,
     realtime,
     runs,
+    schedules,
+    triage,
 )
 
 
@@ -61,9 +65,13 @@ def create_app(container: Container | None = None) -> FastAPI:
     app.include_router(projects.router)
     app.include_router(artifacts.router)
     app.include_router(meta.router)
+    app.include_router(memory.router)
     app.include_router(plans.router)
     app.include_router(runs.router)
     app.include_router(realtime.router)
+    app.include_router(triage.router)
+    app.include_router(schedules.router)
+    app.include_router(exploration.router)
 
     @app.get("/health", tags=["ops"])
     async def health() -> dict[str, str]:

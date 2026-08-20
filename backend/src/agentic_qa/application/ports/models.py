@@ -13,6 +13,7 @@ from typing import Protocol
 
 from agentic_qa.domain.agent.state import EpisodeSummary, StepRecord
 from agentic_qa.domain.browser.actions import BrowserAction
+from agentic_qa.domain.knowledge.memory_context import MemoryItem
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,26 @@ class PlanningRequest:
     observation: str
     recent_steps: tuple[StepRecord, ...] = field(default=())
     episode_summaries: tuple[EpisodeSummary, ...] = field(default=())
+    folded_episodes: int = 0
+    """Episodes older than the summary window. Told to the planner as a count, so it
+    knows the history it can see is partial rather than complete."""
+
+    allowed_origins: tuple[str, ...] = field(default=())
+    """Where this run may go, from its RunPolicy.
+
+    Information, not just a fence. The allowlist is the only place that knows what
+    application is under test, and until it reached the prompt the planner had to
+    *guess* a URL — which the same allowlist then refused. A planner starting on
+    `about:blank` with no origin to aim at cannot take a first step at all."""
+
+    memory: tuple[MemoryItem, ...] = field(default=())
+    """What earlier verified runs learned about this application, already scoped,
+    ranked and bounded (docs/26).
+
+    Carried as domain items rather than pre-rendered text so the label on each one —
+    observed or model-derived, compatible or needing revalidation — survives all the
+    way to whatever builds the prompt. A summary string would arrive as an assertion
+    with no way to tell a checked fact from a guess."""
 
 
 @dataclass(frozen=True)
@@ -50,6 +71,16 @@ class PlannedAction:
     """Always true for planner output: a decision is a hypothesis, not an observation."""
 
     failure: str | None = None
+
+    rejected: bool = False
+    """The decision arrived and *we* refused it — a click with no target, an assertion
+    with nothing to assert.
+
+    Different in kind from an unreachable model or unusable output, and worth telling
+    apart: a refusal is something the planner can correct once it is told what was
+    wrong, while a dead endpoint will be just as dead on the next call. Flattened into
+    one `failure` string, both ended the episode on the spot, so a single malformed
+    proposal cost a whole run."""
 
     def __post_init__(self) -> None:
         if self.failure is not None and self.action is not None:

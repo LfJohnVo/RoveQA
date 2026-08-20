@@ -13,6 +13,20 @@ from datetime import datetime
 from typing import Protocol
 
 RUN_CREATION_SCOPE = "runs.create"
+EXPERIENCE_CONSOLIDATION_SCOPE = "knowledge.consolidate"
+"""Consolidating a finished run into knowledge happens once per run.
+
+A retried activity that consolidated twice would add two supports from one run, and
+support is meant to count *independent* runs that agreed — inflating it is how a
+single flaky observation would talk itself into being trusted."""
+
+
+FAILURE_ANALYSIS_SCOPE = "triage.analyze"
+"""Analysing a finished run's failures happens once per run.
+
+Not for correctness of the clusters — those are upserts and survive any number of
+passes — but for cost: each pass may spend minutes of deep inference, and a retried
+activity that re-asked the same questions would pay for answers already stored."""
 
 
 def request_fingerprint(scope: str, payload: dict[str, str]) -> str:

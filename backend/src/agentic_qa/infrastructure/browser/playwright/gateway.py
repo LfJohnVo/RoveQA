@@ -31,8 +31,10 @@ from playwright.async_api import (
     Error as PlaywrightError,
 )
 
-from agentic_qa.application.ports.browser import ActionOutcome
+from agentic_qa.application.ports.browser import ActionOutcome, UnperformableActionError
 from agentic_qa.domain.browser.actions import ActionTarget, BrowserAction, BrowserActionType
+from agentic_qa.domain.exploration.state import PageState
+from agentic_qa.infrastructure.browser.playwright.affordances import parse_affordances
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +140,7 @@ ARIA_ROLES = frozenset(
 def _aria_role(role: str) -> AriaRole:
     normalized = role.strip().lower()
     if normalized not in ARIA_ROLES:
-        raise BrowserSessionError(f"unknown ARIA role: {role}")
+        raise UnperformableActionError(f"unknown ARIA role: {role}")
     return cast(AriaRole, normalized)
 
 
@@ -186,6 +188,30 @@ class PlaywrightBrowserGateway:
         """The viewport as it is now. Never the full page: a tall page produces an
         artifact nobody reads and a file nobody wants to store."""
         return await self._page.screenshot()
+
+    async def describe_page(self) -> PageState:
+        """What the page offers, from the accessible tree.
+
+        A failure here returns the URL with no affordances rather than raising: an
+        observation that could not be taken is a page with nothing to do next, which
+        the frontier already handles. Raising would end an episode over a page that
+        merely navigated while we were looking at it.
+        """
+        try:
+            snapshot = await self._page.locator("body").aria_snapshot()
+            title = await self._page.title()
+            url = self._page.url
+        except PlaywrightError as error:
+            logger.info("could not describe the page: %s", error.message)
+            return PageState(url=await self.current_url() or "")
+        return PageState(
+            # `PageState` sanitises what it keeps; resolution uses the real url,
+            # because an href the markup wrote as `/records` has no origin and an
+            # allowlist asked about it can only refuse.
+            url=url,
+            affordances=parse_affordances(snapshot, base_url=url),
+            title=title,
+        )
 
     async def storage_state(self) -> StorageState:
         """Serializable auth state: what recovery restores instead of replaying a login."""
@@ -273,16 +299,25 @@ class PlaywrightBrowserGateway:
 
         Playwright's Locator stays inside infrastructure; nothing above this layer
         ever sees it.
+
+        Always `.first`. Playwright's strict mode raises when a locator matches more
+        than one element, and on a real page a word like "Projects" is a nav link *and*
+        a heading almost every time. Refusing an ambiguous match sounds careful and
+        isn't: the planner named something that genuinely exists, and turning that into
+        a failed step teaches it nothing except that naming things does not work. The
+        role-first order above is what keeps the first match the intended one.
         """
         if target.role:
-            return self._page.get_by_role(_aria_role(target.role), name=target.name)
+            return self._page.get_by_role(_aria_role(target.role), name=target.name).first
         if target.label:
-            return self._page.get_by_label(target.label)
+            return self._page.get_by_label(target.label).first
         if target.text:
-            return self._page.get_by_text(target.text)
+            return self._page.get_by_text(target.text).first
         if target.name:
-            return self._page.get_by_role(_aria_role("button"), name=target.name)
-        raise BrowserSessionError("action target has no semantic locator")
+            return self._page.get_by_role(_aria_role("button"), name=target.name).first
+        raise UnperformableActionError(
+            "action target has no semantic locator: give a role, label, text or name"
+        )
 
     async def screenshot_bytes(self) -> bytes:
         return await self._page.screenshot(type="png")

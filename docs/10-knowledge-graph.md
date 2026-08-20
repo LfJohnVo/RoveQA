@@ -8,6 +8,8 @@ El graph store es una **derived/rebuildable projection**. PostgreSQL conserva kn
 ## Core nodes
 Project, Environment, ApplicationVersion, Role, Page, PageState, SemanticUICapability, APIEndpoint, UserStory, AcceptanceCriterion, TestPlan, TestStep, Playbook, FailureSignature, FindingCategory, RecoveryStrategy.
 
+**Estado en Phase 09:** la proyección materializa un nodo `Entity` por knowledge candidate promovido, etiquetado con su `kind`, y todavía **no** escribe relaciones. El modelo de arriba sigue siendo el objetivo; las relaciones se agregan cuando un gate las necesite, no antes. Lo que ya funciona: scope por `group_id`, búsqueda full-text acotada, borrado por candidate y rebuild completo desde PostgreSQL.
+
 ## Core relationships
 - PAGE_HAS_STATE
 - STATE_TRANSITIONS_TO_STATE
@@ -26,7 +28,11 @@ Project, Environment, ApplicationVersion, Role, Page, PageState, SemanticUICapab
 ## Write policy
 No guardar cada token/observation/DOM node trivial. Al cierre de episode producir `KnowledgeExperienceCandidate` durable y sólo promover facts/experiences reutilizables con provenance suficiente.
 
-Toda ingestión al graph es idempotente y retryable. Si FalkorDB está caído, el candidate queda `pending_sync` y el run principal continúa.
+Toda ingestión al graph es idempotente y retryable. Si FalkorDB está caído el trabajo queda en `graph_sync_state` y el run principal continúa.
+
+El estado de sincronización vive en su propia tabla, **no** en el `status` del candidate: el grafo caído no dice nada sobre si el conocimiento es cierto, y sobrescribir un tier de promoción con `pending_sync` haría que un outage se leyera como pérdida de confianza. `pending_sync` permanece en el contrato (`knowledge-experience.schema.json`) para interoperabilidad y este sistema no lo escribe.
+
+La cola guarda **qué cambió**, no qué hacer. Cada entrada se resuelve contra la fila durable al sincronizar: un candidate accionable se escribe, uno invalidado o rechazado se borra. Eso hace la sincronización auto-reparable — por muy atrasado o equivocado que esté el grafo, reproducir la cola converge a lo que PostgreSQL dice ahora.
 
 ## Retrieval policy
 1. Hard scope por project/environment/origin/role/policy.

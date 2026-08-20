@@ -151,3 +151,37 @@ async def test_the_planner_only_ever_sees_a_bounded_context() -> None:
 
     assert max(seen) <= MAX_RECENT_STEPS
     assert len(browser.executed) == 30  # all steps ran, context stayed flat
+
+
+async def test_an_action_the_page_cannot_satisfy_is_a_failed_step_not_a_crash() -> None:
+    """Regression: a planner asking for something unlocatable killed the episode.
+
+    Found by the Phase 09 benchmark, where the real model proposed a `check` whose
+    target had no role, label or text. The adapter raised, the exception escaped the
+    graph, and the episode died — so Temporal would have retried the whole thing and
+    the planner would have proposed the same unusable action again (ADR 0009).
+
+    Recorded as a failed step instead, which is what lets the planner try something
+    else, and the run still closes with a safe point rather than an exception.
+    """
+    from agentic_qa.application.ports.browser import UnperformableActionError
+
+    class UnlocatableBrowser(RecordingBrowserGateway):
+        async def execute(self, action: BrowserAction) -> ActionOutcome:
+            if action.type is BrowserActionType.CLICK:
+                raise UnperformableActionError("action target has no semantic locator")
+            return await super().execute(action)
+
+    browser = UnlocatableBrowser()
+
+    result = await run_graph(script=[click("Nowhere"), navigate()], browser=browser)
+
+    agent = result["agent"]
+    # Unlike a policy refusal, trying something else is the right response here, so the
+    # run stays on the recovery path rather than stopping.
+    assert not result["last_denied"]
+    # Both the unusable attempt and the recovery are on the record…
+    assert agent.step_index == 2
+    # …and the run went on to do the next thing instead of dying.
+    assert "open http://target.test/records" in browser.executed
+    assert agent.failure_reason is None

@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from agentic_qa.domain.browser.evidence import EvidenceRef
+from agentic_qa.domain.exploration.comparison import StateMap
+from agentic_qa.domain.exploration.frontier import ExplorationBudget, ExplorationReport
+from agentic_qa.domain.knowledge.memory_context import MemoryItem
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep
 from agentic_qa.domain.qa.verification import CriterionResult
@@ -27,6 +30,21 @@ class EpisodeRequest:
     verification_hints: dict[str, str] | None = None
     """criterion_id -> literal the page must contain. Present hints are what make a
     result deterministic instead of a model's opinion."""
+
+    memory: tuple[MemoryItem, ...] = ()
+    """What earlier verified runs learned, already scoped, ranked and bounded.
+
+    Retrieved by the activity rather than by the graph: reading durable state is I/O,
+    and the graph stays free of it so a replay cannot depend on what the database
+    happened to contain at replay time (ADR 0009)."""
+
+    exploration: ExplorationBudget | None = None
+    """Present when this episode explores instead of following a plan.
+
+    A budget rather than a flag: the caller states what the episode may spend, so the
+    limit is visible at the boundary instead of being derived somewhere inside an
+    adapter. Never wider than the run's policy — `ExplorationBudget.under` is how one
+    is built."""
 
 
 @dataclass(frozen=True)
@@ -52,6 +70,17 @@ class EpisodeResult:
     observed_url: str | None = None
     """Where the episode ended. Recovery needs it: rebuilding a browser without
     knowing where to go lands on a blank page and re-verifies nothing."""
+
+    state_map: StateMap | None = None
+    """What an exploring episode mapped. `None` for a planned one.
+
+    Carries its own `complete` flag, because a map that stopped on a budget cannot tell
+    "removed" from "never reached" and a comparison against it must say so."""
+
+    exploration_report: ExplorationReport | None = None
+    """What it spent and why it stopped. Reported separately from the map: "12 states"
+    and "12 states, and it stopped because it ran out of actions" are different
+    findings."""
 
 
 class EpisodeRunner(Protocol):

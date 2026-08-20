@@ -29,6 +29,14 @@ from agentic_qa.domain.browser.actions import (
     BrowserActionType,
     IdempotencyStrategy,
 )
+from agentic_qa.domain.exploration.frontier import (
+    ExplorationBudget,
+    ExplorationReport,
+    FrontierEntry,
+    FrontierSnapshot,
+    StopReason,
+)
+from agentic_qa.domain.exploration.state import Affordance, PageState
 from agentic_qa.domain.qa.verification import (
     CriterionOutcome,
     CriterionResult,
@@ -60,6 +68,15 @@ CHECKPOINTED_TYPES = (
     CriterionResult,
     CriterionOutcome,
     FailureKind,
+    # Exploration state (Phase 12). A frontier that could not be rebuilt from a
+    # checkpoint would restart its crawl from nothing after a worker died.
+    FrontierSnapshot,
+    FrontierEntry,
+    ExplorationReport,
+    ExplorationBudget,
+    StopReason,
+    PageState,
+    Affordance,
 )
 """Exactly what a checkpoint may reconstruct.
 

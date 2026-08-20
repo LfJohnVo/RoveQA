@@ -241,3 +241,32 @@ async def test_contexts_are_isolated_between_runs(
     finally:
         await first.aclose()
         await second.aclose()
+
+
+async def test_a_name_that_matches_twice_is_still_actionable(
+    target: tuple[str, TargetState], session: BrowserSession
+) -> None:
+    """The demo of Phase 14 died on this against a real page.
+
+    `/login` says "Sign in" in its heading *and* on its button, which is what ordinary
+    pages look like. Playwright's strict mode raises on a locator that matches twice,
+    so the adapter turned a target the planner had named correctly into a failed step —
+    teaching it only that naming things does not work. The locator takes the first
+    match now, with role-first ordering deciding which one that is.
+    """
+    base_url, _ = target
+    gateway = session.gateway
+    await gateway.execute(navigate(f"{base_url}/login"))
+
+    ambiguous = BrowserAction(
+        type=BrowserActionType.WAIT_FOR,
+        intent="wait for the sign-in text",
+        target=ActionTarget(text="Sign in"),
+        side_effect=True,
+        idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+        verification_strategy="the element is on the page",
+    )
+
+    outcome = await gateway.execute(ambiguous)
+
+    assert outcome.succeeded is True, outcome.detail

@@ -22,6 +22,8 @@ from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
 from agentic_qa.application.ports.models import ModelGateway
 from agentic_qa.application.services.guarded_browser import GuardedBrowserGateway
 from agentic_qa.domain.agent.state import AgentState
+from agentic_qa.domain.exploration.comparison import StateMap
+from agentic_qa.domain.exploration.frontier import ExplorationReport, FrontierSnapshot
 from agentic_qa.infrastructure.agent.langgraph.graph import build_agent_graph
 
 logger = logging.getLogger(__name__)
@@ -58,7 +60,14 @@ class LangGraphEpisodeRunner:
                 checkpointer=checkpointer,
                 assertions=request.assertions,
                 hints=request.verification_hints,
+                memory=request.memory,
                 artifacts=self._artifacts,
+                # An exploring episode replaces the planner with the frontier. Both are
+                # never active at once, and which one applies is decided here, once.
+                exploration_budget=request.exploration,
+                # Always: the policy bounds every episode, and decides what an exploring
+                # one may offer itself.
+                policy=request.policy,
                 run_id=request.run_id,
                 # One evidence set per episode: a bundle must never mix two, and
                 # deriving the id keeps that true without anyone remembering to.
@@ -84,6 +93,7 @@ class LangGraphEpisodeRunner:
             final = await graph.ainvoke(initial, config)
             snapshot = await graph.aget_state(config)
             agent: AgentState = final["agent"]
+            report = final.get("exploration_report")
 
             return EpisodeResult(
                 # Phase 05 executes one goal per episode; multi-episode planning
@@ -97,6 +107,8 @@ class LangGraphEpisodeRunner:
                 # Read from the live browser, not from the agent's last observation:
                 # the recovery point has to name where the page actually ended up.
                 observed_url=await raw.current_url(),
+                state_map=_state_map(final.get("exploration"), report),
+                exploration_report=report,
             )
 
 
@@ -104,3 +116,18 @@ async def _has_pending_state(graph: Any, config: RunnableConfig) -> bool:
     """True when this thread already has checkpointed state to continue from."""
     snapshot = await graph.aget_state(config)
     return bool(snapshot.next)
+
+
+def _state_map(
+    snapshot: FrontierSnapshot | None, report: ExplorationReport | None
+) -> StateMap | None:
+    """What an exploring episode mapped, or nothing for a planned one.
+
+    `complete` comes from the report rather than from the map's size: a map of twelve
+    states that stopped on a budget and a map of twelve states that ran out of places
+    to go look identical, and only the second one can support the claim that a state
+    missing next time was removed.
+    """
+    if snapshot is None or report is None:
+        return None
+    return StateMap(states=snapshot.visited, complete=report.complete)

@@ -14,6 +14,7 @@ import logging
 from agentic_qa.application.ports.browser import ActionOutcome, BrowserGateway
 from agentic_qa.domain.browser.actions import BrowserAction
 from agentic_qa.domain.browser.policy_guard import PolicyDecision, evaluate_action
+from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,11 @@ class GuardedBrowserGateway:
 
     async def current_url(self) -> str | None:
         return await self._inner.current_url()
+
+    async def describe_page(self) -> PageState:
+        # Forwarded without a check, like the screenshot: reading what a page offers
+        # changes nothing, and the policy still gates every action taken on it.
+        return await self._inner.describe_page()
 
     async def aclose(self) -> None:
         await self._inner.aclose()

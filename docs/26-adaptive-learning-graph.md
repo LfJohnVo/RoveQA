@@ -164,13 +164,21 @@ Los thresholds exactos se configuran y se ajustan por benchmark, no por intuici�
 Estados adicionales del contrato (`contracts/knowledge-experience.schema.json`): `rejected` (candidato descartado en consolidación, nunca promovido) y `pending_sync` (durable en PostgreSQL, aún no materializado en el graph por outage/backlog; no es un tier de promoción).
 
 ## Reliability
-Mantener contadores deterministas (`success_count`, `failure_count`, `contradiction_count`, `last_verified_at`). Puede usarse como baseline una estimación suavizada tipo Beta:
+Mantener contadores deterministas (`success_count`, `failure_count`, `contradiction_count`, `last_verified_at`). No usar una única confidence producida por LLM como reliability operacional.
+
+Fórmula implementada (Phase 09, `domain/knowledge/experience.py`):
 
 ```text
-reliability = (success_count + 1) / (success_count + failure_count + 2)
+against     = failure_count + 2 * contradiction_count
+reliability = success_count / (success_count + against)      # 0.0 sin evidencia
 ```
 
-No usar una única confidence producida por LLM como reliability operacional.
+Dos decisiones explícitas frente a una Beta suavizada:
+
+- **Sin evidencia es 0.0, no 0.5.** Una afirmación no probada no debe arrancar pareciendo perfecta: el ranking la pondría por encima de todo lo que sí se verificó.
+- **Una contradicción pesa doble que un failure.** Un failure dice "esta vez no funcionó"; una contradicción dice "esto es falso". Pesarlos igual dejaría sobrevivir conocimiento contradicho.
+
+`reliability` se recalcula siempre desde los contadores y se persiste sólo para poder ordenar en SQL; nunca se escribe de forma independiente de ellos.
 
 ## Retrieval pipeline
 
@@ -187,6 +195,8 @@ Antes de semantic/hybrid search:
 ### 2. Candidate search
 Hybrid search/traversal por goal, page/state, test step, failure signature y relaciones.
 
+Implementado en Phase 09: el pool de candidates se lee de PostgreSQL (scope + status accionable, ordenado por reliability) y el grafo **amplía** ese pool, nunca lo autoriza. Un FalkorDB caído, vacío o manipulado puede como máximo sugerir candidates existentes distintos; no puede inventar conocimiento ni cambiar lo que uno dice.
+
 ### 3. Ranking
 Combinar deterministic signals:
 - fingerprint/version compatibility;
@@ -196,7 +206,9 @@ Combinar deterministic signals:
 - semantic relevance.
 
 ### 4. Bounded context
-Devolver pocos items de alto valor (`MemoryContext`), no volcar el subgrafo entero al prompt.
+Devolver pocos items de alto valor (`MemoryContext`), no volcar el subgrafo entero al prompt. Default 8 items, techo de contrato 50.
+
+El ranking es determinista y vive en el Domain: `compatibility × source × reliability × (0.5 + 0.5 × freshness)`, con desempate por `candidate_id` para que las mismas entradas produzcan siempre el mismo orden — un benchmark cold-vs-warm no puede estar midiendo orden de diccionario. `freshness` decae a la mitad cada 30 días y sólo escala la mitad del peso, así que la edad baja la prioridad de un hecho pero nunca lo elimina por sí sola.
 
 ### 5. Revalidation
 `compatibility=revalidate` obliga a comprobar preconditions antes de seguir el playbook.

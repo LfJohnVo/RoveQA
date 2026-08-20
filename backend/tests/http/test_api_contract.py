@@ -315,7 +315,12 @@ class TestProjects:
         project_id = await create_project(client, "Checkout")
         response = await client.get(f"/api/v1/projects/{project_id}")
         assert response.status_code == 200
-        assert response.json() == {"project_id": project_id, "name": "Checkout"}
+
+        body = response.json()
+        assert body["project_id"] == project_id
+        assert body["name"] == "Checkout"
+        # `create_project` seeds a default policy, so this project can run.
+        assert body["default_run_policy_id"] is not None
 
 
 class ExplodingUnitOfWork(InMemoryUnitOfWork):
@@ -345,3 +350,124 @@ class TestUnexpectedFailures:
         assert body["request_id"] == "req-boom"
 
         assert [record.request_id for record in captured_error_logs] == ["req-boom"]  # type: ignore[attr-defined]
+
+
+async def test_stories_can_be_listed_and_read_back(client: httpx.AsyncClient) -> None:
+    """A story is not write-only.
+
+    Phase 07 could create one and compile it; nothing could read it back, so a UI could
+    show a story it had just submitted and nothing else. These are the two reads a
+    story editor needs to exist at all.
+    """
+    project_id = await create_project(client)
+    created = await client.post(
+        f"/api/v1/projects/{project_id}/stories",
+        json={
+            "actor": "a QA engineer",
+            "goal": "reach the records page",
+            "acceptance_criteria": [
+                {"criterion_id": "ac-1", "description": "the records page opens"}
+            ],
+        },
+    )
+    assert created.status_code == 201
+    story_id = created.json()["story_id"]
+
+    listed = await client.get(f"/api/v1/projects/{project_id}/stories")
+    assert listed.status_code == 200
+    assert [story["story_id"] for story in listed.json()] == [story_id]
+
+    read = await client.get(f"/api/v1/stories/{story_id}")
+    assert read.status_code == 200
+    assert read.json()["goal"] == "reach the records page"
+    assert read.json()["acceptance_criteria"][0]["criterion_id"] == "ac-1"
+
+
+async def test_reading_a_story_that_does_not_exist_is_a_404(client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/v1/stories/nope")
+    assert response.status_code == 404
+
+
+async def test_the_story_listing_is_bounded(client: httpx.AsyncClient) -> None:
+    # An unbounded listing is a response whose size nobody chose.
+    project_id = await create_project(client)
+    response = await client.get(f"/api/v1/projects/{project_id}/stories?limit=500")
+    assert response.status_code == 422
+
+
+async def test_a_project_says_whether_it_can_run(client: httpx.AsyncClient) -> None:
+    """`default_run_policy_id` is part of the project.
+
+    A run with no policy named resolves the project's default, so a project without one
+    cannot run. Without this field a client had no way to say so before someone tried,
+    and the precondition surfaced as a validation error at the end of the flow.
+    """
+    created = await client.post("/api/v1/projects", json={"name": "Policyless"})
+    project_id = created.json()["project_id"]
+    assert created.json()["default_run_policy_id"] is None
+
+    await client.post(f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD)
+
+    read = await client.get(f"/api/v1/projects/{project_id}")
+    assert read.json()["default_run_policy_id"] is not None
+
+
+async def test_a_run_can_ask_to_explore(
+    client: httpx.AsyncClient, workflows: RecordingWorkflowGateway
+) -> None:
+    """Exploring is a request, not something inferred from a missing plan.
+
+    A plan-less run has always meant "work towards this goal with the planner", and
+    quietly turning that into a deterministic crawl would remove a capability nobody
+    asked to lose.
+    """
+    project_id = (await client.post("/api/v1/projects", json={"name": "Explore me"})).json()[
+        "project_id"
+    ]
+    await client.post(
+        f"/api/v1/projects/{project_id}/run-policies",
+        json={
+            "allowed_origins": ["http://localhost:3000"],
+            "max_duration_seconds": 60,
+            "max_actions": 10,
+            "max_model_calls": 0,
+            "set_as_project_default": True,
+        },
+    )
+
+    response = await client.post(
+        "/api/v1/runs",
+        json={"project_id": project_id, "explore": True},
+        headers={"Idempotency-Key": "explore-1"},
+    )
+
+    assert response.status_code == 201
+    assert workflows.explored == [response.json()["run_id"]]
+
+
+async def test_the_same_key_cannot_switch_a_run_between_modes(
+    client: httpx.AsyncClient,
+) -> None:
+    # Exploring and planning are different requests. Replaying the first for the second
+    # would hand back a run that does something else than what was asked for.
+    project_id = (await client.post("/api/v1/projects", json={"name": "Modes"})).json()[
+        "project_id"
+    ]
+    await client.post(
+        f"/api/v1/projects/{project_id}/run-policies",
+        json={
+            "allowed_origins": ["http://localhost:3000"],
+            "max_duration_seconds": 60,
+            "max_actions": 10,
+            "max_model_calls": 0,
+            "set_as_project_default": True,
+        },
+    )
+    headers = {"Idempotency-Key": "same-key"}
+    body = {"project_id": project_id}
+
+    first = await client.post("/api/v1/runs", json={**body, "explore": True}, headers=headers)
+    second = await client.post("/api/v1/runs", json=body, headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 409

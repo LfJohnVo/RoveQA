@@ -4,7 +4,17 @@ ORM model != domain entity (docs/03). Mapping stays here so a schema change cann
 leak into the domain.
 """
 
+from agentic_qa.application.ports.knowledge import GraphSyncRecord, GraphSyncState
 from agentic_qa.domain.browser.evidence import EvidenceRef
+from agentic_qa.domain.knowledge.experience import (
+    CandidateKind,
+    CandidateStatus,
+    KnowledgeExperienceCandidate,
+    Provenance,
+    Quality,
+    Validity,
+)
+from agentic_qa.domain.knowledge.feedback import FeedbackKind, MemoryFeedback
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
@@ -26,6 +36,9 @@ from agentic_qa.infrastructure.persistence.postgres.models import (
     ArtifactModel,
     CriterionResultModel,
     EnvironmentModel,
+    GraphSyncStateModel,
+    KnowledgeCandidateModel,
+    MemoryFeedbackModel,
     ProjectModel,
     RunModel,
     RunPolicyModel,
@@ -319,4 +332,122 @@ def artifact_to_model(ref: EvidenceRef) -> ArtifactModel:
         size_bytes=ref.size_bytes,
         step_id=ref.step_id,
         captured_at=ref.captured_at,
+    )
+
+
+def knowledge_candidate_to_domain(
+    model: KnowledgeCandidateModel,
+) -> KnowledgeExperienceCandidate:
+    return KnowledgeExperienceCandidate(
+        candidate_id=model.candidate_id,
+        project_id=model.project_id,
+        environment_id=model.environment_id,
+        kind=CandidateKind(model.kind),
+        observed=model.observed,
+        model_derived=model.model_derived,
+        created_at=model.created_at,
+        provenance=Provenance(
+            source_run_id=model.source_run_id,
+            source_episode_id=model.source_episode_id,
+            evidence_set_id=model.evidence_set_id,
+            test_plan_version=model.test_plan_version,
+            model_invocation_id=model.model_invocation_id,
+        ),
+        validity=Validity(
+            valid_from=model.valid_from,
+            valid_to=model.valid_to,
+            app_version=model.app_version,
+            page_fingerprint=model.page_fingerprint,
+            role=model.role,
+            origin=model.origin,
+            policy_id=model.policy_id,
+        ),
+        payload=dict(model.payload),
+        status=CandidateStatus(model.status),
+        quality=Quality(
+            support_count=model.support_count,
+            success_count=model.success_count,
+            failure_count=model.failure_count,
+            contradiction_count=model.contradiction_count,
+            last_verified_at=model.last_verified_at,
+        ),
+    )
+    # `reliability` is deliberately not read back: it is derived from the counts, and
+    # reading it would let a stale column disagree with the evidence beside it.
+
+
+def knowledge_candidate_to_model(
+    candidate: KnowledgeExperienceCandidate,
+) -> KnowledgeCandidateModel:
+    return KnowledgeCandidateModel(
+        candidate_id=candidate.candidate_id,
+        project_id=candidate.project_id,
+        environment_id=candidate.environment_id,
+        dedup_key=candidate.dedup_key,
+        kind=candidate.kind.value,
+        status=candidate.status.value,
+        observed=candidate.observed,
+        model_derived=candidate.model_derived,
+        source_run_id=candidate.provenance.source_run_id,
+        source_episode_id=candidate.provenance.source_episode_id,
+        evidence_set_id=candidate.provenance.evidence_set_id,
+        test_plan_version=candidate.provenance.test_plan_version,
+        model_invocation_id=candidate.provenance.model_invocation_id,
+        valid_from=candidate.validity.valid_from,
+        valid_to=candidate.validity.valid_to,
+        app_version=candidate.validity.app_version,
+        page_fingerprint=candidate.validity.page_fingerprint,
+        role=candidate.validity.role,
+        origin=candidate.validity.origin,
+        policy_id=candidate.validity.policy_id,
+        support_count=candidate.quality.support_count,
+        success_count=candidate.quality.success_count,
+        failure_count=candidate.quality.failure_count,
+        contradiction_count=candidate.quality.contradiction_count,
+        # Written from the counts on every save so the sortable column can never drift
+        # from the evidence it summarizes.
+        reliability=candidate.quality.reliability,
+        last_verified_at=candidate.quality.last_verified_at,
+        payload=dict(candidate.payload),
+        created_at=candidate.created_at,
+    )
+
+
+def feedback_to_domain(model: MemoryFeedbackModel) -> MemoryFeedback:
+    return MemoryFeedback(
+        feedback_id=model.feedback_id,
+        candidate_id=model.candidate_id,
+        run_id=model.run_id,
+        kind=FeedbackKind(model.kind),
+        created_at=model.created_at,
+        observed=model.observed,
+        # Back to None: the empty string is a storage detail that exists so the unique
+        # constraint can see two retries as one occurrence.
+        episode_id=model.episode_id or None,
+        detail=model.detail,
+    )
+
+
+def feedback_to_model(feedback: MemoryFeedback) -> MemoryFeedbackModel:
+    return MemoryFeedbackModel(
+        feedback_id=feedback.feedback_id,
+        candidate_id=feedback.candidate_id,
+        run_id=feedback.run_id,
+        episode_id=feedback.episode_id or "",
+        kind=feedback.kind.value,
+        observed=feedback.observed,
+        detail=feedback.detail,
+        created_at=feedback.created_at,
+    )
+
+
+def graph_sync_to_domain(model: GraphSyncStateModel) -> GraphSyncRecord:
+    return GraphSyncRecord(
+        candidate_id=model.candidate_id,
+        state=GraphSyncState(model.state),
+        graph_schema_version=model.graph_schema_version,
+        graph_node_id=model.graph_node_id,
+        attempts=model.attempts,
+        last_error=model.last_error,
+        synced_at=model.synced_at,
     )

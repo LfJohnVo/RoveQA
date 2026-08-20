@@ -28,7 +28,11 @@ INFRASTRUCTURE_PACKAGES = (
     "langchain",
     "playwright",
     "httpx",
+    # Both spellings: the distributed package is `graphiti_core`, and listing only
+    # `graphiti` matched nothing — the guard was open for the whole of Phase 09 and
+    # would not have caught a domain module importing the graph library.
     "graphiti",
+    "graphiti_core",
     "falkordb",
 )
 
@@ -61,6 +65,7 @@ FORBIDDEN_BY_LAYER = {
         "langchain",
         "playwright",
         "graphiti",
+        "graphiti_core",
         "falkordb",
     ),
 }
@@ -159,6 +164,11 @@ def test_the_raw_browser_adapter_is_only_reachable_through_the_guard() -> None:
         "import sqlalchemy",
         "from agentic_qa.infrastructure.persistence.postgres.models import Base",
         "from fastapi import APIRouter",
+        # Regression: the package is `graphiti_core`, so a list containing only
+        # `graphiti` let this straight through.
+        "from graphiti_core.nodes import EntityNode",
+        "import graphiti_core",
+        "from falkordb import FalkorDB",
     ],
 )
 def test_guard_catches_a_planted_violation(tmp_path: Path, line: str) -> None:

@@ -39,3 +39,9 @@ graphify-out/.graphify_root
 .roveqa/cache/
 .roveqa/credentials
 .roveqa/credentials.*
+
+# Drill outputs: evidence of a run, not source. The findings go in docs/status.
+soak-*.log
+# What scripts/demo.sh writes: a run's evidence, regenerated every time it runs.
+demo-out/
+backups/

@@ -25,6 +25,12 @@ docker compose --profile gates run --rm --quiet-pull backend-tests sh -c "
   # create_all leaves it on whatever schema existed when a table was first made:
   # a new column never appears, and the failure surfaces as a missing column in a
   # test rather than as the schema drift it is.
+  #
+  # Reset first. pytest still falls back to create_all when the schema is missing, so
+  # running the suite before the gate leaves tables no migration created — and the
+  # upgrade below then fails on a table it is about to create. The test database is
+  # disposable; the gate's reproducibility is not.
+  python scripts/reset_test_schema.py
   POSTGRES_DSN=\"\$POSTGRES_TEST_DSN\" alembic upgrade head
   pytest -q
 "

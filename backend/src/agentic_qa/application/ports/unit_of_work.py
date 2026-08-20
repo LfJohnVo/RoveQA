@@ -12,7 +12,13 @@ from typing import Protocol, Self
 from agentic_qa.application.ports.artifacts import ArtifactIndex
 from agentic_qa.application.ports.checkpoints import RecoveryPointRepository
 from agentic_qa.application.ports.events import RunEventLog
+from agentic_qa.application.ports.exploration import StateMapRepository
 from agentic_qa.application.ports.idempotency import IdempotencyRepository
+from agentic_qa.application.ports.knowledge import (
+    GraphSyncStateRepository,
+    KnowledgeRepository,
+    MemoryFeedbackRepository,
+)
 from agentic_qa.application.ports.plans import TestPlanRepository
 from agentic_qa.application.ports.policies import EnvironmentRepository, RunPolicyRepository
 from agentic_qa.application.ports.repositories import (
@@ -21,6 +27,7 @@ from agentic_qa.application.ports.repositories import (
     StoryRepository,
 )
 from agentic_qa.application.ports.results import CriterionResultRepository
+from agentic_qa.application.ports.triage import FailureClusterRepository
 
 
 class UnitOfWork(Protocol):
@@ -55,7 +62,22 @@ class UnitOfWork(Protocol):
     def criterion_results(self) -> CriterionResultRepository: ...
 
     @property
+    def failure_clusters(self) -> FailureClusterRepository: ...
+
+    @property
+    def state_maps(self) -> StateMapRepository: ...
+
+    @property
     def artifacts(self) -> ArtifactIndex: ...
+
+    @property
+    def knowledge(self) -> KnowledgeRepository: ...
+
+    @property
+    def memory_feedback(self) -> MemoryFeedbackRepository: ...
+
+    @property
+    def graph_sync(self) -> GraphSyncStateRepository: ...
 
     async def __aenter__(self) -> Self: ...
 

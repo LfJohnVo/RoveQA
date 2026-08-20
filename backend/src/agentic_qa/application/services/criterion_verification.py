@@ -41,23 +41,23 @@ async def verify_criteria(
     model: ModelGateway,
     hints: dict[str, str] | None = None,
     goal_failure: str | None = None,
+    goal_failure_kind: FailureKind | None = None,
 ) -> tuple[CriterionResult, ...]:
     """Produce one result per assertion.
 
     `goal_failure` short-circuits everything: if the agent never completed the goal, the
     criteria were never reachable, and checking the page anyway would report whatever
     happened to be on screen as if it were the outcome of the story.
+
+    `goal_failure_kind` is what makes that short-circuit *readable*. When the reason is
+    known — the policy refused an action, the run ran out of actions, inference was
+    unavailable — the criterion is `not_met` with that kind, and the run comes back
+    `blocked`: it could not do its job, and it says so. Without a kind the honest answer
+    is `unverified` and an inconclusive run, because "nobody knows why" is different
+    from "we know why and it was not the product".
     """
     if goal_failure is not None:
-        return tuple(
-            CriterionResult(
-                criterion_id=_criterion_of(step),
-                outcome=CriterionOutcome.UNVERIFIED,
-                observation=f"the run did not reach this criterion: {goal_failure}",
-                step_id=step.step_id,
-            )
-            for step in assertions
-        )
+        return tuple(_unreached(step, goal_failure, goal_failure_kind) for step in assertions)
 
     hints = hints or {}
     results: list[CriterionResult] = []
@@ -185,3 +185,25 @@ def _criterion_of(step: PlanStep) -> str:
     # Guaranteed by PlanStep: an assertion cannot exist without a criterion.
     assert step.criterion_id is not None
     return step.criterion_id
+
+
+def _unreached(step: PlanStep, reason: str, kind: FailureKind | None) -> CriterionResult:
+    criterion_id = _criterion_of(step)
+    observation = f"the run did not reach this criterion: {reason}"
+    if kind is None:
+        return CriterionResult(
+            criterion_id=criterion_id,
+            outcome=CriterionOutcome.UNVERIFIED,
+            observation=observation,
+            step_id=step.step_id,
+        )
+    return CriterionResult(
+        criterion_id=criterion_id,
+        outcome=CriterionOutcome.NOT_MET,
+        # Never PRODUCT. A run that stopped before reaching a criterion has observed
+        # nothing about the product, and saying otherwise is the one mistake that
+        # makes every later report suspect.
+        failure_kind=kind,
+        observation=observation,
+        step_id=step.step_id,
+    )

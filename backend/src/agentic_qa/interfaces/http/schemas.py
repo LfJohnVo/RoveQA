@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentic_qa.application.ports.events import RunEvent
+from agentic_qa.application.ports.schedules import RunSchedule
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.user_story import UserStory
@@ -28,10 +29,21 @@ class ProjectResponse(BaseModel):
 
     project_id: str
     name: str
+    default_run_policy_id: str | None = None
+    """Whether this project can start a run at all.
+
+    A run resolves its policy from the project when none is named (docs/12), so a
+    project without one cannot run. Exposing it lets a client say so before someone
+    tries, instead of surfacing the precondition as a validation error at the end.
+    """
 
     @classmethod
     def from_domain(cls, project: Project) -> "ProjectResponse":
-        return cls(project_id=project.project_id, name=project.name)
+        return cls(
+            project_id=project.project_id,
+            name=project.name,
+            default_run_policy_id=project.default_run_policy_id,
+        )
 
 
 class CreateRunPolicyRequest(BaseModel):
@@ -96,6 +108,15 @@ class CreateRunRequest(BaseModel):
     plan_version: str | None = Field(default=None, min_length=1, max_length=100)
     """Without a version the latest is resolved once, at creation, and pinned onto
     the run: what a run is judged by must not change while it runs."""
+
+    explore: bool = False
+    """Whether this run explores instead of following a plan.
+
+    Explicit, not inferred. A plan-less run has always meant "work towards this goal
+    with the planner", and quietly turning that into a deterministic crawl would remove
+    a capability nobody asked to lose. Exploring is a different job — no model, a
+    frontier, a state map — so it is a different request.
+    """
 
 
 class RunEventResponse(BaseModel):
@@ -243,3 +264,212 @@ class ImportPlanRequest(BaseModel):
     plan_version: str | None = Field(default=None, min_length=1, max_length=100)
     """Absent means the content hash, which is what makes re-submitting the same
     document idempotent (docs/12)."""
+
+
+class MemoryStatusResponse(BaseModel):
+    """What `roveqa memory status` prints.
+
+    Durable and projected counts are separate fields because they answer different
+    questions: how much this project has learned, and how much of it the graph
+    currently holds. One number could not say that the graph is empty but the
+    knowledge is safe.
+    """
+
+    project_id: str
+    environment_id: str
+    graph_available: bool
+    graph_schema_version: str
+    durable_candidates: int
+    actionable_candidates: int
+    sync_pending: int
+    sync_failed: int
+    by_status: dict[str, int]
+
+
+class MemoryValidateResponse(BaseModel):
+    project_id: str
+    environment_id: str
+    healthy: bool
+    problems: list[str]
+    """Empty when healthy. Named rather than counted so an operator can act on them
+    without reading logs."""
+
+    status: MemoryStatusResponse
+
+
+class MemoryRebuildResponse(BaseModel):
+    project_id: str
+    environment_id: str
+    materialized: int
+    forgotten: int
+    failed: int
+    graph_available: bool
+    """False when the pass stopped because the store is down. Reported rather than
+    raised: the durable side is fine and the backlog kept the work."""
+
+
+class ClusterMemberResponse(BaseModel):
+    """A pointer at one criterion result, not a copy of it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    criterion_id: str
+
+
+class ClusterHypothesisResponse(BaseModel):
+    """A deep model's reading of a cluster, in its own object.
+
+    Nested rather than flattened onto the cluster so a client cannot render a guess in
+    the same shape as an observation. `model_derived` is always true and stays in the
+    payload: a consumer that only reads this object still learns what it is holding.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    probable_cause: str
+    recommended_check: str
+    confidence: str
+    model_derived: bool
+    failure: str | None = None
+    """Why no hypothesis was produced. Set when the deep endpoint was down or answered
+    unusably, in which case `probable_cause` is empty."""
+
+    model_name: str | None = None
+    prompt_version: str | None = None
+
+
+class FailureClusterResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cluster_id: str
+    failure_kind: str
+    criterion_id: str
+    status: str
+    """`independent` or `blocked_downstream`. Only the first counts as a defect: one
+    broken environment must not be reported as a dozen bugs."""
+
+    reason: str
+    observation: str
+    http_status: str | None
+    route: str | None
+    blocked_by: str | None
+    representative_run_id: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    size: int
+    members: list[ClusterMemberResponse]
+    hypothesis: ClusterHypothesisResponse | None
+
+
+class FailureClusterPageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    clusters: list[FailureClusterResponse]
+    counted_as_defects: int
+
+
+class CreateScheduleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schedule_id: str = Field(min_length=1, max_length=200)
+    """The caller's id, never generated. It is what makes creating the same schedule
+    twice a conflict instead of a second nightly regression."""
+
+    cron: str = Field(min_length=1, max_length=200)
+    plan_id: str | None = Field(default=None, min_length=1, max_length=200)
+    plan_version: str | None = Field(default=None, min_length=1, max_length=100)
+    """Absent means the latest plan is resolved at each firing — right for "run the
+    current suite nightly", wrong for a pinned regression. A choice, not a default
+    nobody noticed."""
+
+    environment_id: str | None = Field(default=None, min_length=1, max_length=200)
+    run_policy_id: str | None = Field(default=None, min_length=1, max_length=200)
+    paused: bool = False
+    note: str = Field(default="", max_length=500)
+
+
+class ScheduleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schedule_id: str
+    project_id: str
+    cron: str
+    plan_id: str | None
+    plan_version: str | None
+    environment_id: str | None
+    run_policy_id: str | None
+    paused: bool
+    note: str
+
+    @classmethod
+    def from_domain(cls, schedule: RunSchedule) -> "ScheduleResponse":
+        return cls(
+            schedule_id=schedule.schedule_id,
+            project_id=schedule.project_id,
+            cron=schedule.cron,
+            plan_id=schedule.plan_id,
+            plan_version=schedule.plan_version,
+            environment_id=schedule.environment_id,
+            run_policy_id=schedule.run_policy_id,
+            paused=schedule.paused,
+            note=schedule.note,
+        )
+
+
+class ScheduleListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    schedules: list[ScheduleResponse]
+
+
+class ExploredStateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    signature: str
+    route: str
+    url: str
+    title: str
+    affordances: list[str]
+    """The normalised role:name keys the signature was built from. Enough to see what a
+    page offers; not the page's text, which belongs in evidence and not in a map."""
+
+
+class ChangedStateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    route: str
+    gained: list[str]
+    lost: list[str]
+
+
+class ExplorationDeltaResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    baseline_run_id: str
+    new: list[ExploredStateResponse]
+    gone: list[ExploredStateResponse]
+    changed: list[ChangedStateResponse]
+    unreachable_conclusions: bool
+    """True when either exploration stopped on a budget, so `gone` may mean "never
+    reached" rather than "removed". Reported rather than suppressed: hiding the finding
+    and hiding its caveat are both ways of lying about it."""
+
+
+class ExplorationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    project_id: str
+    stop_reason: str
+    complete: bool
+    actions_taken: int
+    states_discovered: int
+    max_depth_reached: int
+    frontier_remaining: int
+    declined: int
+    states: list[ExploredStateResponse]
+    delta: ExplorationDeltaResponse | None
+    """Absent for a project's first exploration. Everything being new is not a finding."""

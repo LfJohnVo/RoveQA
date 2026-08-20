@@ -19,6 +19,7 @@ from agentic_qa.domain.browser.actions import (
 )
 from agentic_qa.domain.browser.policy_guard import PolicyViolation, evaluate_action
 from agentic_qa.domain.errors import InvalidEntityError
+from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
 
 
@@ -73,6 +74,9 @@ class RecordingGateway:
 
     async def current_url(self) -> str | None:
         return None
+
+    async def describe_page(self) -> PageState:
+        return PageState(url="")
 
     async def aclose(self) -> None:
         return None

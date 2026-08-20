@@ -17,6 +17,14 @@ SESSION_COOKIE = "target_session"
 VALID_USER = "qa@example.test"
 VALID_PASSWORD = "correct-horse"
 
+LEAKED_TOKEN = "sk-live-9f2b41c7d8e6a5b3"
+"""A credential the page renders in plain sight, the way real applications do:
+an API key on a settings screen, a reset link with a token in the query string.
+
+The fixture exists so a test can prove the value never reaches a screenshot name,
+an observation, a stored URL or a log line. A secret nobody planted is a secret
+nobody can prove was not leaked."""
+
 
 @dataclass
 class TargetState:
@@ -137,6 +145,21 @@ def create_target_app(state: TargetState | None = None) -> FastAPI:
             "Console error",
             "<script>console.error('deliberate console failure');"
             "fetch('/missing-endpoint');</script>",
+        )
+
+    @app.get("/secrets", response_class=HTMLResponse)
+    async def secrets_page() -> HTMLResponse:
+        """A page that shows a credential and links to one in a URL.
+
+        Both are shapes real applications produce: an API key on a settings screen, and
+        a reset link carrying a token. Neither may survive into anything this system
+        stores.
+        """
+        return _page(
+            "Settings",
+            f"<p id='api-key'>API key: {LEAKED_TOKEN}</p>"
+            f"<a href='/records?session_token={LEAKED_TOKEN}'>Records with token</a>"
+            "<p>Nothing else to see.</p>",
         )
 
     @app.get("/injection", response_class=HTMLResponse)

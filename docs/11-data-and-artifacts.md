@@ -13,7 +13,23 @@ Introducir las tablas por fase, no en una mega migración. ✅ = ya migrada:
 - `evidence_sets`, `artifacts`
 - `idempotency_records`
 - `model_invocations`
-- `knowledge_candidates`, `memory_feedback`, `graph_sync_state` (Phase 09)
+- `knowledge_candidates` ✅, `memory_feedback` ✅, `graph_sync_state` ✅ (Phase 09)
+- `failure_clusters` ✅, `failure_cluster_members` ✅, `cluster_hypotheses` ✅ (Phase 11).
+  Tres tablas y no una: el split es la garantía. Las dos primeras son lo observado y cómo se
+  agrupó; la tercera es lo que un modelo grande conjeturó. Ninguna sentencia escribe ambas,
+  así que una hipótesis no puede sobrescribir la evidencia que justifica un cluster.
+  Un member es un puntero `(run_id, criterion_id)` a `criterion_results`, no una copia:
+  la observación y los evidence refs ya viven ahí y una segunda copia puede divergir.
+- `explored_states` ✅, `exploration_runs` ✅ (Phase 12). State maps de exploración, **por run**
+  y no fusionados en una sola foto acumulada: una tabla única podría decir qué ofrece una
+  aplicación pero nunca qué apareció, y "qué cambió" es todo el punto de una regresión
+  periódica. `exploration_runs` va aparte porque responde algo que los estados no pueden: un
+  mapa de doce estados que se quedó sin acciones y uno que se quedó sin sitios a los que ir
+  se ven idénticos, y sólo el segundo sostiene la afirmación de que un estado ausente la
+  próxima vez fue eliminado. `affordance_keys` guarda el conjunto normalizado del que se
+  calculó la signature, para que un delta pueda decir qué ganó o perdió una página; los
+  accessible names originales no se guardan — son contenido de página, y un state map no es
+  un almacén de evidencia.
 
 ### Important identities
 

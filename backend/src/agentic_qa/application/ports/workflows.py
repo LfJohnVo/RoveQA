@@ -9,7 +9,7 @@ from typing import Protocol
 
 
 class WorkflowGateway(Protocol):
-    async def start_run(self, run_id: str, project_id: str) -> None:
+    async def start_run(self, run_id: str, project_id: str, *, explore: bool = False) -> None:
         """Start the durable workflow for an already-persisted run.
 
         Naturally idempotent: starting a workflow whose id already exists is a no-op,

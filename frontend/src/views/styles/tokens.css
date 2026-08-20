@@ -1,0 +1,86 @@
+/*
+ * Design tokens.
+ *
+ * An operations console, not a marketing page. Colour carries meaning here — a verdict
+ * is the reason someone opened this screen — so the palette is small and every hue is
+ * spent on a distinction that matters:
+ *
+ *   pass / fail          an answer about the product
+ *   no-answer            the run could not tell. Never rendered as a failure: saying
+ *                        the product is broken when the agent was merely unsure is the
+ *                        one mistake that makes every later report suspect (docs/00)
+ *   stopped              a human ended it
+ *   live / stale         whether what is on screen is current
+ *
+ * Dark by default because this is a screen people watch for a long time, with a light
+ * scheme that follows the operating system rather than a toggle nobody would find.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+
+  --surface: #14171c;
+  --surface-raised: #1b1f26;
+  --surface-sunken: #0e1014;
+  --border: #2a2f38;
+  --border-strong: #3b424e;
+
+  --ink: #e8eaee;
+  --ink-muted: #98a0ad;
+  --ink-faint: #6b7381;
+
+  --accent: #5b9cf5;
+  --accent-ink: #0e1014;
+
+  --pass: #4ac08a;
+  --fail: #e5677a;
+  --no-answer: #d8a44a;
+  --stopped: #8b93a1;
+  --live: #4ac08a;
+  --stale: #d8a44a;
+
+  --focus-ring: 2px solid var(--accent);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --surface: #ffffff;
+    --surface-raised: #f6f7f9;
+    --surface-sunken: #eceef2;
+    --border: #d9dde4;
+    --border-strong: #b8bfca;
+
+    --ink: #1b1f26;
+    --ink-muted: #57606e;
+    --ink-faint: #7d8593;
+
+    --accent: #2563c9;
+    --accent-ink: #ffffff;
+
+    --pass: #1f8f5f;
+    --fail: #c0374c;
+    --no-answer: #9a6c12;
+    --stopped: #6b7381;
+    --live: #1f8f5f;
+    --stale: #9a6c12;
+  }
+}

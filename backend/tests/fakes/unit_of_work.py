@@ -12,12 +12,17 @@ from tests.fakes.repositories import (
     InMemoryArtifactIndex,
     InMemoryCriterionResultRepository,
     InMemoryEnvironmentRepository,
+    InMemoryFailureClusterRepository,
+    InMemoryGraphSyncStateRepository,
     InMemoryIdempotencyRepository,
+    InMemoryKnowledgeRepository,
+    InMemoryMemoryFeedbackRepository,
     InMemoryProjectRepository,
     InMemoryRecoveryPointRepository,
     InMemoryRunEventLog,
     InMemoryRunPolicyRepository,
     InMemoryRunRepository,
+    InMemoryStateMapRepository,
     InMemoryStore,
     InMemoryStoryRepository,
     InMemoryTestPlanRepository,
@@ -72,12 +77,32 @@ class InMemoryUnitOfWork:
         return InMemoryCriterionResultRepository(self._require_active())
 
     @property
+    def failure_clusters(self) -> InMemoryFailureClusterRepository:
+        return InMemoryFailureClusterRepository(self._require_active())
+
+    @property
+    def state_maps(self) -> InMemoryStateMapRepository:
+        return InMemoryStateMapRepository(self._require_active())
+
+    @property
     def plans(self) -> InMemoryTestPlanRepository:
         return InMemoryTestPlanRepository(self._require_active())
 
     @property
     def recovery_points(self) -> InMemoryRecoveryPointRepository:
         return InMemoryRecoveryPointRepository(self._require_active())
+
+    @property
+    def knowledge(self) -> InMemoryKnowledgeRepository:
+        return InMemoryKnowledgeRepository(self._require_active())
+
+    @property
+    def memory_feedback(self) -> InMemoryMemoryFeedbackRepository:
+        return InMemoryMemoryFeedbackRepository(self._require_active())
+
+    @property
+    def graph_sync(self) -> InMemoryGraphSyncStateRepository:
+        return InMemoryGraphSyncStateRepository(self._require_active())
 
     async def __aenter__(self) -> Self:
         self._baseline = self._store.snapshot()

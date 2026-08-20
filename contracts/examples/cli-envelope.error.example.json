@@ -1,0 +1,13 @@
+{
+  "schema_version": "roveqa.cli.v1",
+  "request_id": "00000000-0000-4000-8000-00000000re92",
+  "error": {
+    "code": "WAIT_TIMEOUT",
+    "message": "run 00000000-0000-4000-8000-000000000run is still running",
+    "next_action": "roveqa run wait 00000000-0000-4000-8000-000000000run --timeout 300",
+    "details": {
+      "run_id": "00000000-0000-4000-8000-000000000run",
+      "status": "running"
+    }
+  }
+}

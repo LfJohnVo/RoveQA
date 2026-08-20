@@ -1,0 +1,28 @@
+{
+  "schema_version": "roveqa.test-plan.v1",
+  "plan_id": "00000000-0000-4000-8000-00000000p1an",
+  "plan_version": "1",
+  "project_id": "00000000-0000-4000-8000-000000000001",
+  "name": "place an order",
+  "mode": "story",
+  "description": "A signed-in customer places an order and sees the confirmation.",
+  "source_story_id": "00000000-0000-4000-8000-0000000st0ry",
+  "run_policy_id": "00000000-0000-4000-8000-0000000p011c",
+  "plan_steps": [
+    {
+      "step_id": "open-checkout",
+      "type": "action",
+      "description": "open the checkout page"
+    },
+    {
+      "step_id": "assert-confirmed",
+      "type": "assertion",
+      "description": "the confirmation page appears",
+      "criterion_id": "ac-confirmed"
+    }
+  ],
+  "metadata": {
+    "suite": "checkout",
+    "owner": "qa"
+  }
+}

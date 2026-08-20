@@ -10,7 +10,7 @@
  * step ids, assertions that trace back to a criterion, and a bounded budget.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 import { CliError } from "../errors.js";
 import { validateAgainst } from "../contracts/schemas.js";
@@ -39,6 +39,28 @@ interface PlanDocument {
 }
 
 export function readPlanFile(path: string): unknown {
+  // Ask the filesystem how big it is *before* reading it. Checking the length of a
+  // string you already loaded is not a bound — a two-gigabyte plan file would be in
+  // memory by the time the check ran, which is the accident the limit exists to
+  // prevent (docs/25).
+  let size: number;
+  try {
+    const info = statSync(path);
+    if (info.isDirectory()) {
+      // Reading a directory fails with an errno nobody can act on. Say what is wrong.
+      throw new CliError("VALIDATION_ERROR", `plan path is a directory, not a file: ${path}`);
+    }
+    size = info.size;
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError("NOT_FOUND", `cannot read plan file: ${path}`, {
+      details: { reason: error instanceof Error ? error.message : String(error) },
+    });
+  }
+  if (size > MAX_PLAN_BYTES) {
+    throw new CliError("VALIDATION_ERROR", `plan file exceeds ${MAX_PLAN_BYTES} bytes: ${path}`);
+  }
+
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -47,7 +69,8 @@ export function readPlanFile(path: string): unknown {
       details: { reason: error instanceof Error ? error.message : String(error) },
     });
   }
-  // Plan files are user input (docs/25): bound the size before parsing, not after.
+  // Checked again on the decoded text: `size` is bytes on disk, and a file that grew
+  // between the stat and the read would otherwise slip past.
   if (Buffer.byteLength(raw, "utf8") > MAX_PLAN_BYTES) {
     throw new CliError("VALIDATION_ERROR", `plan file exceeds ${MAX_PLAN_BYTES} bytes: ${path}`);
   }

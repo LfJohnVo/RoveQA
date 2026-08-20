@@ -9,12 +9,17 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresArtifactIndex,
     PostgresCriterionResultRepository,
     PostgresEnvironmentRepository,
+    PostgresFailureClusterRepository,
+    PostgresGraphSyncStateRepository,
     PostgresIdempotencyRepository,
+    PostgresKnowledgeRepository,
+    PostgresMemoryFeedbackRepository,
     PostgresProjectRepository,
     PostgresRecoveryPointRepository,
     PostgresRunEventLog,
     PostgresRunPolicyRepository,
     PostgresRunRepository,
+    PostgresStateMapRepository,
     PostgresStoryRepository,
     PostgresTestPlanRepository,
 )
@@ -74,8 +79,28 @@ class PostgresUnitOfWork:
         return PostgresCriterionResultRepository(self.session)
 
     @property
+    def failure_clusters(self) -> PostgresFailureClusterRepository:
+        return PostgresFailureClusterRepository(self.session)
+
+    @property
+    def state_maps(self) -> PostgresStateMapRepository:
+        return PostgresStateMapRepository(self.session)
+
+    @property
     def plans(self) -> PostgresTestPlanRepository:
         return PostgresTestPlanRepository(self.session)
+
+    @property
+    def knowledge(self) -> PostgresKnowledgeRepository:
+        return PostgresKnowledgeRepository(self.session)
+
+    @property
+    def memory_feedback(self) -> PostgresMemoryFeedbackRepository:
+        return PostgresMemoryFeedbackRepository(self.session)
+
+    @property
+    def graph_sync(self) -> PostgresGraphSyncStateRepository:
+        return PostgresGraphSyncStateRepository(self.session)
 
     async def __aenter__(self) -> Self:
         self._session = self._session_factory()

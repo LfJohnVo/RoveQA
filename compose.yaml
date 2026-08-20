@@ -81,12 +81,31 @@ services:
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
       REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233
+      # The learned-memory projection (ADR 0008). Rebuildable from PostgreSQL, so
+      # losing it costs retrieval breadth and never a run's correctness.
+      FALKORDB_URL: ${FALKORDB_URL:-redis://falkordb:6379}
+      GRAPH_DATABASE: ${GRAPH_DATABASE:-roveqa}
+      # Graphiti's telemetry is opt-out. A local-first deployment does not phone home
+      # about how much memory it is building.
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+      # Absent by default: without a pooling endpoint the graph still answers by text
+      # search, and PostgreSQL's deterministic ranking is unaffected.
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+    volumes:
+      # Evidence bytes. Shared on purpose: the worker captures them and the API serves
+      # them, and until this existed they were written into the worker's own container
+      # filesystem — unreadable by the API and gone the moment the worker was replaced.
+      # The references live in PostgreSQL (docs/11); this is where the bytes live.
+      - artifact_data:/data/runs
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
       temporal:
+        condition: service_healthy
+      falkordb:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
@@ -113,13 +132,38 @@ services:
       # A checkpoint may only rebuild the types we listed. Anything else in the
       # checkpoint table is refused instead of imported.
       LANGGRAPH_STRICT_MSGPACK: "true"
+      # The learned-memory projection (ADR 0008). Rebuildable from PostgreSQL, so
+      # losing it costs retrieval breadth and never a run's correctness.
+      FALKORDB_URL: ${FALKORDB_URL:-redis://falkordb:6379}
+      GRAPH_DATABASE: ${GRAPH_DATABASE:-roveqa}
+      # Graphiti's telemetry is opt-out. A local-first deployment does not phone home
+      # about how much memory it is building.
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+      # Absent by default: without a pooling endpoint the graph still answers by text
+      # search, and PostgreSQL's deterministic ranking is unaffected.
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      # Cold-path analysis of failure clusters (Phase 11). Absent by default: failures
+      # are still grouped deterministically and reported, with no hypothesis attached.
+      DEEP_BASE_URL: ${DEEP_BASE_URL:-}
+      DEEP_MODEL: ${DEEP_MODEL:-}
+      DEEP_TIMEOUT_SECONDS: ${DEEP_TIMEOUT_SECONDS:-900}
+      DEEP_MAX_OUTPUT_TOKENS: ${DEEP_MAX_OUTPUT_TOKENS:-800}
+    volumes:
+      # Evidence bytes. Shared on purpose: the worker captures them and the API serves
+      # them, and until this existed they were written into the worker's own container
+      # filesystem — unreadable by the API and gone the moment the worker was replaced.
+      # The references live in PostgreSQL (docs/11); this is where the bytes live.
+      - artifact_data:/data/runs
     depends_on:
       postgres:
         condition: service_healthy
       temporal:
         condition: service_healthy
+      falkordb:
+        condition: service_healthy
     # Deliberately replaceable: no run state lives in this container, so it can be
-    # killed and restarted without losing a run.
+    # killed and restarted without losing a run — and now no evidence does either.
     restart: unless-stopped
 
   # Development gates run in containers, not on the host: Linux gives the browser
@@ -141,12 +185,19 @@ services:
       # Same regime as the worker, so a type missing from the checkpoint allowlist
       # fails the suite instead of somebody's recovery.
       LANGGRAPH_STRICT_MSGPACK: "true"
+      # A real FalkorDB, in its own graph: the projection tests wipe it, and doing that
+      # to the application's graph would delete whatever a developer was looking at.
+      FALKORDB_TEST_URL: redis://falkordb:6379
+      GRAPH_DATABASE: roveqa_test
+      GRAPHITI_TELEMETRY_ENABLED: "false"
     volumes:
       # Source is mounted so a change is tested without a rebuild; the virtualenv
       # lives at /opt/venv precisely so this mount cannot hide it.
       - ./backend/src:/app/src
       - ./backend/tests:/app/tests
       - ./backend/alembic:/app/alembic
+      # Maintenance scripts the gate runs (resetting the suite's own database).
+      - ./backend/scripts:/app/scripts
       # The published contracts, read-only: the suite validates its output against the
       # real schema files rather than a copy that could drift away from them.
       - ./contracts:/app/contracts:ro
@@ -156,6 +207,8 @@ services:
       redis:
         condition: service_healthy
       temporal:
+        condition: service_healthy
+      falkordb:
         condition: service_healthy
 
   # Blueprint/contract validation also runs in a container so the gate does not
@@ -167,6 +220,38 @@ services:
     volumes:
       - .:/repo:ro
     command: ["bash", "scripts/validate-blueprint.sh"]
+
+  # The control UI (Phase 10). Vite's dev server rather than a built bundle: this is
+  # the development topology, and a production image is a Phase 14 concern.
+  #
+  # It proxies /api to the API container, so the browser talks to one origin and no
+  # CORS configuration has to exist for development only — a setting that exists only
+  # in development is a setting nobody tests.
+  frontend:
+    image: node:24-alpine
+    working_dir: /app
+    environment:
+      ROVEQA_API_URL: http://api:8000
+      # A bind mount from a Windows or macOS host delivers no file events into the
+      # container; without polling the dev server never reloads and every edit needs a
+      # container restart. Set it to false on a Linux host to save the CPU.
+      VITE_POLL_WATCH: ${VITE_POLL_WATCH:-true}
+      PNPM_HOME: /pnpm
+      npm_config_store_dir: /pnpm/store
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_pnpm_store:/pnpm
+    command:
+      - "sh"
+      - "-c"
+      - "corepack enable pnpm && pnpm install --frozen-lockfile && pnpm dev --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend-tests:
     image: node:24-alpine
@@ -208,24 +293,43 @@ services:
   # `--structured-outputs-config` replaced `--guided-decoding-backend` in 0.27; its
   # default backend ('auto') resolves to xgrammar, which is what makes
   # `response_format: json_schema` enforced at the server instead of merely requested.
+  # Which model this serves is configuration, not a constant: it depends on the GPU of
+  # the host running it. Everything that decides whether a model *fits* is a variable
+  # too — quantization and eager mode are what let a larger Qwen onto a 16GB card — and
+  # VLLM_EXTRA_ARGS is the escape hatch for anything else rather than a variable per
+  # flag. See .env.example for the menu and what fits.
   vllm:
     image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.27.1-cu129}
     profiles: ["gpu"]
+    # Shell form on purpose: an unset optional flag has to disappear entirely. Passing
+    # `--quantization ""` is not the same as not passing it, and vLLM rejects it.
+    entrypoint: ["sh", "-lc"]
     command:
-      - "--model"
-      - "${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
-      - "--served-model-name"
-      - "${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
-      - "--max-model-len"
-      - "${VLLM_MAX_MODEL_LEN:-16384}"
-      # Weights take ~8GB of the 16GB card; the rest is KV cache and activations.
-      - "--gpu-memory-utilization"
-      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.85}"
+      - >
+        exec vllm serve "$$VLLM_MODEL"
+        --served-model-name "$$VLLM_MODEL"
+        --max-model-len "$$VLLM_MAX_MODEL_LEN"
+        --gpu-memory-utilization "$$VLLM_GPU_MEMORY_UTILIZATION"
+        --max-num-seqs "$$VLLM_MAX_NUM_SEQS"
+        $${VLLM_QUANTIZATION:+--quantization "$$VLLM_QUANTIZATION"}
+        $${VLLM_ENFORCE_EAGER:+--enforce-eager}
+        $$VLLM_EXTRA_ARGS
+    environment:
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-16384}
+      # Weights plus KV cache plus activations. Raise it for a bigger model only after
+      # the weights actually fit: overcommitting fails at load, not at request time.
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.85}
       # Matches MODEL_MAX_CONCURRENCY: admitting more sequences than the client will
       # ever send just reserves KV cache nobody uses.
-      - "--max-num-seqs"
-      - "${VLLM_MAX_NUM_SEQS:-4}"
-    environment:
+      VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-4}
+      # Empty means "not quantized". AWQ/GPTQ is what puts a 14B-class model on 16GB.
+      VLLM_QUANTIZATION: ${VLLM_QUANTIZATION:-}
+      # Set to any non-empty value to skip CUDA graph capture. Costs some latency and
+      # saves the memory the capture needs — often the difference between a large model
+      # loading and OOMing at startup.
+      VLLM_ENFORCE_EAGER: ${VLLM_ENFORCE_EAGER:-}
+      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:-}
       HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /root/.cache/huggingface
       # Docker Desktop runs containers under WSL2, where vLLM disables pinned memory by
@@ -247,7 +351,9 @@ services:
       timeout: 10s
       retries: 40
       # First boot downloads weights and compiles CUDA graphs; later boots are minutes.
-      start_period: 600s
+      # A larger model downloads more, so raise it rather than reading a slow first
+      # boot as a failure.
+      start_period: ${VLLM_START_PERIOD:-600s}
     deploy:
       resources:
         reservations:
@@ -256,19 +362,118 @@ services:
               count: 1
               capabilities: ["gpu"]
 
+  # Embeddings for the learned-memory graph (ADR 0008). A separate server from the
+  # generation one on purpose: a pooling model and a chat model are different models,
+  # and sharing one endpoint would make every embedding queue behind the planner.
+  #
+  # Its own profile because on a single-GPU host it competes with `vllm` for the card.
+  # Enable it when semantic retrieval is worth the memory; without it the graph still
+  # answers by text and PostgreSQL's deterministic ranking is unaffected.
   vllm-embed:
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.27.1-cu129}
     profiles: ["memory-gpu"]
+    entrypoint: ["sh", "-lc"]
+    command:
+      - >
+        exec vllm serve "$$EMBEDDING_MODEL"
+        --served-model-name "$$EMBEDDING_MODEL"
+        --runner pooling
+        --max-model-len "$$EMBEDDING_MAX_MODEL_LEN"
+        --gpu-memory-utilization "$$EMBEDDING_GPU_MEMORY_UTILIZATION"
+        $$EMBEDDING_EXTRA_ARGS
     environment:
-      VLLM_EMBED_MODEL: ${VLLM_EMBED_MODEL:-configure-embedding-model}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      EMBEDDING_MAX_MODEL_LEN: ${EMBEDDING_MAX_MODEL_LEN:-8192}
+      # Small by default: this shares the card with the generation server, and an
+      # embedder that starves the planner costs more than the recall it adds.
+      EMBEDDING_GPU_MEMORY_UTILIZATION: ${EMBEDDING_GPU_MEMORY_UTILIZATION:-0.10}
+      EMBEDDING_EXTRA_ARGS: ${EMBEDDING_EXTRA_ARGS:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
+      VLLM_WSL2_ENABLE_PIN_MEMORY: "1"
+    volumes:
+      - ./data/models:/root/.cache/huggingface
+    shm_size: "2gb"
     ports:
-      - "8001:8000"
+      - "8101:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: ${VLLM_START_PERIOD:-600s}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  # Deep analysis (Phase 11). A second OpenAI-compatible server, deliberately not the
+  # same one the browser loop talks to: a model big enough to explain a cluster answers
+  # in minutes, and putting it behind the planner's endpoint would make every browser
+  # step queue behind an analysis.
+  #
+  # Its own profile because on a single-GPU host it competes with `vllm` for the card.
+  # The intended use is sequential — run the fast model while runs execute, bring this
+  # up to analyse — or a second machine. Nothing breaks when it is simply never started:
+  # triage still groups failures and the clusters still land.
+  #
+  # AirLLM is the alternative for a model far larger than the card, streamed layer by
+  # layer at minutes per answer; anything speaking /v1/chat/completions works here, and
+  # DEEP_BASE_URL is all the backend knows about it.
+  vllm-deep:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.27.1-cu129}
+    profiles: ["deep-gpu"]
+    entrypoint: ["sh", "-lc"]
+    command:
+      - >
+        exec vllm serve "$$DEEP_MODEL"
+        --served-model-name "$$DEEP_MODEL"
+        --max-model-len "$$DEEP_MAX_MODEL_LEN"
+        --gpu-memory-utilization "$$DEEP_GPU_MEMORY_UTILIZATION"
+        --max-num-seqs 1
+        $${DEEP_QUANTIZATION:+--quantization "$$DEEP_QUANTIZATION"}
+        $${DEEP_ENFORCE_EAGER:+--enforce-eager}
+        $$DEEP_EXTRA_ARGS
+    environment:
+      # Bigger than the planner's model on purpose — that is the entire reason this
+      # endpoint exists. Quantized so a 14B-class model fits on 16GB.
+      DEEP_MODEL: ${DEEP_MODEL:-Qwen/Qwen3-14B-AWQ}
+      DEEP_MAX_MODEL_LEN: ${DEEP_MAX_MODEL_LEN:-16384}
+      DEEP_GPU_MEMORY_UTILIZATION: ${DEEP_GPU_MEMORY_UTILIZATION:-0.90}
+      DEEP_QUANTIZATION: ${DEEP_QUANTIZATION:-awq_marlin}
+      DEEP_ENFORCE_EAGER: ${DEEP_ENFORCE_EAGER:-1}
+      DEEP_EXTRA_ARGS: ${DEEP_EXTRA_ARGS:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
+      VLLM_WSL2_ENABLE_PIN_MEMORY: "1"
+    volumes:
+      - ./data/models:/root/.cache/huggingface
+    shm_size: "8gb"
+    ports:
+      - "8102:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: ${VLLM_START_PERIOD:-600s}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
 
   # api / worker / frontend services are added in their phases (02/10)
-  # once real entrypoints exist. airllm is added in Phase 11.
+  # once real entrypoints exist.
 
 volumes:
   postgres_data: {}
+  artifact_data: {}
   falkordb_data: {}
   frontend_node_modules: {}
   frontend_pnpm_store: {}

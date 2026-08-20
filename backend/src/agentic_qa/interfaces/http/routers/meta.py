@@ -11,8 +11,11 @@ before it knows whether it can talk to this server at all.
 
 from fastapi import APIRouter
 
+from agentic_qa.application.ports.graph import GRAPH_SCHEMA_VERSION
 from agentic_qa.application.queries.failure_context import BUNDLE_SCHEMA_VERSION
 from agentic_qa.application.queries.run_report import REPORT_VERSION
+from agentic_qa.domain.knowledge.experience import SCHEMA_VERSION as KNOWLEDGE_VERSION
+from agentic_qa.domain.knowledge.memory_context import SCHEMA_VERSION as MEMORY_CONTEXT_VERSION
 from agentic_qa.domain.qa.test_plan import SCHEMA_VERSION as TEST_PLAN_VERSION
 
 router = APIRouter(prefix="/api/v1/meta", tags=["ops"])
@@ -29,5 +32,11 @@ async def read_contracts() -> dict[str, object]:
             "test_plan": TEST_PLAN_VERSION,
             "failure_bundle": BUNDLE_SCHEMA_VERSION,
             "run_report": REPORT_VERSION,
+            "knowledge_experience": KNOWLEDGE_VERSION,
+            "memory_context": MEMORY_CONTEXT_VERSION,
+            # Not a wire contract but a shape a client can be out of step with: a graph
+            # written under an older projection version is a rebuild target, and an
+            # operator deciding that needs to see the version the server writes.
+            "graph_projection": GRAPH_SCHEMA_VERSION,
         },
     }
