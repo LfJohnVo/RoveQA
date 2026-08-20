@@ -19,9 +19,34 @@ import type { AcceptanceCriterion, UserStory } from "@domain/qa/story";
 import type { RunReport } from "@domain/runs/findings";
 import type { RunEvent } from "@domain/runs/timeline";
 
+export interface NewProjectInput {
+  name: string;
+  /**
+   * Where runs of this project may go. Required, and there is no empty default: the
+   * allowlist is the only thing that knows which application is under test, so a
+   * project created without one can list, show and do nothing.
+   */
+  allowedOrigins: readonly string[];
+  maxDurationSeconds: number;
+  maxActions: number;
+  maxModelCalls: number;
+  /** Whether the agent may click, type and submit. Off by default, on the server too:
+   * a policy that permits writes is a decision somebody makes, not one they inherit. */
+  destructiveActions: boolean;
+}
+
 export interface ProjectGateway {
   list(limit: number): Promise<Project[]>;
   get(projectId: string): Promise<Project>;
+
+  /**
+   * Create the project and its first run policy, in that order.
+   *
+   * One method rather than two because half of it is not usable: a project with no
+   * policy cannot compile a plan or start a run, and leaving the second call to the
+   * caller is how the UI ends up full of projects that look real and refuse to work.
+   */
+  create(input: NewProjectInput): Promise<Project>;
 }
 
 export interface StartRunInput {

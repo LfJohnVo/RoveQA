@@ -20,6 +20,7 @@ import type {
   StoryGateway,
   DraftStory,
   CompiledPlan,
+  NewProjectInput,
 } from "@application/ports/gateways";
 import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { Project } from "@domain/projects/project";
@@ -134,6 +135,32 @@ export class HttpProjectGateway implements ProjectGateway {
     return toProject(
       await this.client.request("GET", `/api/v1/projects/${encodeURIComponent(projectId)}`),
     );
+  }
+
+  async create(input: NewProjectInput): Promise<Project> {
+    const created = toProject(
+      await this.client.request("POST", "/api/v1/projects", { body: { name: input.name } }),
+    );
+
+    await this.client.request(
+      "POST",
+      `/api/v1/projects/${encodeURIComponent(created.projectId)}/run-policies`,
+      {
+        body: {
+          allowed_origins: input.allowedOrigins,
+          max_duration_seconds: input.maxDurationSeconds,
+          max_actions: input.maxActions,
+          max_model_calls: input.maxModelCalls,
+          destructive_actions: input.destructiveActions,
+          set_as_project_default: true,
+        },
+      },
+    );
+
+    // Read back rather than patching the first response: `default_run_policy_id` is
+    // set by the second call, and returning the stale object would show a project the
+    // UI then refuses to start a run for.
+    return this.get(created.projectId);
   }
 }
 

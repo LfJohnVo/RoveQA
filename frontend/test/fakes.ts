@@ -22,6 +22,7 @@ import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { UserStory } from "@domain/qa/story";
 import type { RunReport } from "@domain/runs/findings";
 import type { ConnectionState } from "@domain/runs/connection";
+import type { NewProjectInput } from "@application/ports/gateways";
 import type { Project } from "@domain/projects/project";
 import type { Run, RunStatus } from "@domain/runs/run";
 import type { RunEvent } from "@domain/runs/timeline";
@@ -51,6 +52,9 @@ export function makeEvent(sequence: number, type = "run.step"): RunEvent {
 
 export class FakeProjectGateway implements ProjectGateway {
   private readonly projects: Project[];
+  readonly created: NewProjectInput[] = [];
+  /** Set to make `create` fail, the way a rejected origin does. */
+  refuse: Error | null = null;
 
   constructor(projects: Project[] = []) {
     this.projects = projects;
@@ -64,6 +68,20 @@ export class FakeProjectGateway implements ProjectGateway {
     const found = this.projects.find((project) => project.projectId === projectId);
     if (found === undefined) return Promise.reject(new NotFound());
     return Promise.resolve(found);
+  }
+
+  create(input: NewProjectInput): Promise<Project> {
+    if (this.refuse !== null) return Promise.reject(this.refuse);
+    this.created.push(input);
+    // With a policy id, because the real gateway does not return one without it: the
+    // whole point of the call is that the project comes back able to run.
+    const project: Project = {
+      projectId: `proj-${this.projects.length + 1}`,
+      name: input.name,
+      defaultRunPolicyId: "pol-1",
+    };
+    this.projects.push(project);
+    return Promise.resolve(project);
   }
 }
 

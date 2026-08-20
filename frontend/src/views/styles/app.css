@@ -310,6 +310,26 @@ body {
   font-size: var(--text-sm);
 }
 
+/* A checkbox reads as one line with its label, not as a stacked field. */
+.field--inline label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink);
+}
+
+.field--inline input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+/* A project with no run policy cannot start a run. Said on the card rather than
+   discovered two screens later, where it reads as a broken control plane. */
+.card__warning {
+  color: var(--no-answer);
+  font-family: var(--font-sans);
+}
+
 /* --- stats ------------------------------------------------------------------- */
 
 .stats {

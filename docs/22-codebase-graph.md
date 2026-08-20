@@ -41,6 +41,82 @@ graphify-out/
 
 Commit the portable structural outputs when they remain reasonably sized. Ignore generated visualization/cost/cache files unless the team deliberately chooses otherwise.
 
+## El grafo de hoy (2026-08-20, commit `916faed`)
+
+`graphify update .` sobre el repositorio completo:
+
+| | |
+| --- | --- |
+| Nodos | 6 183 |
+| Edges | 15 946 |
+| Comunidades | 457 |
+| Ficheros | 532 (~230 k palabras) |
+| Extracción | 79 % EXTRACTED · 21 % INFERRED · 0 % AMBIGUOUS |
+
+**El grafo no cabe en la visualización HTML** (límite 5 000 nodos). Eso no es un problema
+que resolver subiendo el límite: una maraña de seis mil nodos no responde ninguna pregunta.
+Lo que sí responde está abajo.
+
+### La dirección de dependencias, medida
+
+Agregando los edges de código (`imports`, `calls`, `uses`, `inherits`, `method`,
+`references`) por capa, el backend queda así:
+
+```
+infrastructure -> domain         718
+application    -> domain         494
+infrastructure -> application    478
+interfaces     -> domain         195
+interfaces     -> application    186
+bootstrap      -> infrastructure  50
+bootstrap      -> application     35
+interfaces     -> bootstrap       28
+infrastructure -> bootstrap       16
+bootstrap      -> domain           6
+```
+
+Lo que importa es lo que **no** aparece: **cero** edges saliendo de `domain`, y **cero** de
+`application` hacia `infrastructure`. La regla de dependencias de Clean Architecture, medida
+sobre el AST en vez de afirmada.
+
+El frontend, por especificadores de import:
+
+```
+infrastructure -> domain     14
+application    -> domain     11
+views          -> viewmodels  8
+viewmodels     -> domain      6
+views          -> domain      4
+viewmodels     -> application 3
+viewmodels     -> infrastructure 2   <- sólo viewmodels/gateways.ts, la composición
+infrastructure -> application 2
+views          -> application 1
+```
+
+Ninguna View importa infraestructura. Los dos edges de `viewmodels -> infrastructure` son el
+único punto de composición (`viewmodels/gateways.ts`), que es donde tienen que estar.
+
+> Esto **no sustituye** a los tests de boundary
+> (`backend/tests/architecture/test_layer_boundaries.py`, `frontend/test/boundaries.test.ts`).
+> El grafo describe lo que hay; el test impide lo que no puede haber. Un grafo limpio con el
+> test apagado es una foto bonita de un invariante que ya no existe.
+
+### Dónde está el peso
+
+Nodos por módulo, backend:
+
+```
+300  application/ports          93  domain/knowledge          48  application/queries
+208  infrastructure/persistence 92  infrastructure/workflows  45  domain/qa
+154  interfaces/http            87  domain/exploration        43  infrastructure/browser
+114  infrastructure/inference   77  application/commands      42  domain/browser
+                                59  application/services
+```
+
+`application/ports` es el módulo más grande del backend, y eso es exactamente lo que se
+espera de esta arquitectura: la superficie que la aplicación declara necesitar es mayor que
+cualquier implementación concreta de ella.
+
 ## Query-before-scan rule
 For architecture, dependency and impact questions, query Graphify first when its graph is fresh. Then open only the source files needed to verify implementation details.
 

@@ -76,6 +76,22 @@ Además, `--timeout` de la CLI es milisegundos y **los tres ejemplos publicados 
 si fueran segundos** — el de CI esperaba 1,8 s creyendo esperar media hora. Ahora acepta
 unidad (`300s`, `10m`) y rechaza basura en vez de convertirla en NaN.
 
+**Después del cierre, sobre el candidato:**
+
+- **La interfaz ya se puede usar desde cero.** No había forma de crear un proyecto salvo
+  `curl`: el formulario que faltaba convertía toda la UI en un visor de trabajo empezado en
+  otro sitio. `POST /projects` + `POST /run-policies` en un solo gesto, porque un proyecto
+  sin policy no puede compilar un plan ni lanzar un run — se listaría, abriría y se negaría
+  a hacer nada. Verificado creando un proyecto real desde el navegador.
+- **README y guía.** `README.md` es ahora un README de producto; `docs/GUIDE.md` lleva de
+  cero a un run con evidencia por las dos vías (interfaz y CLI), con una sección de
+  síntomas al final para los tres fallos que de verdad se dan.
+- **Grafo refrescado** (`graphify update .`): 6 183 nodos, 15 946 edges, 457 comunidades.
+  `docs/22-codebase-graph.md` guarda la medición: **cero** edges saliendo de `domain` y
+  **cero** de `application` hacia `infrastructure`. La regla de dependencias medida sobre el
+  AST, no afirmada. En el frontend, ninguna View importa infraestructura y los dos edges de
+  `viewmodels -> infrastructure` son el punto de composición.
+
 Falta: nada de la fase. Cerrada.
 
 # Phase Status

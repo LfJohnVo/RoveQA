@@ -1,109 +1,141 @@
-# Agentic Web QA — Claude Code Build Kit
+# RoveQA
 
-Este repositorio de instrucciones define cómo construir **RoveQA** (working name): una plataforma agentica, local-first y self-hosted de QA y automatización web con ejecuciones durables de horas, memoria operacional y conocimiento reutilizable.
+QA agéntico de aplicaciones web, **local-first y self-hosted**. Le describes una historia
+de usuario, y un agente la recorre en un Chromium real, la verifica y te deja evidencia
+que alguien puede revisar.
 
-## Resultado esperado
+Nada sale de tu máquina: el modelo corre en tu GPU, la evidencia en tu disco, la base de
+datos en tu red. No hay cuenta que crear ni API key de nadie.
 
-Una aplicación self-hosted con:
+**Estado: `v1.0.0-rc`.** Las 15 fases del plan están cerradas con sus gates verdes.
+[Qué promete y qué no](CHANGELOG.md).
 
-- React + Vite + TypeScript para la UI.
-- Una CLI `roveqa` agent-first y CI-friendly como adapter del control plane.
-- FastAPI + Python para el control plane.
-- Clean Architecture en backend.
-- MVVM + Clean Architecture en frontend.
-- Temporal para workflows durables.
-- LangGraph para el state machine del agente y checkpoints persistentes.
-- Playwright + Chromium para interacción web.
-- vLLM para inferencia rápida y multimodal.
-- AirLLM para análisis profundo/offline con modelos grandes.
-- PostgreSQL como verdad durable.
-- Redis para coordinación, locks, semáforos, hot cache y streams realtime.
-- Graphiti + FalkorDB como **adaptive QA learning graph**: rutas, estados, playbooks, failures y feedback temporal reutilizable; reconstruible desde PostgreSQL.
-- Filesystem inicialmente para screenshots, videos, HAR, traces y reportes.
-- Docker + Docker Compose para desarrollo y despliegue single-node.
+---
 
-## Cómo usar este kit con Claude Code
+## En cinco minutos
 
-1. Copia todo el contenido de este kit a la raíz de un repositorio Git vacío.
-2. Revisa `CLAUDE.md` y `docs/00-product-spec.md`.
-3. Abre Claude Code desde la raíz del repositorio.
-4. Ejecuta `/implement-phase 00`.
-5. No avances de fase hasta que todos los gates de la fase actual estén verdes.
-6. Al terminar cada fase, exige la actualización de:
-   - `docs/status/PROGRESS.md`
-   - `docs/status/HANDOFF.md`
-   - ADRs cuando haya una decisión nueva.
-7. Para revisar límites arquitectónicos usa `/architecture-guard`.
-8. Para revisar tolerancia a fallos usa `/durability-review`.
-9. Para cerrar una fase usa `/test-and-verify`.
-10. Consulta `docs/21-claude-skill-routing.md` para combinar las **20 skills** del proyecto.
+```bash
+docker compose up -d
+```
 
-## Orden de lectura para humanos
+```bash
+docker compose --profile gpu up -d vllm
+```
 
-1. `docs/00-product-spec.md`
-2. `docs/01-architecture.md`
-3. `docs/02-domain-model.md`
-4. `docs/03-clean-architecture.md`
-5. `docs/04-frontend-mvvm.md`
-6. `docs/05-durability-and-recovery.md`
-7. `docs/17-implementation-roadmap.md`
-8. `docs/24-testsprite-cli-evaluation.md`
-9. `docs/25-agent-first-cli.md`
-10. `docs/26-adaptive-learning-graph.md`
-11. `docs/21-claude-skill-routing.md`
-12. `plans/phase-00-bootstrap.md`
+Abre **http://localhost:5173**, pulsa *New project*, y dale un nombre y la dirección de tu
+aplicación. Eso es todo lo que hace falta para empezar: la interfaz crea el proyecto con su
+*run policy*, que es lo que decide a dónde puede ir un run y qué puede hacer allí.
 
-## Principio de trabajo
+Después: **Stories** → escribe una historia → **Compile plan** → **Start a run**.
 
-Claude Code debe implementar una fase a la vez. Cada fase debe dejar el repositorio compilable, testeable y con un handoff preciso. No se acepta una implementación enorme que sólo se valide al final.
+¿Prefieres verlo funcionar sin escribir nada?
 
-## Skills incluidas
+```bash
+bash scripts/demo.sh
+```
 
-El kit incluye **20 skills project-scoped** en `.claude/skills/`:
+Dos historias contra la aplicación incluida, una que cumple y otra que no puede cumplir,
+con el FailureBundle materializado y verificado al final.
 
-- `adaptive-memory-graph`
-- `api-design-principles`
-- `architecture-guard`
-- `backend-slice`
-- `brainstorming`
-- `browser-runtime`
-- `changelog-generator`
-- `durability-review`
-- `error-handling-patterns`
-- `frontend-design`
-- `frontend-mvvm-slice`
-- `graphify`
-- `implement-phase`
-- `interface-design`
-- `ponytail`
-- `postgresql`
-- `prompt-engineering-patterns`
-- `systematic-debugging`
-- `test-and-verify`
-- `vercel-react-best-practices`
+---
 
-La matriz de precedencia y combinación está en `docs/21-claude-skill-routing.md`.
+## Qué hace
 
-## Claude Code codebase intelligence
+- **Verifica historias de usuario** contra tu aplicación, con un navegador de verdad, y
+  mantiene separado lo observado de lo que un modelo opinó. Sólo una comprobación
+  determinista puede acusar al producto; una hipótesis de modelo viaja etiquetada y al
+  lado, nunca dentro.
+- **Sobrevive a lo que se caiga.** Worker, Chromium, Redis, vLLM, FalkorDB y PostgreSQL
+  tienen fila propia en [RECOVERY_MATRIX.md](docs/status/RECOVERY_MATRIX.md), cada una con
+  el test que la demuestra. Verificado con 91 runs consecutivos bajo reinicios: ninguno se
+  perdió.
+- **Explora** una aplicación sola, acotada, y **sin gastar una llamada al modelo**; compara
+  el mapa con la exploración anterior sin marcar cada cambio de DOM como novedad.
+- **Agrupa fallos** antes de pedir explicaciones: veinte runs contra el mismo muro son un
+  problema, no veinte.
+- **Aprende** de runs verificados. La memoria durable vive en PostgreSQL; el grafo es una
+  proyección que se puede reconstruir.
+- **Programa regresiones** con schedules que sobreviven a un reinicio del stack.
+- **Se opera desde la terminal** con salida machine-readable: un único valor JSON en
+  stdout, diagnósticos en stderr, y un exit code que significa algo.
 
-Dos skills tienen un rol transversal:
+## Qué no hace todavía
 
-- `ponytail`: disciplina always-on de mínimo cambio seguro para reducir sobreingeniería sin debilitar Clean Architecture, MVVM, durabilidad, seguridad ni tests.
-- `graphify`: knowledge graph de desarrollo del repositorio. Es distinto del Graphiti/FalkorDB que usa el producto en runtime.
+- **Con el modelo incluido (Qwen3-4B) ninguna historia llega a `passed`.** El agente navega,
+  lee la página, se corrige y captura evidencia; lo que no hace es declarar la meta
+  alcanzada, así que el presupuesto lo detiene y el run sale `blocked`. Un modelo mayor es
+  la variable, y probarlo no exige tocar código.
+- Un run es un episodio: todavía no hay runs de varias horas.
+- No es de alta disponibilidad. Es un despliegue de un nodo, deliberadamente.
 
-Después de Phase 00, instala Graphify como herramienta de desarrollo (`uv tool install graphifyy`) y construye/refresca el grafo según `docs/22-codebase-graph.md`.
+El resto de límites conocidos está en el [CHANGELOG](CHANGELOG.md), escritos porque un
+límite documentado es una decisión y uno tácito es una sorpresa.
 
-## Evaluación de TestSprite CLI
+---
 
-Se evaluó `TestSprite/testsprite-cli` como posible base. La decisión arquitectónica está en `docs/24-testsprite-cli-evaluation.md` y ADR `0007`:
+## Tres maneras de usarlo
 
-- **No** reemplazar el runtime RoveQA con TestSprite: el CLI público es un cliente hacia una plataforma hospedada y no contiene el browser/model/workflow engine local que requiere este producto.
-- **Sí** incorporar patrones maduros de interfaz agent-first: planes versionados, JSON/exit codes estables, idempotency keys, `wait` desacoplado de `cancel`, failure bundles atómicos, dry-run, rerun/diff/flaky y skill de verificación para coding agents.
+| | Para quién | Empezar por |
+| --- | --- | --- |
+| **Interfaz web** | Escribir historias, lanzar runs, mirar la evidencia | http://localhost:5173 |
+| **CLI `roveqa`** | CI, scripts, uso diario desde la terminal | [Guía](docs/GUIDE.md#la-cli) |
+| **Agente de código** | Que Claude verifique su propio trabajo | `roveqa agent install claude` |
 
-Estos cambios se implementan en **Phase 08 — Agent-First CLI and Verification Contracts**. El roadmap ahora termina en Phase 14. **Phase 09** construye explícitamente el adaptive learning graph y sus benchmarks cold-vs-warm.
+La CLI habla **sólo** con la API pública de FastAPI: no importa Playwright, Temporal ni
+PostgreSQL, y hay un test que lo comprueba contra una violación plantada.
 
+---
 
-## Adaptive learning graph (Phase 09)
-RoveQA aprende de runs **verificados**, no de intuiciones del modelo. PostgreSQL conserva `knowledge_candidates`/feedback/provenance y Graphiti + FalkorDB materializa una proyección temporal consultable. Cada uso de memoria recibe feedback y puede ser revalidado o invalidado por fingerprint/version changes. El graph puede reconstruirse desde PostgreSQL.
+## Documentación
 
-Claude Code debe usar `adaptive-memory-graph` y `knowledge-engineer` en Phase 09. La especificación completa está en `docs/26-adaptive-learning-graph.md`.
+| Documento | Para qué |
+| --- | --- |
+| **[Guía de uso](docs/GUIDE.md)** | **Empieza aquí.** De cero a un run con evidencia, con la interfaz y con la CLI |
+| [Runbook de operaciones](docs/status/OPERATIONS_RUNBOOK.md) | Máquina nueva, backup/restore, upgrade, run atascado, memoria |
+| [CHANGELOG](CHANGELOG.md) | Contratos públicos, política de migración, límites conocidos |
+| [Release checklist](docs/status/RELEASE_CHECKLIST.md) | Qué se comprobó y con qué comando |
+| [Matriz de recuperación](docs/status/RECOVERY_MATRIX.md) | Qué fallos están soportados y qué test lo prueba |
+| [Perfil de rendimiento](docs/status/PERFORMANCE_PROFILE.md) | Qué cuesta un run largo |
+| [Arquitectura](docs/01-architecture.md) | Cómo encaja todo |
+| [Grafo del código](docs/22-codebase-graph.md) | El mapa navegable del repositorio |
+
+## Cómo está construido
+
+```
+backend/    FastAPI · Clean Architecture · Temporal · LangGraph · Playwright
+frontend/   React 19 · Vite · MVVM
+cli/        TypeScript · sin dependencias del runtime
+contracts/  Los tres schemas públicos, con ejemplo canónico cada uno
+docs/       Especificación, arquitectura, ADRs y estado
+plans/      Las 15 fases, todas cerradas
+```
+
+Las invariantes que no se negocian están en [CLAUDE.md](CLAUDE.md), y hay tests que las
+hacen cumplir: el dominio no importa frameworks, las Views no importan clientes HTTP, la
+CLI no importa el runtime. Un test lee los imports; no es una convención, es un gate.
+
+Todo corre en contenedores. En el host sólo hacen falta `docker compose` y `bash`:
+
+```bash
+bash scripts/ci-local.sh
+```
+
+Termina en `ci-local: all green` — 946 tests backend, 149 CLI, 51 frontend, migraciones sin
+drift, build de frontend y validación de compose.
+
+---
+
+## Construido con Claude Code
+
+Este repositorio se construyó fase a fase con Claude Code, y las instrucciones siguen
+siendo parte de él: [CLAUDE.md](CLAUDE.md) gobierna cada sesión, `plans/` tiene las 15
+fases, y `.claude/skills/` las 20 skills project-scoped cuya matriz de precedencia está en
+[docs/21-claude-skill-routing.md](docs/21-claude-skill-routing.md).
+
+Dos son transversales: `ponytail` (mínimo cambio seguro, siempre activa) y `graphify`
+(grafo de conocimiento del repositorio — distinto del Graphiti/FalkorDB que el producto usa
+en runtime).
+
+Para retomar el trabajo, [`prompts/CONTINUE_WITH_OPUS_5.md`](prompts/CONTINUE_WITH_OPUS_5.md)
+es autosuficiente, y [`docs/status/HANDOFF.md`](docs/status/HANDOFF.md) tiene el estado real
+con comandos ejecutados y resultados.
