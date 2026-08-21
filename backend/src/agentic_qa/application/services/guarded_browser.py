@@ -11,7 +11,12 @@ any effect (CLAUDE.md invariants, docs/13).
 
 import logging
 
-from agentic_qa.application.ports.browser import ActionOutcome, BrowserGateway
+from agentic_qa.application.ports.browser import (
+    ActionOutcome,
+    BrowserGateway,
+    PageProblems,
+    ReportsPageProblems,
+)
 from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
 from agentic_qa.domain.browser.policy_guard import (
     PolicyDecision,
@@ -93,6 +98,17 @@ class GuardedBrowserGateway:
 
     async def current_url(self) -> str | None:
         return await self._inner.current_url()
+
+    async def page_problems(self) -> PageProblems:
+        """Forwarded without a check, like the screenshot: reading what went wrong changes
+        nothing about the system under test.
+
+        Answered even when the wrapped gateway does not watch, so wrapping never removes a
+        capability the caller can ask for — it just answers "nothing observed".
+        """
+        if isinstance(self._inner, ReportsPageProblems):
+            return await self._inner.page_problems()
+        return PageProblems()
 
     async def describe_page(self) -> PageState:
         # Forwarded without a check, like the screenshot: reading what a page offers

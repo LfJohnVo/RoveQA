@@ -6,7 +6,7 @@ boundary, not a convention the adapter is trusted to respect.
 """
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from agentic_qa.domain.browser.actions import BrowserAction
 from agentic_qa.domain.exploration.state import PageState
@@ -45,6 +45,39 @@ class ActionOutcome:
     a run had. So a 404 and a 500 both came back successful, the agent observed whatever the
     error page rendered, and took it for the application (ADR 0015).
     """
+
+
+@dataclass(frozen=True)
+class PageProblems:
+    """What went wrong in the browser while a page was being driven.
+
+    Collected passively and never used to steer: a console error changes what a report
+    says, not what the agent does next. Both fields were already being gathered in the
+    Playwright adapter and had no consumer outside it, so a JavaScript exception or an
+    image answering 404 -- first-class QA signal on any site -- was measured and thrown
+    away (ADR 0015).
+    """
+
+    console_errors: tuple[str, ...] = field(default=())
+    failed_requests: tuple[str, ...] = field(default=())
+
+    def __bool__(self) -> bool:
+        return bool(self.console_errors or self.failed_requests)
+
+
+@runtime_checkable
+class ReportsPageProblems(Protocol):
+    """A gateway that watched the browser and can say what went wrong.
+
+    Separate from `BrowserGateway`, and optional, because it is genuinely optional: a
+    gateway that drives a page without listening to its console is a complete gateway.
+    Folding it into the port would oblige every implementation — including the doubles
+    that exist to test something else entirely — to answer a question it has no opinion
+    about, which is how a port stops describing a capability and starts describing a
+    class hierarchy.
+    """
+
+    async def page_problems(self) -> PageProblems: ...
 
 
 class BrowserGateway(Protocol):

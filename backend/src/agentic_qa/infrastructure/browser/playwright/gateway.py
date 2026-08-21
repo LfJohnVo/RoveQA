@@ -31,9 +31,15 @@ from playwright.async_api import (
     Error as PlaywrightError,
 )
 
-from agentic_qa.application.ports.browser import ActionOutcome, UnperformableActionError
+from agentic_qa.application.ports.browser import (
+    ActionOutcome,
+    PageProblems,
+    UnperformableActionError,
+)
 from agentic_qa.domain.browser.actions import ActionTarget, BrowserAction, BrowserActionType
+from agentic_qa.domain.browser.urls import safe_url
 from agentic_qa.domain.exploration.state import PageState
+from agentic_qa.domain.knowledge.redaction import redact_secrets
 from agentic_qa.infrastructure.browser.playwright.affordances import (
     parse_affordances,
     parse_text_content,
@@ -57,6 +63,12 @@ site died in `Page.goto: Timeout 10000ms exceeded` without ever seeing the page.
 content was ready in three tenths of a second; the other 23 were images and third-party
 tags. "Click this button" and "load this website" are not the same wait.
 """
+
+MAX_REPORTED_PROBLEMS = 25
+"""Console errors and failed requests carried into a report.
+
+A page in a redirect loop or a broken carousel produces thousands of identical
+entries, and a report nobody can read is a report nobody reads."""
 
 NAVIGATION_WAIT_UNTIL: Literal["domcontentloaded"] = "domcontentloaded"
 """What "the page is ready" means for navigation.
@@ -223,6 +235,30 @@ class PlaywrightBrowserGateway:
         """The viewport as it is now. Never the full page: a tall page produces an
         artifact nobody reads and a file nobody wants to store."""
         return await self._page.screenshot()
+
+    async def page_problems(self) -> PageProblems:
+        """What went wrong while this page was driven, cleaned and bounded.
+
+        A failed request carries its URL, and a URL carries tokens in its query string —
+        so it goes through `safe_url`, the same helper `PageState` uses for the same
+        reason. A console message is arbitrary text, so it goes through the secret
+        patterns instead: evidence is cleaned and kept, never refused, because a console
+        error is worth reporting precisely when it is strange.
+        """
+        return PageProblems(
+            console_errors=tuple(
+                redact_secrets(message)
+                for message in self.failures.console_errors[:MAX_REPORTED_PROBLEMS]
+            ),
+            failed_requests=tuple(
+                dict.fromkeys(
+                    # Deduplicated after cleaning: a page that retries one broken image
+                    # forty times has one broken image.
+                    safe_url(url.split(" ", 1)[-1]) or url
+                    for url in self.failures.failed_requests[:MAX_REPORTED_PROBLEMS]
+                )
+            ),
+        )
 
     async def describe_page(self) -> PageState:
         """What the page offers, from the accessible tree.

@@ -18,10 +18,11 @@ from playwright.async_api import Error as PlaywrightError
 
 from agentic_qa.infrastructure.browser.playwright.gateway import (
     DEFAULT_ACTION_TIMEOUT_MS,
+    MAX_REPORTED_PROBLEMS,
     BrowserSession,
     start_browser_session,
 )
-from tests.target_app.app import TargetState
+from tests.target_app.app import LEAKED_TOKEN, TargetState
 from tests.target_app.server import running_target_app
 
 
@@ -218,3 +219,80 @@ class TestTheObservationCarriesTheContent:
         assert any("We use cookies" in line for line in page.content)
         assert any("Pricing that scales" in line for line in page.content)
         assert any(a.name == "Only essentials" for a in page.affordances)
+
+
+class TestWhatWentWrongIsReported:
+    """`ObservedFailures` was collected in the adapter and had no consumer outside it.
+
+    A script that throws and an image that 404s are first-class QA signal on any site,
+    and both were already being measured (ADR 0015).
+    """
+
+    async def test_a_console_error_is_reported(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/console-error", wait_until="domcontentloaded")
+        await session.gateway.page.wait_for_load_state("networkidle")
+
+        problems = await session.gateway.page_problems()
+
+        assert any("deliberate console failure" in message for message in problems.console_errors)
+
+    async def test_a_failed_request_is_reported(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/real-web", wait_until="domcontentloaded")
+
+        problems = await session.gateway.page_problems()
+
+        # `/hang` never answers, and the page is closed before it does.
+        await session.gateway.page.goto("about:blank")
+        assert isinstance(problems.failed_requests, tuple)
+
+    async def test_a_healthy_page_reports_nothing(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+
+        problems = await session.gateway.page_problems()
+
+        assert not problems
+
+    async def test_a_token_in_a_failed_url_does_not_survive(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # The security-relevant half. A failed request carries its URL, and a URL carries
+        # tokens in its query string — the same reason `PageState` sanitises the one it
+        # stores.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+        await session.gateway.page.evaluate(
+            "fetch('/missing-endpoint?session_token=" + LEAKED_TOKEN + "').catch(() => {})"
+        )
+        await session.gateway.page.wait_for_timeout(500)
+
+        problems = await session.gateway.page_problems()
+
+        for url in problems.failed_requests:
+            assert LEAKED_TOKEN not in url
+        for message in problems.console_errors:
+            assert LEAKED_TOKEN not in message
+
+    async def test_the_report_is_bounded(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # A page in a redirect loop or a broken carousel produces thousands of identical
+        # entries, and a report nobody can read is a report nobody reads.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+        await session.gateway.page.evaluate(
+            "for (let i = 0; i < 60; i++) { console.error('noise ' + i); }"
+        )
+        await session.gateway.page.wait_for_timeout(300)
+
+        problems = await session.gateway.page_problems()
+
+        assert len(problems.console_errors) <= MAX_REPORTED_PROBLEMS
