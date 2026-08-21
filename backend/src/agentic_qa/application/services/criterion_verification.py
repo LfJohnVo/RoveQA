@@ -17,6 +17,7 @@ believed, every later report gets read with suspicion.
 """
 
 import logging
+from collections.abc import Mapping
 
 from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.models import JudgementRequest, ModelGateway
@@ -42,6 +43,7 @@ async def verify_criteria(
     hints: dict[str, str] | None = None,
     goal_failure: str | None = None,
     goal_failure_kind: FailureKind | None = None,
+    observed_earlier: Mapping[str, str] | None = None,
 ) -> tuple[CriterionResult, ...]:
     """Produce one result per assertion.
 
@@ -56,8 +58,18 @@ async def verify_criteria(
     is `unverified` and an inconclusive run, because "nobody knows why" is different
     from "we know why and it was not the product".
     """
+    seen = observed_earlier or {}
+
     if goal_failure is not None:
-        return tuple(_unreached(step, goal_failure, goal_failure_kind) for step in assertions)
+        # A criterion this run *watched* come true is not an open question, even though
+        # the run then failed at something else. Reporting it as unreached threw away a
+        # deterministic observation the run had already made.
+        return tuple(
+            _observed(step, _criterion_of(step), seen[_criterion_of(step)])
+            if _criterion_of(step) in seen
+            else _unreached(step, goal_failure, goal_failure_kind)
+            for step in assertions
+        )
 
     hints = hints or {}
     results: list[CriterionResult] = []
@@ -65,10 +77,31 @@ async def verify_criteria(
         criterion_id = _criterion_of(step)
         hint = hints.get(criterion_id)
         if hint:
-            results.append(await _check_deterministically(step, criterion_id, hint, browser))
+            result = await _check_deterministically(step, criterion_id, hint, browser)
+            # One direction only. A story that spans pages ends on the last of them, and
+            # a literal shown on the second is legitimately gone by then -- which used to
+            # be reported as the product's fault. A sighting can rescue such a criterion;
+            # nothing here can turn a satisfied one into a failure.
+            if result.outcome is not CriterionOutcome.MET and criterion_id in seen:
+                result = _observed(step, criterion_id, seen[criterion_id])
+            results.append(result)
         else:
             results.append(await _judge_semantically(step, criterion_id, browser, model))
     return tuple(results)
+
+
+def _observed(step: PlanStep, criterion_id: str, where: str) -> CriterionResult:
+    """A criterion the run watched come true, with where and when it happened.
+
+    Deterministic: the literal was in the page the browser had captured, not in a
+    model's reading of it. `model_derived` stays false for exactly that reason.
+    """
+    return CriterionResult(
+        criterion_id=criterion_id,
+        outcome=CriterionOutcome.MET,
+        observation=f"observed satisfied earlier in the run: {where}",
+        step_id=step.step_id,
+    )
 
 
 async def _check_deterministically(

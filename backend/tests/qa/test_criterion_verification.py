@@ -61,6 +61,18 @@ class PageDouble:
         return None
 
 
+def permissive_policy() -> RunPolicy:
+    """Enough policy to let a deterministic check run, and nothing more."""
+    return RunPolicy(
+        policy_id="policy-1",
+        project_id="project-1",
+        allowed_origins=("http://target.test",),
+        max_duration_seconds=60,
+        max_actions=10,
+        max_model_calls=10,
+    )
+
+
 def assertion(criterion_id: str, description: str) -> PlanStep:
     return PlanStep(
         step_id=f"assert-{criterion_id}",
@@ -270,3 +282,99 @@ def test_a_deterministic_result_cannot_claim_a_model_invocation() -> None:
             model_derived=False,
             model_invocation_id="inv-1",
         )
+
+
+class TestASightingEarlierInTheRun:
+    """Phase 15, slice 8 — ADR 0013.
+
+    A criterion is checked on every observation, because a `verification_hint` is a
+    substring and costs no inference. Two failures had the same cause: a story spanning
+    pages ended on the last of them, so a literal shown on page two came back `not_met`
+    — the one verdict that accuses the product — and a run that stopped early reported
+    "did not reach this criterion" for criteria it had visibly already satisfied.
+    """
+
+    async def test_a_literal_gone_from_the_final_page_is_still_met(self) -> None:
+        # The multi-page case. The page the run ended on no longer shows it.
+        page = PageDouble(text="Step three of three")
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-step-one", "step one was reached"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-step-one": "Step one of three"},
+            observed_earlier={"ac-step-one": "step 1 at http://target.test/one"},
+        )
+
+        assert results[0].outcome is CriterionOutcome.MET
+        assert "step 1" in results[0].observation
+        assert results[0].model_derived is False
+
+    async def test_a_sighting_cannot_manufacture_a_failure(self) -> None:
+        # The one direction that matters. Nothing added here may accuse the product.
+        page = PageDouble(text="Order #1234 confirmed")
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-done", "the order is confirmed"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-done": "Order #1234 confirmed"},
+            observed_earlier={},
+        )
+
+        assert results[0].outcome is CriterionOutcome.MET
+
+    async def test_a_criterion_never_seen_is_still_unreached(self) -> None:
+        page = PageDouble()
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-never", "something that never happened"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-never": "never rendered"},
+            goal_failure="the run reached its limit of 25 model call(s)",
+            goal_failure_kind=FailureKind.AGENT_BUDGET,
+            observed_earlier={},
+        )
+
+        assert results[0].outcome is CriterionOutcome.NOT_MET
+        assert results[0].failure_kind is FailureKind.AGENT_BUDGET
+
+    async def test_a_stopped_run_still_reports_what_it_saw(self) -> None:
+        # It ran out of budget later, which says nothing about a criterion it watched
+        # come true on the way.
+        page = PageDouble()
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-title", "the screen showed its title"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-title": "Sign in"},
+            goal_failure="the run reached its limit of 25 model call(s)",
+            goal_failure_kind=FailureKind.AGENT_BUDGET,
+            observed_earlier={"ac-title": "step 1 at http://target.test/login"},
+        )
+
+        assert results[0].outcome is CriterionOutcome.MET
+        assert results[0].failure_kind is None
+        assert "http://target.test/login" in results[0].observation
+
+    async def test_the_deterministic_check_still_wins_when_it_passes(self) -> None:
+        page = PageDouble(text="Order #1234 confirmed")
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-done", "the order is confirmed"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-done": "Order #1234 confirmed"},
+            observed_earlier={"ac-done": "step 2 at http://target.test/cart"},
+        )
+
+        # Checked live, so the observation names the page rather than the sighting.
+        assert results[0].outcome is CriterionOutcome.MET
+        assert "contains" in results[0].observation

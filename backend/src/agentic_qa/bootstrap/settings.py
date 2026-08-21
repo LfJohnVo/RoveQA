@@ -38,6 +38,14 @@ class Settings:
 
     model_timeout_seconds: float = DEFAULT_MODEL_TIMEOUT_SECONDS
     browser_headless: bool = True
+    browser_navigation_timeout_ms: int | None = None
+    """How long a navigation may take, or None for the browser adapter's own default.
+
+    Deliberately not a second copy of that number: a navigation budget is a browser
+    concern and the adapter owns it, so settings carries an override rather than a
+    duplicate that could drift. It is separate from the element timeout because a public
+    site can spend twenty seconds on images the agent never reads, and one constant for
+    both jobs is what stopped every run against the real web."""
     artifact_root: str = "/data/runs"
     """Where artifact bytes live. References are in PostgreSQL; blobs are not."""
 
@@ -82,6 +90,7 @@ class Settings:
                 "MODEL_TIMEOUT_SECONDS", DEFAULT_MODEL_TIMEOUT_SECONDS
             ),
             browser_headless=not _flag("BROWSER_HEADED"),
+            browser_navigation_timeout_ms=_optional_positive_int("BROWSER_NAVIGATION_TIMEOUT_MS"),
             artifact_root=os.environ.get("ARTIFACT_ROOT", "/data/runs"),
             falkordb_url=os.environ.get("FALKORDB_URL") or None,
             graph_database=os.environ.get("GRAPH_DATABASE", DEFAULT_GRAPH_DATABASE),
@@ -105,6 +114,17 @@ def _positive_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if not raw:
         return default
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1, got {value}")
+    return value
+
+
+def _optional_positive_int(name: str) -> int | None:
+    """None when unset, so the adapter's own default stays the single source of truth."""
+    raw = os.environ.get(name)
+    if not raw:
+        return None
     value = int(raw)
     if value < 1:
         raise ValueError(f"{name} must be at least 1, got {value}")

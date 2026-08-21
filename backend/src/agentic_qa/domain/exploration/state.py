@@ -47,6 +47,21 @@ MAX_DESCRIBED_AFFORDANCES = 40
 A signature can afford two hundred; a prompt rebuilt on every step cannot, and a model
 choosing between forty controls is not helped by the forty-first."""
 
+MAX_CONTENT_CHARS = 6000
+"""Page text shown to a planner.
+
+A budget in characters rather than a list of allowed node types: the cost worth guarding
+against is a data grid with ten thousand rows, and dropping every text node to avoid it
+also drops the four lines a criterion is about.
+
+The number is calibrated, not guessed. Three pages: an application screen's whole
+accessible tree was 883 characters; a marketing landing's was 9,183, of which the text
+nodes are roughly 4,300. A first attempt at 2,000 truncated that landing before three of
+its four section headings, and a run against it could see one criterion and never the
+rest — the marker said so, which is why the cap is a number and not a silent slice. Six
+thousand carries a long landing whole and still refuses a table.
+"""
+
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 _LONG_NUMBER = re.compile(r"\d{2,}")
 _WHITESPACE = re.compile(r"\s+")
@@ -80,10 +95,28 @@ class Affordance:
     to try, and the url of the first is a fine representative.
     """
 
+    disabled: bool = False
+    """Whether the page currently refuses this control.
+
+    The snapshot has always said so — `button "Sign in" [disabled]` — and dropping it
+    left the agent proposing actions on controls that cannot be taken, paying a full
+    locator timeout to learn what the observation already knew. A form that enables its
+    submit only once the fields are filled is ordinary, and it was invisible.
+
+    **Deliberately not part of `key`, and this one is load-bearing.** `key` feeds
+    `state_signature`, so putting a transient state in it would give every stored
+    exploration baseline and every memory fingerprint a new meaning overnight — silently,
+    since nothing would fail. A control that greys out is the same control.
+    """
+
     @property
     def is_clickable(self) -> bool:
-        """Whether an explorer can take this with no information beyond the page."""
-        return self.role.strip().lower() in CLICKABLE_ROLES
+        """Whether an explorer can take this with no information beyond the page.
+
+        A disabled control is not takeable: offering it to the frontier would spend an
+        action and an entry on something the page has already refused.
+        """
+        return not self.disabled and self.role.strip().lower() in CLICKABLE_ROLES
 
     @property
     def key(self) -> str:
@@ -114,6 +147,15 @@ class PageState:
     title: str = ""
     """Recorded for the report, never for the signature: a title carrying a cart count
     would make every cart change a new state."""
+
+    content: tuple[str, ...] = field(default=())
+    """What the page says, for the planner to read.
+
+    Never for the signature: a state identified by its text would be a new state every
+    time a footer date rolled over, which is the whole reason signatures are built from
+    affordances. And not persisted with the state map either — this is what the planner
+    is shown at observation time, not a fact about the state worth keeping for weeks.
+    """
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "url", safe_url(self.url))
@@ -149,29 +191,46 @@ class PageState:
         return state_signature(self.route, self.affordance_keys)
 
     def describe(self) -> str:
-        """The page as a planner can read it: where it is and what it offers.
+        """The page as a planner can read it: where it is, what it says, what it offers.
 
         A planner given only a url has to guess at element names, and a guess costs a
         locator timeout before anyone learns it was wrong. Naming what is actually on
         the page is the difference between choosing and inventing.
 
-        Bounded on purpose. The cap is small — smaller than the one a signature uses —
-        because this text is rebuilt on every step and a prompt that grows with the
-        page is a cost that grows with the run.
+        `text` and `elements` are separate sections on purpose. They answer different
+        questions — "is the goal already true?" and "what can I do next?" — and a planner
+        that has to infer the first from a list of buttons answers neither. Withholding
+        the text is what made an assertion-shaped goal unreachable: the run could see the
+        controls around a heading and never the heading.
+
+        Bounded on purpose, and separately per section: this is rebuilt on every step, so
+        a prompt that grows with the page is a cost that grows with the run.
         """
-        offers = [
-            f"- {affordance.role}: {affordance.name}"
-            + (f" -> {affordance.url}" if affordance.url else "")
-            for affordance in self.affordances[:MAX_DESCRIBED_AFFORDANCES]
-        ]
         header = f"url: {self.url or 'about:blank'}"
         if self.title:
             header += f"\ntitle: {self.title}"
-        if not offers:
-            return f"{header}\n(no interactive elements found)"
-        more = len(self.affordances) - len(offers)
-        tail = f"\n- ... and {more} more" if more > 0 else ""
-        return f"{header}\nelements:\n" + "\n".join(offers) + tail
+
+        sections = [header]
+
+        if self.content:
+            sections.append("text:\n" + "\n".join(f"- {line}" for line in self.content))
+
+        offers = [
+            f"- {affordance.role}: {affordance.name}"
+            # Said, not implied by absence. A planner that reads a disabled control as
+            # available spends an action and a locator timeout finding out otherwise.
+            + (" [disabled]" if affordance.disabled else "")
+            + (f" -> {affordance.url}" if affordance.url else "")
+            for affordance in self.affordances[:MAX_DESCRIBED_AFFORDANCES]
+        ]
+        if offers:
+            more = len(self.affordances) - len(offers)
+            tail = f"\n- ... and {more} more" if more > 0 else ""
+            sections.append("elements:\n" + "\n".join(offers) + tail)
+        else:
+            sections.append("(no interactive elements found)")
+
+        return "\n".join(sections)
 
 
 def state_signature(route: str, affordance_keys: tuple[str, ...]) -> str:

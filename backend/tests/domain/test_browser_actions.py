@@ -233,3 +233,70 @@ class TestGuardedGateway:
             await guarded.execute(navigate("https://evil.test/"))
 
         assert inner.executed == []
+
+
+class TestAReadOnlyPolicyCanStillLook:
+    """Phase 15, slice 9 — ADR 0014.
+
+    `side_effect` is the model's own read and can only be raised. Keying the ban on it
+    meant a planner marking `navigate` as state-changing — over-cautious, not wrong —
+    made a read-only run impossible: at temperature 0 every one died on its first
+    navigation, and the verdict blamed `policy`, which reads as the user's own
+    configuration. The action *type* decides what is forbidden.
+    """
+
+    def test_navigation_survives_an_over_cautious_planner(self) -> None:
+        escalated = BrowserAction(
+            type=BrowserActionType.NAVIGATE,
+            intent="open the application",
+            target=ActionTarget(url="https://app.test/"),
+            side_effect=True,
+            idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+            verification_strategy="confirm the page loaded",
+        )
+
+        assert evaluate_action(escalated, make_policy()).allowed
+
+    def test_a_write_is_still_refused_by_its_type(self) -> None:
+        # The case the guard exists for. `click` is outside READ_ONLY_ACTIONS, so an
+        # unverified click on "Delete account" is refused exactly as before.
+        decision = evaluate_action(click_submit(), make_policy())
+
+        assert decision.allowed is False
+        assert decision.violation is PolicyViolation.DESTRUCTIVE_NOT_ALLOWED
+
+    def test_a_write_cannot_even_be_built_claiming_to_be_harmless(self) -> None:
+        # Stronger than a policy denial: the guard never sees such an action, because
+        # the domain refuses to construct one. `side_effect` can be raised, never
+        # lowered, at both layers.
+        with pytest.raises(InvalidEntityError):
+            BrowserAction(
+                type=BrowserActionType.CLICK,
+                intent="delete the account",
+                target=ActionTarget(role="button", name="Delete account"),
+            )
+
+    def test_asserting_text_needs_no_permission(self) -> None:
+        assertion = BrowserAction(
+            type=BrowserActionType.ASSERT_TEXT,
+            intent="confirm the heading",
+            value="Sign in",
+        )
+
+        assert evaluate_action(assertion, make_policy()).allowed
+
+    def test_the_allowlist_still_bounds_a_read_only_run(self) -> None:
+        # Loosening the destructive check must not loosen the origin fence.
+        escalated = BrowserAction(
+            type=BrowserActionType.NAVIGATE,
+            intent="wander off",
+            target=ActionTarget(url="https://evil.test/"),
+            side_effect=True,
+            idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+            verification_strategy="confirm the page loaded",
+        )
+
+        decision = evaluate_action(escalated, make_policy())
+
+        assert decision.allowed is False
+        assert decision.violation is PolicyViolation.ORIGIN_NOT_ALLOWED

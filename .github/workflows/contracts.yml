@@ -1,0 +1,51 @@
+# `CLAUDE.md` says the three public contracts are versioned, and that code and docs move
+# in the same change set. This is that rule with teeth.
+#
+# It is deliberately narrow. It does not judge whether a change is compatible — a human
+# does that — it only refuses to let one land silently.
+name: contracts
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+
+permissions:
+  contents: read
+
+jobs:
+  declared:
+    name: a contract change is declared
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Both sides of the comparison, so the diff is against the merge base rather
+          # than against whatever the shallow clone happened to fetch.
+          fetch-depth: 0
+
+      - name: Every example still validates against its schema
+        run: docker compose --profile gates run --rm backend-tests pytest tests/contracts -q
+
+      - name: The change says so in the changelog
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE" "$HEAD" -- contracts/)
+          echo "contract files touched:"
+          echo "$changed"
+
+          if git diff --name-only "$BASE" "$HEAD" -- CHANGELOG.md | grep -q .; then
+            echo "declared in CHANGELOG.md"
+            exit 0
+          fi
+
+          echo
+          echo "A public contract changed and CHANGELOG.md did not."
+          echo "TestPlan, CLIEnvelope and FailureBundle are versioned contracts: an"
+          echo "incompatible change needs an explicit version and a migration note, and a"
+          echo "compatible one still needs a line somebody can read. Add it, or explain in"
+          echo "the pull request why this change is invisible to every consumer."
+          exit 1

@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from agentic_qa.domain.browser.actions import NEEDS_TARGET, BrowserActionType
 from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.runs.run import Verdict
 from agentic_qa.domain.validation import require_identifier, require_text
@@ -150,3 +151,23 @@ def derive_verdict(results: Sequence[CriterionResult], *, expected: Sequence[str
     if all(result.outcome is CriterionOutcome.MET for result in by_criterion.values()):
         return Verdict.PASSED
     return Verdict.INCONCLUSIVE
+
+
+def failure_kind_for_action(action_type: BrowserActionType) -> FailureKind:
+    """Why an action that would not perform stopped the run.
+
+    Classified from the action's *type*, not from a message. A locator that never
+    resolves means the planner named something the page does not have — the page is
+    fine, the decision was not — so it belongs to `MODEL`. A navigation that will not
+    complete is the environment: the host, the network, or a site slower than the run
+    can wait for.
+
+    Without this, three unrelated causes — a fill whose target does not exist, a goto
+    that timed out, an invented role — all came back `inconclusive` with no kind, while
+    the reason sat in `deterministic_observation` right beside it. `blocked` means "we
+    know why and it was not the product"; spending that distinction on a failure whose
+    cause is in hand is how a report stops being believed.
+    """
+    if action_type in NEEDS_TARGET:
+        return FailureKind.MODEL
+    return FailureKind.ENVIRONMENT

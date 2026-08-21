@@ -13,7 +13,7 @@ receive this adapter only through `open_browser_session`, which wraps it.
 import logging
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Self, cast
+from typing import Literal, Self, cast
 
 from playwright._impl._api_structures import AriaRole
 from playwright.async_api import (
@@ -34,11 +34,39 @@ from playwright.async_api import (
 from agentic_qa.application.ports.browser import ActionOutcome, UnperformableActionError
 from agentic_qa.domain.browser.actions import ActionTarget, BrowserAction, BrowserActionType
 from agentic_qa.domain.exploration.state import PageState
-from agentic_qa.infrastructure.browser.playwright.affordances import parse_affordances
+from agentic_qa.infrastructure.browser.playwright.affordances import (
+    parse_affordances,
+    parse_text_content,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_ACTION_TIMEOUT_MS = 10_000
+"""How long to wait for an *element* to be ready to act on.
+
+Ten seconds is generous for a control that exists and fatal for a page that is still
+arriving — which is why navigation no longer shares this number.
+"""
+
+DEFAULT_NAVIGATION_TIMEOUT_MS = 45_000
+"""How long to wait for a *page*, which is a different order of magnitude.
+
+Measured on a public marketing site: `load` took 23.1s, `networkidle` 23.9s, and
+`domcontentloaded` 0.3s. One constant of 10s served both jobs, so every run against that
+site died in `Page.goto: Timeout 10000ms exceeded` without ever seeing the page. The
+content was ready in three tenths of a second; the other 23 were images and third-party
+tags. "Click this button" and "load this website" are not the same wait.
+"""
+
+NAVIGATION_WAIT_UNTIL: Literal["domcontentloaded"] = "domcontentloaded"
+"""What "the page is ready" means for navigation.
+
+`load` is Playwright's default and waits for every image and analytics tag the site
+chose to include — none of which the agent reads. `domcontentloaded` is when the text
+and the affordances exist, which is the whole of what an observation needs. Waiting for
+the network is still available, deliberately, as something an action asks for
+(`wait_for`) rather than a condition imposed on every navigation.
+"""
 
 
 class BrowserSessionError(Exception):
@@ -160,9 +188,16 @@ class ObservedFailures:
 
 
 class PlaywrightBrowserGateway:
-    def __init__(self, context: BrowserContext, page: Page) -> None:
+    def __init__(
+        self,
+        context: BrowserContext,
+        page: Page,
+        *,
+        navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
+    ) -> None:
         self._context = context
         self._page = page
+        self._navigation_timeout_ms = navigation_timeout_ms
         self.failures = ObservedFailures()
         page.on("console", self._on_console)
         page.on("requestfailed", self._on_request_failed)
@@ -211,6 +246,9 @@ class PlaywrightBrowserGateway:
             url=url,
             affordances=parse_affordances(snapshot, base_url=url),
             title=title,
+            # From the same snapshot the affordances came out of. It was always here;
+            # only the controls used to survive the trip to the planner.
+            content=parse_text_content(snapshot),
         )
 
     async def storage_state(self) -> StorageState:
@@ -233,7 +271,11 @@ class PlaywrightBrowserGateway:
     async def _dispatch(self, action: BrowserAction) -> ActionOutcome:
         match action.type:
             case BrowserActionType.NAVIGATE:
-                await self._page.goto(action.target.url or "", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+                await self._page.goto(
+                    action.target.url or "",
+                    timeout=self._navigation_timeout_ms,
+                    wait_until=NAVIGATION_WAIT_UNTIL,
+                )
             case BrowserActionType.CLICK:
                 await self._locate(action.target).click(timeout=DEFAULT_ACTION_TIMEOUT_MS)
             case BrowserActionType.FILL:
@@ -355,7 +397,10 @@ class BrowserSession:
 
 
 async def start_browser_session(
-    *, headless: bool = True, storage_state: StorageState | None = None
+    *,
+    headless: bool = True,
+    storage_state: StorageState | None = None,
+    navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
 ) -> BrowserSession:
     """Launch Chromium with an isolated context, optionally restoring auth state."""
     playwright = await async_playwright().start()
@@ -363,7 +408,11 @@ async def start_browser_session(
     context = await browser.new_context(storage_state=storage_state)
     page = await context.new_page()
     return BrowserSession(
-        playwright=playwright, browser=browser, gateway=PlaywrightBrowserGateway(context, page)
+        playwright=playwright,
+        browser=browser,
+        gateway=PlaywrightBrowserGateway(
+            context, page, navigation_timeout_ms=navigation_timeout_ms
+        ),
     )
 
 

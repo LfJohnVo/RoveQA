@@ -28,7 +28,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import BrowserGateway, UnperformableActionError
-from agentic_qa.application.ports.models import ModelGateway, PlanningRequest
+from agentic_qa.application.ports.models import ModelGateway, PlanCriterion, PlanningRequest
 from agentic_qa.application.services.criterion_verification import (
     verify_criteria as verify_plan_criteria,
 )
@@ -41,6 +41,7 @@ from agentic_qa.domain.agent.state import (
 )
 from agentic_qa.domain.browser.actions import (
     BrowserAction,
+    BrowserActionType,
 )
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.exploration.actions import exploration_action, is_takeable
@@ -55,7 +56,11 @@ from agentic_qa.domain.exploration.frontier import (
 from agentic_qa.domain.knowledge.memory_context import MemoryItem
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep
-from agentic_qa.domain.qa.verification import CriterionResult, FailureKind
+from agentic_qa.domain.qa.verification import (
+    CriterionResult,
+    FailureKind,
+    failure_kind_for_action,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +80,17 @@ class GraphState(TypedDict, total=False):
     """The planner proposed an action the domain refused. Distinguished from a policy
     denial because it *should* be retried: the planner can correct a missing target
     once it is told, while a policy refusal will refuse the same action again."""
+
+    criteria_seen: dict[str, str]
+    """Criteria whose literal has already been seen on a page this run visited, and
+    where. Checking a hint costs no inference -- it is a substring -- so it is asked on
+    every observation rather than once, at the end, against whichever page the run
+    happened to stop on."""
+
+    last_action_type: BrowserActionType | None
+    """What the browser was asked to do when it failed. Kept so that giving up can name
+    a cause: a locator that never resolved and a page that never loaded are different
+    failures, and reporting both as "nobody knows" throws away what we do know."""
 
     recovery_attempts: int
     actions_taken: int
@@ -147,8 +163,40 @@ def build_agent_graph(
     (actions, model calls, duration) and, when exploring, decides what the frontier is
     allowed to offer. Absent only in tests that are about something else.
     """
+
+    def _sightings(
+        already: dict[str, str] | None, observation: str, url: str, step: int
+    ) -> dict[str, str]:
+        """Which criteria this page satisfies, added to what earlier pages showed.
+
+        Matched against the rendered observation, which carries the page's text *and* its
+        control names -- so a literal that lives in a button label is found too. First
+        sighting wins: where a criterion became true is more useful than where it last
+        happened to still be true.
+        """
+        found = dict(already or {})
+        for criterion_id, expected in (hints or {}).items():
+            if criterion_id in found or not expected:
+                continue
+            if expected in observation:
+                found[criterion_id] = f"step {step} at {url}"
+        return found
+
     exploring = exploration_budget is not None
     started = now()
+    # The plan's criteria, in the shape the planner reads. Built once here because this
+    # is the only place that holds both the assertions and their literals; before this
+    # they met only in the final verification node, so the planner was asked to advance a
+    # goal without being told what reaching it would look like.
+    planner_criteria = tuple(
+        PlanCriterion(
+            criterion_id=step.criterion_id,
+            description=step.description,
+            expected_text=(hints or {}).get(step.criterion_id),
+        )
+        for step in assertions
+        if step.criterion_id
+    )
     # Asked before an affordance enters the frontier, not after it is attempted: a
     # denied action ends an episode by design, so a read-only exploration that queued
     # buttons would stop at the first one instead of mapping the application.
@@ -180,8 +228,15 @@ def build_agent_graph(
         # attempt until the episode ran out. `describe_page` has existed since the
         # exploration work; it was simply never on this path.
         page = await browser.describe_page()
-        agent.last_observation = page.describe()
-        return {"agent": agent, "safe_point": None}
+        observation = page.describe()
+        agent.last_observation = observation
+        return {
+            "agent": agent,
+            "safe_point": None,
+            "criteria_seen": _sightings(
+                state.get("criteria_seen"), observation, page.url, agent.step_index
+            ),
+        }
 
     async def plan(state: GraphState) -> GraphState:
         agent = state["agent"]
@@ -208,6 +263,8 @@ def build_agent_graph(
                 # The policy is what knows the application's address. Withholding it
                 # left the planner guessing at URLs the same policy then refused.
                 allowed_origins=policy.allowed_origins if policy is not None else (),
+                # What this run is judged by. Constant for the episode, like memory.
+                criteria=planner_criteria,
                 # Constant for the episode: it was resolved once, before the graph
                 # started, so every replay of this episode plans against the same
                 # memory the original attempt saw.
@@ -342,6 +399,7 @@ def build_agent_graph(
                 "actions_taken": taken,
                 "last_outcome_succeeded": False,
                 "last_detail": denied.decision.detail,
+                "last_action_type": action.type,
                 "last_denied": True,
             }
         except UnperformableActionError as unusable:
@@ -355,12 +413,14 @@ def build_agent_graph(
                 "actions_taken": taken,
                 "last_outcome_succeeded": False,
                 "last_detail": str(unusable),
+                "last_action_type": action.type,
                 "last_denied": False,
             }
         return {
             "actions_taken": taken,
             "last_outcome_succeeded": outcome.succeeded,
             "last_detail": outcome.detail,
+            "last_action_type": action.type,
             "last_denied": False,
         }
 
@@ -416,9 +476,19 @@ def build_agent_graph(
         attempts = state.get("recovery_attempts", 0) + 1
         agent = state["agent"]
         if attempts > MAX_RECOVERY_ATTEMPTS:
-            # Give up honestly rather than looping: the run reports why it stopped.
+            # Give up honestly rather than looping: the run reports why it stopped, and
+            # now also *what kind* of stop it was. The detail was already here; only the
+            # classification was missing, which left every one of these `inconclusive`.
             agent.failure_reason = state.get("last_detail") or "action could not be recovered"
             agent.goal_reached = False
+            failed = state.get("last_action_type")
+            return {
+                "agent": agent,
+                "recovery_attempts": attempts,
+                "safe_point": None,
+                "last_rejected": False,
+                "failure_kind": (failure_kind_for_action(failed) if failed is not None else None),
+            }
         logger.info("recovery attempt %s for run %s", attempts, agent.run_id)
         # Cleared here, not in `plan`: leaving it set would send the next pass straight
         # back to recovery whatever the planner decided.
@@ -470,6 +540,7 @@ def build_agent_graph(
             hints=hints,
             goal_failure=agent.failure_reason,
             goal_failure_kind=state.get("failure_kind"),
+            observed_earlier=state.get("criteria_seen"),
         )
         if shot is not None:
             # Every criterion was judged against this one page state, so this is

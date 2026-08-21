@@ -19,7 +19,13 @@ nothing", which an explorer would read as a dead end.
 import re
 from urllib.parse import urljoin, urlsplit
 
-from agentic_qa.domain.exploration.state import MAX_AFFORDANCES, Affordance
+from agentic_qa.domain.exploration.state import (
+    MAX_AFFORDANCES,
+    MAX_CONTENT_CHARS,
+    Affordance,
+)
+
+_WHITESPACE = re.compile(r"\s+")
 
 INTERACTIVE_ROLES = frozenset(
     {
@@ -48,8 +54,43 @@ purpose. They describe how a page is arranged, and including them would make a
 reflowed layout look like a new state while telling an explorer nothing it can act on.
 """
 
-_LINE = re.compile(r'^(\s*)-\s+([a-z]+)(?:\s+"([^"]*)")?')
+_LINE = re.compile(r'^(\s*)-\s+([a-z]+)(?:\s+"([^"]*)")?((?:\s*\[[^\]]*\])*)')
 _URL_LINE = re.compile(r"^(\s*)-\s+/url:\s*(\S+)")
+_TEXT_LINE = re.compile(
+    # A heading carries its level as a trailing attribute -- `[level=1]` -- so the
+    # name cannot be anchored to end of line. Missing that dropped every heading,
+    # which is where a page says what it is.
+    r'^\s*-\s+(heading|paragraph|text)(?:\s+"([^"]*)"(?:\s*\[[^\]]*\])*|:\s*(.*))?\s*$'
+)
+
+_DISABLED = re.compile(r"\[disabled\]")
+
+TEXT_ROLES = frozenset({"heading", "paragraph", "text"})
+"""Roles that carry what the page *says*, as opposed to what it offers.
+
+Kept separate from `INTERACTIVE_ROLES` on purpose: these can never be acted on, so they
+have no business in the frontier — and a planner asked to confirm "the page shows X"
+cannot answer without them. Both readings come from the same snapshot; only one of them
+used to survive it.
+"""
+
+
+def unquote_snapshot_value(value: str) -> str:
+    """Strip the quotes Playwright adds around a value that needs them.
+
+    The snapshot writes `/url: "#"` and `- text: "@2025 Acme"` — quoted because `#` and
+    `@` would otherwise be read as syntax. Keeping the quotes turned `#contact` into the
+    path `/"#contact"`, which no origin allowlist can resolve and no browser can open.
+
+    The same slip would be worse in text: a criterion looking for `@2025 Acme` would not
+    match `"@2025 Acme"`, and a deterministic criterion that fails is the one verdict
+    that accuses the product. One helper, both readings.
+    """
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1]
+    return text
+
 
 MAX_SNAPSHOT_LINES = 4000
 """Bound on how much of a snapshot is read.
@@ -88,10 +129,15 @@ def parse_affordances(snapshot: str, *, base_url: str = "") -> tuple[Affordance,
             url = _URL_LINE.match(line)
             if url is not None and len(url.group(1)) > pending_indent:
                 existing = found[pending_key]
-                resolved = _absolute(base_url, url.group(2))
+                resolved = _absolute(base_url, unquote_snapshot_value(url.group(2)))
                 if existing.url is None and resolved is not None:
                     found[pending_key] = Affordance(
-                        role=existing.role, name=existing.name, url=resolved
+                        role=existing.role,
+                        name=existing.name,
+                        url=resolved,
+                        # Carried over rather than defaulted: rebuilding the affordance
+                        # to attach its url must not quietly re-enable a disabled one.
+                        disabled=existing.disabled,
                     )
                 pending_key = None
                 continue
@@ -104,7 +150,9 @@ def parse_affordances(snapshot: str, *, base_url: str = "") -> tuple[Affordance,
         if role not in INTERACTIVE_ROLES or not name:
             continue
 
-        affordance = Affordance(role=role, name=name)
+        affordance = Affordance(
+            role=role, name=name, disabled=bool(_DISABLED.search(match.group(4) or ""))
+        )
         # Keyed by the *normalised* key, so a table of a thousand rows collapses to the
         # handful of distinct things it actually offers before the cap is applied.
         if affordance.key not in found:
@@ -113,6 +161,44 @@ def parse_affordances(snapshot: str, *, base_url: str = "") -> tuple[Affordance,
         if len(found) >= MAX_AFFORDANCES:
             break
     return tuple(found.values())
+
+
+def parse_text_content(snapshot: str, *, max_chars: int = MAX_CONTENT_CHARS) -> tuple[str, ...]:
+    """Pull what the page *says* out of the same snapshot, deduplicated and bounded.
+
+    This existed in the snapshot from the first day and never left this layer. A planner
+    was handed the url, the title and a list of controls, and then asked to confirm goals
+    like "the page shows the order was placed" — which the observation could not answer,
+    so the run looped until its budget ran out with the evidence one method call away.
+
+    Bounded by **characters, not by node type**: the cost to guard against is a data grid
+    with ten thousand rows, and dropping every text node to avoid it also drops the four
+    lines a criterion is about. Truncation is marked, because a planner told a partial
+    page is complete will conclude the page lacks what it was looking for.
+    """
+    seen: set[str] = set()
+    kept: list[str] = []
+    spent = 0
+
+    for index, line in enumerate(snapshot.splitlines()):
+        if index >= MAX_SNAPSHOT_LINES:
+            break
+        match = _TEXT_LINE.match(line)
+        if match is None:
+            continue
+        raw = match.group(2) if match.group(2) is not None else (match.group(3) or "")
+        text = _WHITESPACE.sub(" ", unquote_snapshot_value(raw)).strip()
+        # Empty paragraphs are layout, not content, and a real page is full of them.
+        if not text or text in seen:
+            continue
+        if spent + len(text) > max_chars:
+            kept.append("… [truncated]")
+            break
+        seen.add(text)
+        kept.append(text)
+        spent += len(text)
+
+    return tuple(kept)
 
 
 def _absolute(base_url: str, href: str) -> str | None:
