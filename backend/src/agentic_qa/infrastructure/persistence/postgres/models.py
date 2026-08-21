@@ -319,6 +319,48 @@ class ArtifactModel(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ObservedFailureModel(Base):
+    """Something the browser saw go wrong that belongs to no acceptance criterion.
+
+    A console exception or an image answering 404 is first-class QA signal on any site,
+    and until now there was nowhere to put it: every findings surface in the schema is
+    keyed to a `criterion_id`, so an observation about a *page* had no row it could
+    occupy. It was collected by the adapter, carried as far as `EpisodeResult`, and
+    dropped (ADR 0015 said it would reach the report; this is that).
+
+    One row per problem rather than an array per run, so the grain can get finer without
+    a migration — a site sweep will want to say *which page* each one came from.
+
+    Nothing here can produce a `failed` verdict. These are observations, and only a
+    deterministic check against a criterion may accuse the product.
+    """
+
+    __tablename__ = "observed_failures"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('console_error', 'failed_request')", name="ck_observed_failures_kind"
+        ),
+        Index("ix_observed_failures_run", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    episode_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    """Redacted before it gets here. A failed-request URL carries tokens in its query
+    string and a console message can print one, so the adapter cleans both — this column
+    is not the place to discover that."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class CriterionResultModel(Base):
     """One acceptance criterion's outcome for one run (docs/02).
 

@@ -85,6 +85,40 @@ export function RunPage() {
             </div>
           )}
 
+          {report.observed.length > 0 ? (
+            <>
+              <SectionTitle>What the browser saw</SectionTitle>
+              <p className="-mt-2 mb-4 text-xs text-gray-600 dark:text-gray-400">
+                Console errors and requests that never completed. Nobody asked about
+                these and the browser saw them anyway — none of them is a verdict about
+                the application.
+              </p>
+              <TableCard label="What the browser saw">
+                <TableHead>
+                  <Th>Kind</Th>
+                  <Th>Detail</Th>
+                  <Th>Episode</Th>
+                </TableHead>
+                <TableBody>
+                  {report.observed.map((failure, index) => (
+                    // Keyed by position: two identical console errors from two episodes
+                    // are two observations, and deduplicating them here would hide that
+                    // the second episode saw it too.
+                    <Tr key={`${failure.kind}-${index}`}>
+                      <Td>
+                        <Badge tone="unsure">{failure.kind.replace("_", " ")}</Badge>
+                      </Td>
+                      <Td className="font-mono text-xs whitespace-normal break-all">
+                        {failure.detail}
+                      </Td>
+                      <Td className="tabular-nums">{failure.episodeIndex}</Td>
+                    </Tr>
+                  ))}
+                </TableBody>
+              </TableCard>
+            </>
+          ) : null}
+
           {report.artifacts.length > 0 ? (
             <>
               <div className="flex items-baseline gap-3">

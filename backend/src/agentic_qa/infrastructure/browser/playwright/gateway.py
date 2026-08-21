@@ -275,17 +275,18 @@ class PlaywrightBrowserGateway:
         """
         return PageProblems(
             console_errors=tuple(
-                redact_secrets(message)
-                for message in self.failures.console_errors[:MAX_REPORTED_PROBLEMS]
-            ),
+                dict.fromkeys(redact_secrets(message) for message in self.failures.console_errors)
+            )[:MAX_REPORTED_PROBLEMS],
+            # Deduplicated *before* the cap, not after. Slicing first spends all
+            # twenty-five slots on one broken image retried twenty-five times, reports it
+            # as a single finding, and hides the twenty-six distinct URLs behind it — the
+            # opposite of what the cap is for. The cap bounds what is reported; the dedup
+            # decides what counts as one problem.
             failed_requests=tuple(
                 dict.fromkeys(
-                    # Deduplicated after cleaning: a page that retries one broken image
-                    # forty times has one broken image.
-                    safe_url(url.split(" ", 1)[-1]) or url
-                    for url in self.failures.failed_requests[:MAX_REPORTED_PROBLEMS]
+                    safe_url(url.split(" ", 1)[-1]) or url for url in self.failures.failed_requests
                 )
-            ),
+            )[:MAX_REPORTED_PROBLEMS],
         )
 
     async def describe_page(self) -> PageState:

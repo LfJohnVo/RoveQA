@@ -52,9 +52,23 @@ export interface Artifact {
   stepId: string | null;
 }
 
+/**
+ * Something the browser saw go wrong that answers no acceptance criterion.
+ *
+ * Kept apart from `Finding` in the type, not just on screen. A finding is an answer to
+ * a question the plan asked and can accuse the application; an observation is neither,
+ * and a shape that could hold both would eventually be rendered as both.
+ */
+export interface ObservedFailure {
+  kind: "console_error" | "failed_request";
+  detail: string;
+  episodeIndex: number;
+}
+
 export interface RunReport {
   runId: string;
   findings: readonly Finding[];
+  observed: readonly ObservedFailure[];
   artifacts: readonly Artifact[];
   /** The evidence set every artifact belongs to. A bundle that mixed two would be
    * incoherent, so the UI shows the one it actually has. */

@@ -244,7 +244,13 @@ describe("the screen follows the run's real status", () => {
 describe("findings keep observations and hypotheses apart", () => {
   function withReport(findings: Finding[]) {
     const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "failed" }));
-    runs.reportValue = { runId: "run-1", findings, artifacts: [], evidenceSetId: "ev-1" };
+    runs.reportValue = {
+      runId: "run-1",
+      findings,
+      observed: [],
+      artifacts: [],
+      evidenceSetId: "ev-1",
+    };
     renderRun(gatewaysWith(runs, new FakeRunEventStream()));
   }
 
@@ -311,5 +317,52 @@ describe("findings keep observations and hypotheses apart", () => {
 
     await screen.findByText("running");
     expect(screen.queryByText("Findings")).not.toBeInTheDocument();
+  });
+});
+
+describe("what the browser saw is not what the run concluded", () => {
+  it("shows console errors and failed requests in their own section", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.reportValue = {
+      runId: "run-1",
+      findings: [],
+      observed: [
+        { kind: "console_error", detail: "TypeError: x is not a function", episodeIndex: 0 },
+        { kind: "failed_request", detail: "https://cdn.test/logo.png", episodeIndex: 1 },
+      ],
+      artifacts: [],
+      evidenceSetId: "ev-1",
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    const table = await screen.findByRole("table", { name: "What the browser saw" });
+    expect(within(table).getByText("TypeError: x is not a function")).toBeInTheDocument();
+    expect(within(table).getByText("https://cdn.test/logo.png")).toBeInTheDocument();
+  });
+
+  it("says out loud that none of them is a verdict", async () => {
+    // A reader who takes a noisy console for a failing test is a reader who stops
+    // trusting the report — in either direction.
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.reportValue = {
+      runId: "run-1",
+      findings: [],
+      observed: [{ kind: "console_error", detail: "boom", episodeIndex: 0 }],
+      artifacts: [],
+      evidenceSetId: null,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    expect(await screen.findByText(/none of them is a verdict/)).toBeInTheDocument();
+    // The run still reads as passed. An observation cannot change that.
+    expect(screen.getByText("passed")).toBeInTheDocument();
+  });
+
+  it("shows nothing at all when the browser saw nothing", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    await screen.findByText("passed");
+    expect(screen.queryByRole("table", { name: "What the browser saw" })).toBeNull();
   });
 });

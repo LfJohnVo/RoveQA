@@ -17,6 +17,7 @@ from tests.fakes.repositories import (
     InMemoryIdempotencyRepository,
     InMemoryKnowledgeRepository,
     InMemoryMemoryFeedbackRepository,
+    InMemoryObservedFailureRepository,
     InMemoryProjectRepository,
     InMemoryRecoveryPointRepository,
     InMemoryRunEventLog,
@@ -75,6 +76,10 @@ class InMemoryUnitOfWork:
     @property
     def criterion_results(self) -> InMemoryCriterionResultRepository:
         return InMemoryCriterionResultRepository(self._require_active())
+
+    @property
+    def observed_failures(self) -> InMemoryObservedFailureRepository:
+        return InMemoryObservedFailureRepository(self._require_active())
 
     @property
     def failure_clusters(self) -> InMemoryFailureClusterRepository:

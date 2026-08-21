@@ -43,6 +43,7 @@ from agentic_qa.domain.knowledge.compatibility import MemoryScope
 from agentic_qa.domain.knowledge.memory_context import MemoryContext, MemoryItem
 from agentic_qa.domain.knowledge.redaction import redact_secrets
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.observations import ObservedFailure, ObservedFailureKind
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.verification import derive_verdict
 from agentic_qa.domain.runs.recovery import (
@@ -186,6 +187,7 @@ class RunActivities:
             await self._record_recovery_point(params, result)
 
         await self._record_actions(params.run_id, result)
+        await self._record_observed_failures(params, result)
         verdict = await self._record_results(params, plan, result)
         return EpisodeOutcome(more_work=result.more_work, verdict=verdict)
 
@@ -438,6 +440,49 @@ class RunActivities:
             result.criterion_results,
             expected=[step.criterion_id for step in plan.assertions if step.criterion_id],
         ).value
+
+    async def _record_observed_failures(self, params: EpisodeParams, result: EpisodeResult) -> None:
+        """Persist what the browser saw go wrong.
+
+        These arrived at this method for a long time and went no further: `page_problems`
+        was the one field of `EpisodeResult` nothing read. A JavaScript exception and an
+        image answering 404 are QA signal on any site, and they were measured and dropped
+        (ADR 0015 promised the report would carry them).
+
+        Written unconditionally of whether a plan exists — `_record_results` returns early
+        without one, and a run with no story is exactly the run these matter most for.
+        They never influence the verdict: only a deterministic check against a criterion
+        may accuse the product.
+        """
+        problems = result.page_problems
+        if not problems:
+            return
+
+        failures = [
+            ObservedFailure(
+                kind=ObservedFailureKind.CONSOLE_ERROR,
+                detail=message,
+                episode_index=params.episode_index,
+            )
+            for message in problems.console_errors
+        ] + [
+            ObservedFailure(
+                kind=ObservedFailureKind.FAILED_REQUEST,
+                detail=url,
+                episode_index=params.episode_index,
+            )
+            for url in problems.failed_requests
+        ]
+
+        async with self._container.unit_of_work() as uow:
+            await uow.observed_failures.record(params.run_id, failures)
+            await uow.commit()
+        logger.info(
+            "run %s observed %d browser problem(s) in episode %d",
+            params.run_id,
+            len(failures),
+            params.episode_index,
+        )
 
     async def _index_evidence(self, run_id: str, result: EpisodeResult) -> None:
         """Record the artifacts the episode captured.

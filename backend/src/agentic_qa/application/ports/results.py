@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from agentic_qa.domain.qa.observations import ObservedFailure
 from agentic_qa.domain.qa.verification import CriterionResult
 
 
@@ -46,3 +47,26 @@ class CriterionResultRepository(Protocol):
         list would name the wrong cause.
         """
         ...
+
+
+class ObservedFailureRepository(Protocol):
+    """Where console errors and failed requests go to be readable.
+
+    Separate from `CriterionResultRepository` because the grain is different and the
+    meaning is different: a criterion result answers a question somebody asked, an
+    observed failure is something nobody asked about and the browser saw anyway. Mixing
+    them would need a nullable `criterion_id`, and a nullable key is how two kinds of row
+    end up in one query that means neither.
+    """
+
+    async def record(self, run_id: str, failures: Sequence[ObservedFailure]) -> None:
+        """Append this episode's observations to the run.
+
+        Append rather than replace: an episode is a slice of a run, and a later one must
+        not erase what an earlier one saw. Callers pass a whole episode's worth at once,
+        so a retry of the same episode is the one case that can duplicate — which is
+        cheap here, and cheaper than losing the first episode's findings.
+        """
+        ...
+
+    async def list_for_run(self, run_id: str) -> list[ObservedFailure]: ...

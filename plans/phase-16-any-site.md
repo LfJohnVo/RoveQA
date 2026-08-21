@@ -60,9 +60,14 @@ lo cierra.
 
 | ADR | Decisión |
 | --- | --- |
-| 0015 | Estado HTTP y fallas observadas en el resultado de una acción, y qué veredicto merece un 5xx |
-| 0016 | Barrido de sitio: un modo de run sin historia, con comprobaciones deterministas por estado |
-| 0017 | Overlays de consentimiento: qué puede cerrar un run y bajo qué decisión de policy |
+| 0015 | Estado HTTP y fallas observadas en el resultado de una acción, y qué veredicto merece un 5xx ✅ |
+| ~~0016~~ **0017** | Barrido de sitio: un modo de run sin historia, con comprobaciones deterministas por estado |
+| ~~0017~~ **0018** | Overlays de consentimiento: qué puede cerrar un run y bajo qué decisión de policy |
+
+> Los números se corrieron: **0016 es el sistema de diseño del frontend** (Windmill +
+> Tailwind), escrito antes que estos dos. Un ADR reusando un número es peor que uno con el
+> número «equivocado» — se citan por número y dos documentos distintos bajo el mismo lo
+> vuelven una referencia inútil.
 
 ---
 
@@ -83,10 +88,24 @@ que separarlos.
    página de error. Hoy no puede saberlo.
 
 **Gates**
-- Un `navigate` a un 404 no vuelve como `succeeded` sin más.
-- Un 5xx produce el veredicto que el ADR decida; test dedicado.
-- Un error de consola aparece en el reporte, separado de las conclusiones del modelo.
-- Ningún token en una URL fallida llega al reporte sin redactar.
+- Un `navigate` a un 404 no vuelve como `succeeded` sin más. ✅
+- Un 5xx produce el veredicto que el ADR decida; test dedicado. ✅
+- Un error de consola aparece en el reporte, separado de las conclusiones del modelo. ✅
+- Ningún token en una URL fallida llega al reporte sin redactar. ✅
+
+**Cerrada.** La última mitad —lo observado llegando al reporte— tardó una fase de más:
+`EpisodeResult.page_problems` existía desde el slice 1 y era el único campo del resultado
+que nadie leía. Ahora hay tabla (`observed_failures`, migración `d41f7c2a9e08`), clave
+propia en el reporte, sección propia en markdown y en la UI, y la frase dicha en voz alta:
+ninguna de esas líneas es un veredicto.
+
+Tres defectos salieron al usarlo. La redacción estaba escrita y nunca ejercitada —
+`auth failed for token sk-live-…` pasaba entera, porque los patrones cubrían lo que emite
+una máquina y no lo que teclea una persona. `page_problems()` deduplicaba **después** de
+recortar, así que veinticinco reintentos de una imagen rota reportaban un hallazgo y
+escondían las veintiséis URLs distintas detrás — con el comentario del propio código
+describiendo lo correcto. Y el episode runner le preguntaba al gateway crudo, no al
+guardado que le había pasado al grafo.
 
 ### Slice 2 — La exploración sale de `about:blank` *(R1)*
 

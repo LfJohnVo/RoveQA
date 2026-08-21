@@ -196,7 +196,7 @@ async def run_story(*, hint: str | None) -> tuple[str | None, RunReport]:
         )
         async with container.unit_of_work() as uow:
             report = await build_run_report(
-                uow.runs, uow.plans, uow.criterion_results, run_id=run_id
+                uow.runs, uow.plans, uow.criterion_results, uow.observed_failures, run_id=run_id
             )
         return outcome.verdict, report
 

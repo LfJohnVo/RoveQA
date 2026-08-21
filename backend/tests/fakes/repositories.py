@@ -29,6 +29,7 @@ from agentic_qa.domain.knowledge.feedback import MemoryFeedback
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.observations import ObservedFailure
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionResult
@@ -49,6 +50,9 @@ class InMemoryStore:
     recovery_points: list[RecoveryPoint] = field(default_factory=list)
     plans: dict[tuple[str, str], TestPlan] = field(default_factory=dict)
     criterion_results: dict[str, dict[str, CriterionResult]] = field(default_factory=dict)
+    observed_failures: dict[str, list[ObservedFailure]] = field(default_factory=dict)
+    """Appended, not keyed: an observation is a thing that happened, and two episodes
+    seeing the same broken image saw it twice."""
     artifacts: dict[str, EvidenceRef] = field(default_factory=dict)
     knowledge: dict[tuple[str, str, str], KnowledgeExperienceCandidate] = field(
         default_factory=dict
@@ -83,6 +87,7 @@ class InMemoryStore:
             criterion_results={
                 run: dict(results) for run, results in self.criterion_results.items()
             },
+            observed_failures={run: list(seen) for run, seen in self.observed_failures.items()},
             artifacts=dict(self.artifacts),
             knowledge=dict(self.knowledge),
             memory_feedback=dict(self.memory_feedback),
@@ -115,6 +120,10 @@ class InMemoryStore:
         self.criterion_results.clear()
         self.criterion_results.update(
             {run: dict(results) for run, results in snapshot.criterion_results.items()}
+        )
+        self.observed_failures.clear()
+        self.observed_failures.update(
+            {run: list(seen) for run, seen in snapshot.observed_failures.items()}
         )
         self.artifacts.clear()
         self.artifacts.update(snapshot.artifacts)
@@ -297,6 +306,19 @@ class InMemoryTestPlanRepository:
     async def list_for_story(self, story_id: str, *, limit: int) -> list[TestPlan]:
         matches = [plan for plan in self._store.plans.values() if plan.source_story_id == story_id]
         return list(reversed(matches))[:limit]
+
+
+class InMemoryObservedFailureRepository:
+    """Appends, like the table: a later episode never erases an earlier one's findings."""
+
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def record(self, run_id: str, failures: Sequence[ObservedFailure]) -> None:
+        self._store.observed_failures.setdefault(run_id, []).extend(failures)
+
+    async def list_for_run(self, run_id: str) -> list[ObservedFailure]:
+        return list(self._store.observed_failures.get(run_id, []))
 
 
 class InMemoryCriterionResultRepository:

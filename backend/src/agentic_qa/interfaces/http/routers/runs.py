@@ -148,7 +148,9 @@ async def cancel_run(
 @router.get("/{run_id}/report")
 async def read_run_report(run_id: str, uow: UnitOfWorkDep) -> dict[str, Any]:
     """The run's report, built from durable rows rather than from a model transcript."""
-    report = await build_run_report(uow.runs, uow.plans, uow.criterion_results, run_id=run_id)
+    report = await build_run_report(
+        uow.runs, uow.plans, uow.criterion_results, uow.observed_failures, run_id=run_id
+    )
     return to_document(report)
 
 

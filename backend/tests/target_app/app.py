@@ -160,6 +160,21 @@ def create_target_app(state: TargetState | None = None) -> FastAPI:
             "fetch('/missing-endpoint');</script>",
         )
 
+    @app.get("/leaky-console", response_class=HTMLResponse)
+    async def leaky_console() -> HTMLResponse:
+        """The two ways a credential escapes through the browser's own diagnostics.
+
+        A console message printing a token is what a well-meaning debug line does, and a
+        request to a host that does not resolve keeps its whole URL — query string
+        included. Both end up in the run report now, so both have to arrive redacted.
+        """
+        return _page(
+            "Leaky console",
+            f"<script>console.error('auth failed for token {LEAKED_TOKEN}');"
+            f"fetch('http://nowhere.invalid/callback?session_token={LEAKED_TOKEN}')"
+            ".catch(function () {});</script>",
+        )
+
     @app.get("/secrets", response_class=HTMLResponse)
     async def secrets_page() -> HTMLResponse:
         """A page that shows a credential and links to one in a URL.

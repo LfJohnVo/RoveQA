@@ -157,3 +157,30 @@ async def test_extracting_the_secret_is_still_possible_and_still_contained(
     described = await guarded.describe_page()
     assert LEAKED_TOKEN not in described.url
     assert all(LEAKED_TOKEN not in affordance.name for affordance in described.affordances)
+
+
+async def test_a_token_in_a_console_error_or_a_failed_request_does_not_reach_the_report(
+    session: BrowserSession, target: tuple[str, TargetState]
+) -> None:
+    """The browser's own diagnostics are a leak path, and a new one.
+
+    Until this phase console errors and failed requests were collected and dropped, so
+    nothing they carried could escape. Now they reach the run report — which means the
+    redaction that was always written has to be true for the first time.
+
+    Both shapes are planted: a debug line printing a token, and a request to a host that
+    does not resolve, whose whole URL survives the failure with its query string on it.
+    """
+    base_url, _state = target
+    await session.gateway.page.goto(f"{base_url}/leaky-console")
+    # The failed request needs a moment: `requestfailed` fires when DNS gives up, not
+    # when the script runs.
+    await session.gateway.page.wait_for_timeout(1_000)
+
+    problems = await session.gateway.page_problems()
+
+    assert problems, "the page was supposed to produce both a console error and a dead request"
+    for message in problems.console_errors:
+        assert LEAKED_TOKEN not in message, message
+    for url in problems.failed_requests:
+        assert LEAKED_TOKEN not in url, url

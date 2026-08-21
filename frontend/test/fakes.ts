@@ -117,7 +117,13 @@ export class FakeRunGateway implements RunGateway {
 
   report(runId: string): Promise<RunReport> {
     return Promise.resolve(
-      this.reportValue ?? { runId, findings: [], artifacts: [], evidenceSetId: null },
+      this.reportValue ?? {
+        runId,
+        findings: [],
+        observed: [],
+        artifacts: [],
+        evidenceSetId: null,
+      },
     );
   }
 

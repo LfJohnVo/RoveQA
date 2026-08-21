@@ -32,6 +32,7 @@ from agentic_qa.domain.knowledge.feedback import MemoryFeedback
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.observations import ObservedFailure, ObservedFailureKind
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.qa.verification import CriterionResult
@@ -78,6 +79,7 @@ from agentic_qa.infrastructure.persistence.postgres.models import (
     IdempotencyRecordModel,
     KnowledgeCandidateModel,
     MemoryFeedbackModel,
+    ObservedFailureModel,
     ProjectModel,
     RecoveryPointModel,
     RunEventModel,
@@ -406,6 +408,46 @@ class PostgresTestPlanRepository:
             .limit(limit)
         )
         return [plan_to_domain(model) for model in result.scalars()]
+
+
+class PostgresObservedFailureRepository:
+    """Console errors and failed requests, appended per episode.
+
+    Append rather than replace, unlike criterion results next door: a criterion has one
+    answer per run and the latest wins, while an observation is a thing that happened —
+    episode three seeing a broken image does not mean episode one did not.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, run_id: str, failures: Sequence[ObservedFailure]) -> None:
+        if not failures:
+            return
+        self._session.add_all(
+            ObservedFailureModel(
+                run_id=run_id,
+                episode_index=failure.episode_index,
+                kind=failure.kind.value,
+                detail=failure.detail,
+            )
+            for failure in failures
+        )
+
+    async def list_for_run(self, run_id: str) -> list[ObservedFailure]:
+        result = await self._session.execute(
+            select(ObservedFailureModel)
+            .where(ObservedFailureModel.run_id == run_id)
+            .order_by(ObservedFailureModel.id)
+        )
+        return [
+            ObservedFailure(
+                kind=ObservedFailureKind(model.kind),
+                detail=model.detail,
+                episode_index=model.episode_index,
+            )
+            for model in result.scalars()
+        ]
 
 
 class PostgresCriterionResultRepository:

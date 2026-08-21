@@ -27,7 +27,7 @@ The work is not finished until all four hold, **measured, not asserted**.
 | --- | --- | --- |
 | 1 | Story-driven runs pass on the fixture app | ✅ **9 of 9** with `BASELINE_REPEATS=3` |
 | 2 | Traversals with no story — exploration maps a real site | ✅ seeds itself from the policy origin |
-| 3 | Reports carry analysis — per-page findings reach the report | ❌ collected in the adapter, never surfaced |
+| 3 | Reports carry analysis — what the browser saw reaches the report | ✅ `observed_failures`, in its own section |
 | 4 | A smoke against ≥2 real public sites of different archetypes | ❌ not started |
 
 Gate 4 is the one that matters most and is easiest to skip. Every serious defect in this
@@ -37,7 +37,44 @@ green gate 1 with no gate 4 means "it works on the thing we built it against".
 
 ## 3. Where to start, concretely
 
-**Gate 3 is next.** Gate 2 is done: the `explore` node seeds itself from the run policy's
+**Gate 4 is next**, and it is the one that matters most. Gate 3 is done.
+
+Gate 3, in one paragraph: `EpisodeResult.page_problems` was the only field of the episode
+result that nothing read. Console errors and failed requests were collected by the
+Playwright adapter, carried across two layers, and dropped — ADR 0015 had already said the
+report would carry them. They now land in a new `observed_failures` table (migration
+`d41f7c2a9e08`) and come back in the run report under their own key, with their own section
+in the markdown and in the UI, saying in words that **none of them is a verdict**.
+
+The shape of it is worth keeping in mind if you extend it:
+
+- **No findings surface in the schema could hold this.** `criterion_results` and
+  `failure_clusters` both require a `criterion_id`. A landing page has no criteria, so a
+  sweep of a completely broken site produced a blank report. The new table is the first
+  place an observation about a *page* can live.
+- **The grain is the episode, not the page**, and the code says so. The adapter accumulates
+  across a whole episode and never clears between navigations, so attributing a problem to
+  a page would be inventing a measurement. A site sweep needs that grain and will have to
+  earn it — `ObservedFailure` has an `episode_index` and no url, deliberately.
+- **They cannot reach a verdict**, and the type enforces it rather than a convention:
+  `ObservedFailure` has no outcome and no `failure_kind`. There is nothing to set.
+
+Three defects fell out of doing it, all found by writing the thing that used them:
+
+1. **The redaction was written and never exercised.** A console line saying
+   `auth failed for token sk-live-…` went through untouched: the patterns covered query
+   strings, userinfo, `Bearer` and JWTs — every shape a *machine* emits — and not the shape
+   a person types. Fixed with vendor-prefixed key patterns and a prose rule keyed on the
+   vocabulary `_SECRET_KEYS` already had, bounded so it does not eat "session expired".
+2. **`page_problems()` deduplicated after capping**, so twenty-five retries of one broken
+   image reported one finding and hid the twenty-six distinct URLs behind it. The code's own
+   comment described the correct behaviour; the code did the opposite.
+3. **The episode runner asked the raw gateway, not the guarded one** it had handed the
+   graph, leaving `GuardedBrowserGateway.page_problems` with no caller at all.
+
+---
+
+**Gate 3 is done.** Gate 2 is done: the `explore` node seeds itself from the run policy's
 origin (`seed_action` in `domain/exploration/actions.py`), through the guarded browser and
 counted as an action like any other step. The two `page.goto` calls the tests were making
 on production's behalf are gone — including

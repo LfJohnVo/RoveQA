@@ -149,9 +149,19 @@ const findingSchema = z.object({
   model_name: z.string().nullish(),
 });
 
+const observedFailureSchema = z.object({
+  kind: z.enum(["console_error", "failed_request"]),
+  detail: z.string().min(1),
+  episode_index: z.number().int().nonnegative().default(0),
+});
+
 const reportSchema = z.object({
   run_id: z.string().min(1),
   criteria: z.array(z.unknown()).default([]),
+  // Defaulted, not required: a server that predates this key is a server this client
+  // still works against, and a report with nothing to say about the browser is the
+  // ordinary case rather than a malformed one.
+  observed_failures: z.array(observedFailureSchema).default([]),
 });
 
 const artifactSchema = z.object({
@@ -203,6 +213,11 @@ export function toRunReport(report: unknown, failureContext: unknown): RunReport
   return {
     runId: parsedReport.run_id,
     findings: parsedReport.criteria.map(toFinding),
+    observed: parsedReport.observed_failures.map((failure) => ({
+      kind: failure.kind,
+      detail: failure.detail,
+      episodeIndex: failure.episode_index,
+    })),
     artifacts: parsedContext.artifacts.map(toArtifact),
     evidenceSetId: parsedContext.evidence_set_id ?? null,
   };

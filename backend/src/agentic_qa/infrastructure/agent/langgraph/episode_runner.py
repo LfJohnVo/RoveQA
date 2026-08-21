@@ -19,8 +19,6 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import (
     BrowserGateway,
-    PageProblems,
-    ReportsPageProblems,
 )
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
 from agentic_qa.application.ports.models import ModelGateway
@@ -116,11 +114,11 @@ class LangGraphEpisodeRunner:
                 # is taken then: the browser is about to be closed and nothing survives
                 # it. Absent for a gateway that does not watch, which is a real case and
                 # not a degraded one.
-                page_problems=(
-                    await raw.page_problems()
-                    if isinstance(raw, ReportsPageProblems)
-                    else PageProblems()
-                ),
+                # Through the guarded gateway, which is what the graph was given. Asking
+                # `raw` skipped the wrapper entirely and left its forwarder with no
+                # caller — the sort of thing that reads as equivalent right up until the
+                # wrapper starts doing something.
+                page_problems=await guarded.page_problems(),
                 state_map=_state_map(final.get("exploration"), report),
                 exploration_report=report,
             )

@@ -14,6 +14,7 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresIdempotencyRepository,
     PostgresKnowledgeRepository,
     PostgresMemoryFeedbackRepository,
+    PostgresObservedFailureRepository,
     PostgresProjectRepository,
     PostgresRecoveryPointRepository,
     PostgresRunEventLog,
@@ -77,6 +78,10 @@ class PostgresUnitOfWork:
     @property
     def criterion_results(self) -> PostgresCriterionResultRepository:
         return PostgresCriterionResultRepository(self.session)
+
+    @property
+    def observed_failures(self) -> PostgresObservedFailureRepository:
+        return PostgresObservedFailureRepository(self.session)
 
     @property
     def failure_clusters(self) -> PostgresFailureClusterRepository:

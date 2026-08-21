@@ -26,7 +26,10 @@ from agentic_qa.application.ports.repositories import (
     RunRepository,
     StoryRepository,
 )
-from agentic_qa.application.ports.results import CriterionResultRepository
+from agentic_qa.application.ports.results import (
+    CriterionResultRepository,
+    ObservedFailureRepository,
+)
 from agentic_qa.application.ports.triage import FailureClusterRepository
 
 
@@ -60,6 +63,9 @@ class UnitOfWork(Protocol):
 
     @property
     def criterion_results(self) -> CriterionResultRepository: ...
+
+    @property
+    def observed_failures(self) -> ObservedFailureRepository: ...
 
     @property
     def failure_clusters(self) -> FailureClusterRepository: ...
