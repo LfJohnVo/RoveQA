@@ -5,9 +5,10 @@ episode to be executed and records what came back. Whether that execution uses
 LangGraph, and which checkpointer or browser it drives, is entirely behind here.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
+from agentic_qa.application.ports.browser import PageProblems
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.exploration.comparison import StateMap
 from agentic_qa.domain.exploration.frontier import ExplorationBudget, ExplorationReport
@@ -66,6 +67,14 @@ class EpisodeResult:
 
     evidence: tuple[EvidenceRef, ...] = ()
     """Artifacts captured while the browser was still open. The caller indexes them."""
+
+    page_problems: PageProblems = field(default_factory=PageProblems)
+    """Console errors and failed requests seen during the episode.
+
+    Evidence beside the verdict, never part of it: a console error is something a person
+    should see, and letting it change a verdict would make a noisy third-party script look
+    like a defect in the application (ADR 0015).
+    """
 
     observed_url: str | None = None
     """Where the episode ended. Recovery needs it: rebuilding a browser without

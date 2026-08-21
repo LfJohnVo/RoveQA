@@ -1,5 +1,89 @@
 # Session Handoff
 
+Última sesión: 2026-08-20 (Opus 5). **Phase 15 implementada; gates verdes.**
+
+`bash scripts/ci-local.sh` → `ci-local: all green` (backend 946+, CLI 149, frontend 51,
+migraciones sin drift, build, compose).
+
+## Lo que cambió
+
+El agente ya puede apuntarse a **cualquier URL** y verificar una historia. Medido: una
+historia de cuatro criterios contra un sitio público que nadie usó para desarrollar esto
+pasó de `inconclusive` (muerto en `Page.goto: Timeout 10000ms exceeded`) a **`passed`**,
+4/4 criterios, con el mismo `Qwen3-4B-Instruct-2507-AWQ-4bit`. Los números están en
+`docs/status/AGENT_FINDINGS.md`.
+
+**El diagnóstico del README era falso.** «Ninguna historia llega a `passed`, un modelo
+mayor es la variable» — no. El planner elegía la acción correcta con el literal correcto y
+lo ponía en un campo que la acción no lee, porque nada en el contrato decía cuál era el
+campo. Diez arreglos, ningún cambio de modelo. README y CHANGELOG corregidos.
+
+Slices cerradas: 1 (compose `migrate`), 2 (timeouts de navegación, ADR 0011), 3
+(desentrecomillado), 4 (unión discriminada, ADR 0012), 5 (texto de página en la
+observación), 6 (criterios al planner), 7 (`[disabled]`), 8 (verificación continua, ADR
+0013), 9 (policy read-only, ADR 0014), 10 (clasificación de fallos).
+
+## Dos hallazgos que no eran de esta fase
+
+**`cli/src/contracts/schemas.ts` no estaba en el repositorio.** `cli/.gitignore` tenía
+`contracts/` sin anclar, que casa cualquier directorio con ese nombre — así que un archivo
+fuente sin el cual la CLI no compila nunca se comiteó (`git log --all` no tiene ni un
+commit suyo). El gate de CLI estaba **rojo en `main`** y sólo pasaba en máquinas donde el
+archivo existía localmente. Restaurado desde su contrato (dos call sites, `ajv`, el mismo
+patrón que `test/contract-examples.test.ts`) y el patrón anclado a `/contracts/`. Lo
+detectó el pipeline nuevo en su primer uso real, que es exactamente para lo que existe.
+
+**`scripts/validate-blueprint.sh` fijaba 15 fases.** Ahora comprueba contigüidad desde 00,
+que es la propiedad que importa y no cobra impuesto por fase.
+
+## Fase 15 cerrada
+
+Slice 0 y slice 11 hechas. `bash scripts/agent-baseline.sh` mide cuatro formas de historia
+contra la app de fixtures servida como contenedor (perfil `baseline`), y emite un único
+valor JSON en stdout para diffear contra la corrida anterior. Sin endpoint de modelo dice
+`model: absent` y sale 3, en vez de imprimir ceros que parecen un resultado.
+
+Línea base tras la fase, una pasada:
+
+| forma | veredicto | criterios |
+| --- | --- | --- |
+| one-page | **`passed`** | 2/2 |
+| multi-page | `blocked` (`policy`) | 1/2 |
+| after-a-form | `blocked` (`agent_budget`) | 0/1 |
+| unreachable | `blocked` (`environment`) | 0/1 |
+
+Se sostienen las dos propiedades que importan: el caso mínimo funciona, y la historia
+inalcanzable **nunca** salió `failed` — la línea base lo afirma explícitamente
+(`unreachable_never_failed`). Antes de la fase las cuatro eran `inconclusive` y ningún
+criterio se cumplía nunca.
+
+**`backend/tests/browser/test_the_real_web.py`** es lo que impide que N1 y N2 vuelvan en
+silencio: 11 tests contra Chromium real sobre una página con los peligros que trae una
+página pública — imagen que nunca responde (`load` no dispara), hrefs de ancla que el
+snapshot entrecomilla, overlay de consentimiento, submit deshabilitado. El primer test
+afirma **el peligro**, no el arreglo: esperar `load` ahí tiene que seguir agotando el
+tiempo. Si algún día pasa, el fixture dejó de reproducir la web real y todo lo demás en
+ese archivo no vale nada.
+
+## Lo siguiente, con número detrás
+
+**A6 — el planner pulsa un enlace al que podría navegar.** La forma `multi-page` muere en
+`policy denied click` bajo policy read-only, con el enlace listado *con su url*. El guard
+tiene razón (`click` es de escritura por tipo); lo equivocado es la elección.
+
+Resultado negativo registrado: el prompt ya lo dice explícitamente y el 4B **no cambió de
+comportamiento** en dos pasadas medidas. Es la lección de A1 otra vez — con este modelo una
+regla que sólo vive en prosa no cambia la acción elegida de forma fiable. El arreglo
+estructural cambia lo que una acción *significa* y necesita ADR, no un parche al final de
+una fase.
+
+## Siguiente
+
+`plans/phase-16-any-site.md` — estado HTTP, errores de consola, semilla de exploración,
+barrido sin historia, overlays de consentimiento. **Esperar instrucción explícita.**
+
+---
+
 Última sesión: 2026-08-20 (Opus 5). **Phases 02-14 completadas; v1.0.0-rc.** Phase 14 cierra con sus gates verdes, un soak de 90 minutos sin un solo run atascado y un demo que destapó cinco defectos de producto y uno de despliegue, ninguno visible en el código. Phase 13 cierra con 11/11 gates PASS y cuatro defectos reales encontrados por los propios ejercicios de hardening: un presupuesto que nadie contaba, un token que llegaba al state map, un tope de fichero comprobado después de leerlo, y una compactación de contexto que compactaba un nivel y no el siguiente. Phase 12 cierra con 3/3 gates PASS: exploración autónoma acotada que termina por construcción y no por budgets, schedules cuya supervivencia a un reinicio se verificó en vivo, y una comparación contra baseline que no marca cada cambio de DOM. Phase 11 cierra con 5/5 gates PASS: triage determinista de fallos, durable y acumulativo entre runs, más un endpoint deep opcional detrás del `ModelGateway` verificado contra vLLM vivo con guided decoding real. Phase 10 cerró con 4/4 (UI de control React/MVVM verificada contra el stack vivo) y Phase 09 con 12/12.
 
 # Current Phase
@@ -96,8 +180,9 @@ Falta: nada de la fase. Cerrada.
 
 # Phase Status
 
-- Phases 00 – 14: **DONE**.
-- Siguiente: no hay Phase 15 en `plans/`. El repositorio está en v1.0.0-rc.
+- Phases 00 – 15: **DONE**.
+- Phase 16 (`plans/phase-16-any-site.md`): **IN_PROGRESS** — slice 1 hecha.
+- Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar.
 
 # Last Stable State
 

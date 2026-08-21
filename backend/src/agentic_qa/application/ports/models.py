@@ -17,6 +17,20 @@ from agentic_qa.domain.knowledge.memory_context import MemoryItem
 
 
 @dataclass(frozen=True)
+class PlanCriterion:
+    """One acceptance criterion, as the planner needs to read it.
+
+    `expected_text` is the literal a deterministic check will look for, and None means
+    the criterion will be judged by a model. The difference matters to the planner: it
+    can assert the first and must not pretend to assert the second.
+    """
+
+    criterion_id: str
+    description: str
+    expected_text: str | None = None
+
+
+@dataclass(frozen=True)
 class PlanningRequest:
     """Bounded context handed to the planner.
 
@@ -39,6 +53,15 @@ class PlanningRequest:
     application is under test, and until it reached the prompt the planner had to
     *guess* a URL — which the same allowlist then refused. A planner starting on
     `about:blank` with no origin to aim at cannot take a first step at all."""
+
+    criteria: tuple[PlanCriterion, ...] = field(default=())
+    """What the run will be judged by.
+
+    The plan has always carried these, and they reached only the final verification
+    node. So the planner was asked to advance a goal without being told what would
+    count as reaching it — and, given an assertion-shaped goal, could only guess at the
+    literal to assert. It guessed the field as well as the text.
+    """
 
     memory: tuple[MemoryItem, ...] = field(default=())
     """What earlier verified runs learned about this application, already scoped,

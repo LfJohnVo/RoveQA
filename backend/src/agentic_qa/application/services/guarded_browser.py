@@ -11,9 +11,18 @@ any effect (CLAUDE.md invariants, docs/13).
 
 import logging
 
-from agentic_qa.application.ports.browser import ActionOutcome, BrowserGateway
-from agentic_qa.domain.browser.actions import BrowserAction
-from agentic_qa.domain.browser.policy_guard import PolicyDecision, evaluate_action
+from agentic_qa.application.ports.browser import (
+    ActionOutcome,
+    BrowserGateway,
+    PageProblems,
+    ReportsPageProblems,
+)
+from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
+from agentic_qa.domain.browser.policy_guard import (
+    PolicyDecision,
+    PolicyViolation,
+    evaluate_action,
+)
 from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
 
@@ -46,7 +55,41 @@ class GuardedBrowserGateway:
                 decision.detail,
             )
             raise ActionDeniedError(action, decision)
-        return await self._inner.execute(action)
+
+        outcome = await self._inner.execute(action)
+
+        # The allowlist has to hold for where the browser *ended up*, not only for what
+        # was asked. `goto` follows redirects, so a navigation to an allowed origin that
+        # redirects to a disallowed one used to arrive unchecked and the observation was
+        # taken from it -- and `docs/13` documents this allowlist as the control against
+        # reaching internal services (ADR 0015).
+        #
+        # What this does and does not do, stated because the distinction matters: the
+        # request has already been made by the time we see the response, so this stops the
+        # run from *observing* or acting on a disallowed origin, and ends the episode as a
+        # policy violation rather than a browser error. Aborting the request itself needs
+        # interception below this layer and is not what this does.
+        # Only when we actually know where it landed. A missing url means the context
+        # died, and calling that an origin violation would report a policy failure for an
+        # environment one -- the misclassification this project spends real effort
+        # avoiding. Nothing is at risk either: the harm here is an observation taken from
+        # a disallowed origin, and a page that cannot report its own url cannot be
+        # observed at all.
+        landed_on = outcome.current_url
+        if _is_navigation(action) and landed_on and not self._policy.allows_origin(landed_on):
+            landed = PolicyDecision.deny(
+                PolicyViolation.ORIGIN_NOT_ALLOWED,
+                f"navigation ended on {landed_on}, outside the allowed origins",
+            )
+            logger.warning(
+                "policy denied %s after the fact (%s): %s",
+                action.type,
+                landed.violation,
+                landed.detail,
+            )
+            raise ActionDeniedError(action, landed)
+
+        return outcome
 
     async def capture_screenshot(self) -> bytes:
         # Forwarded without a check: capturing the page changes nothing about the
@@ -56,6 +99,17 @@ class GuardedBrowserGateway:
     async def current_url(self) -> str | None:
         return await self._inner.current_url()
 
+    async def page_problems(self) -> PageProblems:
+        """Forwarded without a check, like the screenshot: reading what went wrong changes
+        nothing about the system under test.
+
+        Answered even when the wrapped gateway does not watch, so wrapping never removes a
+        capability the caller can ask for — it just answers "nothing observed".
+        """
+        if isinstance(self._inner, ReportsPageProblems):
+            return await self._inner.page_problems()
+        return PageProblems()
+
     async def describe_page(self) -> PageState:
         # Forwarded without a check, like the screenshot: reading what a page offers
         # changes nothing, and the policy still gates every action taken on it.
@@ -63,3 +117,13 @@ class GuardedBrowserGateway:
 
     async def aclose(self) -> None:
         await self._inner.aclose()
+
+
+def _is_navigation(action: BrowserAction) -> bool:
+    """Actions that can move the page, and therefore can land somewhere else.
+
+    `back` is included: history can walk into an origin the allowlist no longer permits,
+    and a run that got there by going backwards is in the same place as one that got there
+    by going forwards.
+    """
+    return action.type in (BrowserActionType.NAVIGATE, BrowserActionType.BACK)

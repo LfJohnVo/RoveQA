@@ -23,7 +23,14 @@ async def running_target_app() -> AsyncIterator[tuple[str, TargetState]]:
     state = TargetState()
     port = _free_port()
     config = uvicorn.Config(
-        create_target_app(state), host="127.0.0.1", port=port, log_level="warning"
+        create_target_app(state),
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
+        # The real-web fixture serves a resource that deliberately never answers, so a
+        # graceful shutdown that waits for in-flight requests would stall every teardown
+        # for as long as that resource holds out. A test server owes nobody a drain.
+        timeout_graceful_shutdown=1,
     )
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())

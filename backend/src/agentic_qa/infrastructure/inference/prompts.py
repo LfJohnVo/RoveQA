@@ -23,10 +23,11 @@ from agentic_qa.application.ports.models import PlanningRequest
 from agentic_qa.domain.browser.actions import (
     NEEDS_TARGET,
     NEEDS_VALUE,
+    READ_ONLY_ACTIONS,
     BrowserActionType,
 )
 
-PLANNING_PROMPT_VERSION = "planner.v3"
+PLANNING_PROMPT_VERSION = "planner.v5"
 JUDGEMENT_PROMPT_VERSION = "judge.v1"
 DEEP_ANALYSIS_PROMPT_VERSION = "deep-analysis.v1"
 """Bumped whenever the wording changes.
@@ -39,6 +40,9 @@ from the previous wording's (docs/08).
 MAX_MEMORY_CHARS = 300
 
 MAX_ORIGINS = 10
+MAX_CRITERIA = 20
+"""Criteria shown to the planner. A plan with more than twenty is not one whose next
+step turns on the twenty-first."""
 """A policy with more origins than this is describing a network, not an application;
 the prompt shows the first few rather than growing with the allowlist."""
 
@@ -50,6 +54,7 @@ _ACTION_LIST = ", ".join(sorted(action.value for action in BrowserActionType))
 
 _TARGETED_ACTIONS = ", ".join(sorted(action.value for action in NEEDS_TARGET))
 _VALUED_ACTIONS = ", ".join(sorted(action.value for action in NEEDS_VALUE))
+_READ_ONLY_ACTIONS = ", ".join(sorted(action.value for action in READ_ONLY_ACTIONS))
 """Rendered from the domain's own sets instead of retyped here.
 
 These are conditions the domain *enforces*: an action missing one is rejected before
@@ -76,6 +81,16 @@ the key to press, the text to assert: {_VALUED_ACTIONS}.
 target from what <page_observation> actually shows over something you cannot.
 - Set side_effect to true when the action can change the state of the system under \
 test (submitting, saving, deleting, purchasing, sending).
+- These actions cannot change anything and must not be marked side_effect: \
+{_READ_ONLY_ACTIONS}. Marking one of them anyway does not make a run safer; it \
+spends the run.
+- An element listed with a url after it can be reached with navigate, which changes \
+nothing. Clicking it is a write, and a read-only run will be refused. Prefer the \
+url when one is shown.
+- <acceptance_criteria> is what this run will be judged by. A criterion with an \
+expected text is checked literally, so assert_text with that exact text as the \
+value is how you confirm it. A criterion without one is judged separately — never \
+invent a literal for it.
 - Set finished to true when the goal is already satisfied and no further action is \
 needed.
 - <allowed_origins> is where this run may go. Navigate only to those origins; an \
@@ -150,6 +165,26 @@ def build_planning_prompt(request: PlanningRequest) -> str:
             for step in request.recent_steps
         )
         sections.append(f"<recent_steps>\n{steps}\n</recent_steps>")
+
+    if request.criteria:
+        # Ahead of memory and the observation: what counts as done is what the
+        # planner is trying to decide, and it was the one thing nobody told it.
+        rendered = "\n".join(
+            f"- {criterion.criterion_id}: {_clip(criterion.description, MAX_DETAIL_CHARS)}"
+            + (
+                f' — expected text: "{_clip(criterion.expected_text, MAX_DETAIL_CHARS)}"'
+                if criterion.expected_text
+                else " — judged by a model, not assertable"
+            )
+            for criterion in request.criteria[:MAX_CRITERIA]
+        )
+        # Said, not hidden. The API accepts up to a hundred criteria and verification
+        # evaluates every one, so a planner shown twenty and told nothing would work
+        # towards a goal whose remaining conditions it never knew existed.
+        withheld = len(request.criteria) - MAX_CRITERIA
+        if withheld > 0:
+            rendered += f"\n- and {withheld} more, not shown"
+        sections.append(f"<acceptance_criteria>\n{rendered}\n</acceptance_criteria>")
 
     if request.memory:
         sections.append(f"<recalled_memory>\n{_render_memory(request)}\n</recalled_memory>")

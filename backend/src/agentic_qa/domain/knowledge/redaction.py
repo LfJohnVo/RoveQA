@@ -129,3 +129,20 @@ def _clean_text(value: str, *, path: str, redacted: list[str]) -> str:
         cleaned = f"{cleaned[:MAX_PAYLOAD_CHARS]}… [truncated]"
         redacted.append(f"{path}:truncated")
     return cleaned
+
+
+def redact_secrets(value: str) -> str:
+    """Clean a string that is *evidence*, keeping it rather than refusing it.
+
+    `redact_payload` refuses instruction-shaped text, because knowledge that will be
+    replayed into a future prompt must not carry an instruction. Evidence is the opposite
+    case: a console error is worth reporting precisely when it is strange, and refusing to
+    report it would hide the finding. So the secret patterns apply and the injection
+    refusal does not -- evidence is read by a person, in a report, not fed back to a model.
+    """
+    cleaned = value
+    for pattern in _SECRET_PATTERNS:
+        cleaned = pattern.sub(_replacement, cleaned)
+    if len(cleaned) > MAX_PAYLOAD_CHARS:
+        return f"{cleaned[:MAX_PAYLOAD_CHARS]}… [truncated]"
+    return cleaned

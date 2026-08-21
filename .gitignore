@@ -45,3 +45,6 @@ soak-*.log
 # What scripts/demo.sh writes: a run's evidence, regenerated every time it runs.
 demo-out/
 backups/
+
+# Working directory for scripts/agent-baseline.sh: measurements, not sources.
+.agent-baseline/

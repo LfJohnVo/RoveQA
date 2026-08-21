@@ -76,7 +76,9 @@ async def test_a_valid_completion_is_returned_as_a_validated_object() -> None:
 
     decision = await ask(client)
 
-    assert decision.intent == "return to the listing"
+    action = decision.to_domain_action()
+    assert action is not None
+    assert action.intent == "return to the listing"
 
 
 async def test_the_request_asks_the_server_to_constrain_decoding() -> None:
@@ -139,7 +141,7 @@ async def test_a_server_error_is_retried_within_the_budget() -> None:
     decision = await ask(build_client(handler, max_attempts=2))
 
     assert len(attempts) == 2
-    assert decision.intent
+    assert decision.to_domain_action() is not None
 
 
 async def test_a_rejected_request_is_not_retried() -> None:

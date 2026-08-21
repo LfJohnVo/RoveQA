@@ -41,7 +41,8 @@ con el FailureBundle materializado y verificado al final.
 
 ## Qué hace
 
-- **Verifica historias de usuario** contra tu aplicación, con un navegador de verdad, y
+- **Verifica historias de usuario** contra cualquier URL —una aplicación, una landing, un
+  blog— con un navegador de verdad, y
   mantiene separado lo observado de lo que un modelo opinó. Sólo una comprobación
   determinista puede acusar al producto; una hipótesis de modelo viaja etiquetada y al
   lado, nunca dentro.
@@ -61,11 +62,7 @@ con el FailureBundle materializado y verificado al final.
 
 ## Qué no hace todavía
 
-- **Con el modelo incluido (Qwen3-4B) ninguna historia llega a `passed`.** El agente navega,
-  lee la página, se corrige y captura evidencia; lo que no hace es declarar la meta
-  alcanzada, así que el presupuesto lo detiene y el run sale `blocked`. Un modelo mayor es
-  la variable, y probarlo no exige tocar código.
-- Un run es un episodio: todavía no hay runs de varias horas.
+- **Un run es un episodio**, y todavía no hay runs de varias horas.
 - No es de alta disponibilidad. Es un despliegue de un nodo, deliberadamente.
 
 El resto de límites conocidos está en el [CHANGELOG](CHANGELOG.md), escritos porque un
