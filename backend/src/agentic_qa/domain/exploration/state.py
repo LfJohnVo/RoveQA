@@ -148,6 +148,20 @@ class PageState:
     """Recorded for the report, never for the signature: a title carrying a cart count
     would make every cart change a new state."""
 
+    http_status: int | None = None
+    """What the server answered for the navigation that produced this page.
+
+    So the observation can say "this is an error page" rather than leaving the planner to
+    infer it from prose an error page is under no obligation to provide. A run that could
+    not see this observed a 404 and reported whatever it rendered as the application
+    (ADR 0015).
+
+    **Deliberately not part of the signature**, for the same reason `disabled` is not: a
+    signature identifies a place, and the same place answering 500 today and 200 tomorrow
+    is the same place. Putting it in the key would give every stored baseline a new meaning
+    the first time a deploy went wrong.
+    """
+
     content: tuple[str, ...] = field(default=())
     """What the page says, for the planner to read.
 
@@ -225,6 +239,11 @@ class PageState:
         header = f"url: {self.url or 'about:blank'}"
         if self.title:
             header += f"\ntitle: {self.title}"
+        # Only when it is news. A 200 tells a planner nothing it needs, and a line on
+        # every observation is a line it learns to skip -- which is how the one that
+        # mattered gets skipped too.
+        if self.http_status is not None and self.http_status >= 400:
+            header += f"\nhttp status: {self.http_status} (an error page)"
 
         sections = [header]
 

@@ -24,6 +24,7 @@ from playwright.async_api import (
     Page,
     Playwright,
     Request,
+    Response,
     StorageState,
     async_playwright,
 )
@@ -210,9 +211,15 @@ class PlaywrightBrowserGateway:
         self._context = context
         self._page = page
         self._navigation_timeout_ms = navigation_timeout_ms
+        # Observed passively, like the console errors beside it, rather than recorded in
+        # `execute`. A click or a form submit navigates too, and a status remembered only
+        # for navigations *we* performed would go stale -- reporting a 200 for a page that
+        # is now a 500, which is worse than reporting nothing.
+        self._last_http_status: int | None = None
         self.failures = ObservedFailures()
         page.on("console", self._on_console)
         page.on("requestfailed", self._on_request_failed)
+        page.on("response", self._on_response)
 
     def _on_console(self, message: ConsoleMessage) -> None:
         if message.type == "error":
@@ -220,6 +227,20 @@ class PlaywrightBrowserGateway:
 
     def _on_request_failed(self, request: Request) -> None:
         self.failures.failed_requests.append(f"{request.method} {request.url}")
+
+    def _on_response(self, response: Response) -> None:
+        """Keep the status of the document the main frame is showing.
+
+        Sub-resources are ignored: an image answering 404 is a finding in its own right
+        (`failures.failed_requests`) and says nothing about whether the page loaded. A
+        response in a sub-frame is ignored for the same reason — an ad iframe failing is
+        not the page failing.
+        """
+        try:
+            if response.request.is_navigation_request() and response.frame == self._page.main_frame:
+                self._last_http_status = response.status
+        except PlaywrightError:  # the frame went away mid-event
+            return
 
     @property
     def page(self) -> Page:
@@ -285,6 +306,7 @@ class PlaywrightBrowserGateway:
             # From the same snapshot the affordances came out of. It was always here;
             # only the controls used to survive the trip to the planner.
             content=parse_text_content(snapshot),
+            http_status=self._last_http_status,
         )
 
     async def storage_state(self) -> StorageState:
@@ -318,6 +340,8 @@ class PlaywrightBrowserGateway:
                 return ActionOutcome(
                     succeeded=True,
                     current_url=self._page.url,
+                    # From the response in hand, not from the remembered one: this is the
+                    # navigation the caller asked about.
                     http_status=response.status if response is not None else None,
                 )
             case BrowserActionType.CLICK:

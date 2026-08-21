@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
+from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.infrastructure.browser.playwright.gateway import (
     DEFAULT_ACTION_TIMEOUT_MS,
     MAX_REPORTED_PROBLEMS,
@@ -296,3 +297,59 @@ class TestWhatWentWrongIsReported:
         problems = await session.gateway.page_problems()
 
         assert len(problems.console_errors) <= MAX_REPORTED_PROBLEMS
+
+
+class TestAnErrorPageSaysSo:
+    """The fixture's `/broken` answers 500 with a page that renders fine.
+
+    Nothing in its prose says it is an error, which is the point: an application is under
+    no obligation to explain itself, and a run that cannot see the status reports whatever
+    the error page rendered as the application (ADR 0015).
+    """
+
+    async def test_the_status_reaches_the_observation(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/broken", wait_until="domcontentloaded")
+
+        page = await session.gateway.describe_page()
+
+        assert page.http_status == 500
+
+    async def test_the_planner_is_told_in_words(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/broken", wait_until="domcontentloaded")
+
+        described = (await session.gateway.describe_page()).describe()
+
+        assert "http status: 500" in described
+        assert "error page" in described
+
+    async def test_a_healthy_page_is_not_annotated(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # A line on every observation is a line the planner learns to skip, and then it
+        # skips the one that mattered.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+
+        described = (await session.gateway.describe_page()).describe()
+
+        assert "http status" not in described
+
+    async def test_the_status_stays_out_of_the_signature(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # The same place answering 500 today and 200 tomorrow is the same place. In the
+        # key it would give every stored baseline a new meaning the first time a deploy
+        # went wrong.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/broken", wait_until="domcontentloaded")
+        broken = await session.gateway.describe_page()
+
+        assert (
+            broken.signature == PageState(url=broken.url, affordances=broken.affordances).signature
+        )
