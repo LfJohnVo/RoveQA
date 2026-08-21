@@ -271,10 +271,18 @@ class PlaywrightBrowserGateway:
     async def _dispatch(self, action: BrowserAction) -> ActionOutcome:
         match action.type:
             case BrowserActionType.NAVIGATE:
-                await self._page.goto(
+                # The response is the point, not a by-product: without its status a run
+                # cannot tell a page from an error page, and reads the error page as the
+                # application (ADR 0015).
+                response = await self._page.goto(
                     action.target.url or "",
                     timeout=self._navigation_timeout_ms,
                     wait_until=NAVIGATION_WAIT_UNTIL,
+                )
+                return ActionOutcome(
+                    succeeded=True,
+                    current_url=self._page.url,
+                    http_status=response.status if response is not None else None,
                 )
             case BrowserActionType.CLICK:
                 await self._locate(action.target).click(timeout=DEFAULT_ACTION_TIMEOUT_MS)
@@ -332,7 +340,14 @@ class PlaywrightBrowserGateway:
                     detail=f"captured {len(captured)} bytes",
                 )
             case BrowserActionType.BACK:
-                await self._page.go_back(timeout=DEFAULT_ACTION_TIMEOUT_MS)
+                back = await self._page.go_back(
+                    timeout=self._navigation_timeout_ms, wait_until=NAVIGATION_WAIT_UNTIL
+                )
+                return ActionOutcome(
+                    succeeded=True,
+                    current_url=self._page.url,
+                    http_status=back.status if back is not None else None,
+                )
 
         return ActionOutcome(succeeded=True, current_url=self._page.url)
 

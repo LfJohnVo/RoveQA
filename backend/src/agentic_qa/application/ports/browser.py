@@ -37,6 +37,15 @@ class ActionOutcome:
     detail: str = ""
     artifacts: tuple[str, ...] = field(default=())
 
+    http_status: int | None = None
+    """What the server answered, for a navigation. None for anything else, and None when
+    the response could not be read.
+
+    `succeeded` is about the mechanism -- whether the call threw -- and was the only signal
+    a run had. So a 404 and a 500 both came back successful, the agent observed whatever the
+    error page rendered, and took it for the application (ADR 0015).
+    """
+
 
 class BrowserGateway(Protocol):
     async def execute(self, action: BrowserAction) -> ActionOutcome: ...
