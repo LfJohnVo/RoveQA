@@ -23,7 +23,7 @@ from agentic_qa.application.services.guarded_browser import (
 from agentic_qa.domain.browser.actions import BrowserAction
 from agentic_qa.domain.browser.policy_guard import PolicyDecision, PolicyViolation
 from agentic_qa.domain.errors import InvalidEntityError
-from agentic_qa.domain.exploration.state import PageState
+from agentic_qa.domain.exploration.state import Affordance, PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep, PlanStepType
 from agentic_qa.domain.qa.verification import (
@@ -378,3 +378,40 @@ class TestASightingEarlierInTheRun:
         # Checked live, so the observation names the page rather than the sighting.
         assert results[0].outcome is CriterionOutcome.MET
         assert "contains" in results[0].observation
+
+
+class TestASightingCannotComeFromTheUrl:
+    """Raised in review, and it was real.
+
+    Sightings were matched against `PageState.describe()`, which opens with `url:` and
+    `title:`. A criterion whose literal appeared only in the address — "records" in
+    `/records` — would have been recorded as satisfied by a page that never said it, and
+    then reported `met`. The deterministic check runs against `body.inner_text()`, which
+    contains neither, so the two answers would have diverged with the optimistic one
+    winning.
+    """
+
+    def test_the_url_is_not_page_text(self) -> None:
+        page = PageState(
+            url="http://target.test/records",
+            title="Records",
+            content=("Nothing here yet.",),
+        )
+
+        assert "records" not in page.visible_text
+        assert "Records" not in page.visible_text
+
+    def test_a_control_name_is_page_text(self) -> None:
+        # A heading rendered inside a button is exactly the kind of literal a criterion
+        # names, and `inner_text()` would find it.
+        page = PageState(
+            url="http://target.test/records",
+            affordances=(Affordance(role="button", name="Create record"),),
+        )
+
+        assert "Create record" in page.visible_text
+
+    def test_the_content_is_page_text(self) -> None:
+        page = PageState(url="http://target.test/", content=("Order #1234 confirmed",))
+
+        assert "Order #1234 confirmed" in page.visible_text

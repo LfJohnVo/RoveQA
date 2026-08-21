@@ -178,6 +178,12 @@ def build_planning_prompt(request: PlanningRequest) -> str:
             )
             for criterion in request.criteria[:MAX_CRITERIA]
         )
+        # Said, not hidden. The API accepts up to a hundred criteria and verification
+        # evaluates every one, so a planner shown twenty and told nothing would work
+        # towards a goal whose remaining conditions it never knew existed.
+        withheld = len(request.criteria) - MAX_CRITERIA
+        if withheld > 0:
+            rendered += f"\n- and {withheld} more, not shown"
         sections.append(f"<acceptance_criteria>\n{rendered}\n</acceptance_criteria>")
 
     if request.memory:

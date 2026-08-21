@@ -40,8 +40,20 @@ members of a union assembled at import time, and the base is precisely the inter
 class exposes.
 
 ## Consequences
-The invalid combination is unrepresentable rather than refused, so the whole
-`invalid_action` family disappears instead of being retried.
+The combination that cost the runs — an action missing the value or the target its type
+requires — is unrepresentable rather than refused.
+
+**What this does not do, stated because the first draft of this ADR overclaimed it.** A
+union narrows shapes, not contents. `DecisionTarget` still permits `{}` and empty locator
+fields, so a `NEEDS_TARGET` action can satisfy the schema and be refused by the domain a
+moment later — `InvalidEntityError`, through recovery, one model call spent. The repo's own
+test asserts exactly that path, which is how the overclaim was caught in review.
+
+Closing it would mean requiring "at least one non-empty locator", which a JSON Schema can
+only say as a branch per field. Nine target-bearing actions make that a much larger
+grammar for a case the domain already refuses safely, and the measurement below is the
+reason not to spend it blind. Documented rather than inflated; revisit with a number if
+empty targets turn out to be common in practice.
 
 Measured cost, which the plan required before committing: 15 members, an 11,364-byte
 schema, **20.05 s on the first call** while xgrammar compiles the grammar, then **0.57 s

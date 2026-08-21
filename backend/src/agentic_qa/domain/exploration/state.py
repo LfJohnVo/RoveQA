@@ -190,6 +190,22 @@ class PageState:
     def signature(self) -> str:
         return state_signature(self.route, self.affordance_keys)
 
+    @property
+    def visible_text(self) -> str:
+        """What a deterministic text check would find on this page.
+
+        Deliberately *not* `describe()`. That string opens with `url:` and `title:`, and a
+        criterion whose literal appeared only in the address — "records" in
+        `/records` — would be recorded as satisfied by a page that never said it. The
+        deterministic check runs `assert_text` against `body.inner_text()`, which contains
+        neither the URL nor the document title, so this has to agree with that or the two
+        answers diverge and the optimistic one wins.
+
+        Control names are included because they are body text: a heading rendered inside a
+        button is exactly the kind of literal a criterion names.
+        """
+        return "\n".join([*self.content, *(a.name for a in self.affordances)])
+
     def describe(self) -> str:
         """The page as a planner can read it: where it is, what it says, what it offers.
 

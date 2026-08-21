@@ -165,20 +165,21 @@ def build_agent_graph(
     """
 
     def _sightings(
-        already: dict[str, str] | None, observation: str, url: str, step: int
+        already: dict[str, str] | None, visible: str, url: str, step: int
     ) -> dict[str, str]:
         """Which criteria this page satisfies, added to what earlier pages showed.
 
-        Matched against the rendered observation, which carries the page's text *and* its
-        control names -- so a literal that lives in a button label is found too. First
-        sighting wins: where a criterion became true is more useful than where it last
-        happened to still be true.
+        Matched against `PageState.visible_text` and never against the whole rendered
+        observation: that one opens with the url, so a criterion whose literal appears only
+        in the address would be credited to a page that never said it. First sighting wins
+        -- where a criterion became true is more useful than where it last happened to
+        still be true.
         """
         found = dict(already or {})
         for criterion_id, expected in (hints or {}).items():
             if criterion_id in found or not expected:
                 continue
-            if expected in observation:
+            if expected in visible:
                 found[criterion_id] = f"step {step} at {url}"
         return found
 
@@ -234,7 +235,7 @@ def build_agent_graph(
             "agent": agent,
             "safe_point": None,
             "criteria_seen": _sightings(
-                state.get("criteria_seen"), observation, page.url, agent.step_index
+                state.get("criteria_seen"), page.visible_text, page.url, agent.step_index
             ),
         }
 
@@ -336,6 +337,9 @@ def build_agent_graph(
 
         page = await browser.describe_page()
         agent.last_observation = page.url or "about:blank"
+        # An exploring episode observes too, and a criterion satisfied on a page the crawl
+        # passed through is as real as one satisfied on the page it stopped at.
+        seen = _sightings(state.get("criteria_seen"), page.visible_text, page.url, agent.step_index)
         discovered = frontier.record(page, depth=state.get("exploration_depth", 0))
         if discovered:
             logger.info(
@@ -357,6 +361,7 @@ def build_agent_graph(
             return {
                 "agent": agent,
                 "pending_action": None,
+                "criteria_seen": seen,
                 "exploration": frontier.snapshot(),
                 "exploration_report": frontier.report(reason),
                 "safe_point": None,
@@ -370,6 +375,7 @@ def build_agent_graph(
         return {
             "agent": agent,
             "pending_action": exploration_action(entry.affordance),
+            "criteria_seen": seen,
             "exploration": frontier.snapshot(),
             "exploration_depth": entry.depth,
             "safe_point": None,
@@ -481,13 +487,23 @@ def build_agent_graph(
             # classification was missing, which left every one of these `inconclusive`.
             agent.failure_reason = state.get("last_detail") or "action could not be recovered"
             agent.goal_reached = False
+            # A rejected proposal never reached the browser, so `last_action_type` still
+            # names whatever *did* -- LangGraph keeps an untouched key across updates, and
+            # classifying a planner failure from an earlier navigation would report
+            # `environment` for something the environment did fine.
             failed = state.get("last_action_type")
+            if state.get("last_rejected", False):
+                kind: FailureKind | None = FailureKind.MODEL
+            elif failed is not None:
+                kind = failure_kind_for_action(failed)
+            else:
+                kind = None
             return {
                 "agent": agent,
                 "recovery_attempts": attempts,
                 "safe_point": None,
                 "last_rejected": False,
-                "failure_kind": (failure_kind_for_action(failed) if failed is not None else None),
+                "failure_kind": kind,
             }
         logger.info("recovery attempt %s for run %s", attempts, agent.run_id)
         # Cleared here, not in `plan`: leaving it set would send the next pass straight

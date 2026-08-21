@@ -37,6 +37,12 @@ Las preguntas que tiene que cerrar, en orden de riesgo:
    acotar el alcance dentro de la aplicación, no sólo el origen.
 5. **Expiración e invalidación.** Una sesión caducada debe salir `blocked` con causa, nunca
    `failed`: no es un defecto del producto.
+6. **Revocación que sobrevive a un restore.** Los gates de esta fase exigen que un restore
+   desde backup no resucite una credencial revocada, y cifrado más validez temporal no lo
+   consiguen: si la revocación vive *junto* a la credencial restaurable, restaurar un
+   backup anterior devuelve el `storage_state` portador. Hace falta un mecanismo no
+   restaurable — tombstone, epoch o versión de clave fuera del respaldo — y el test tiene
+   que ser revocar, restaurar, y comprobar que sigue revocada.
 
 ## Tasks
 

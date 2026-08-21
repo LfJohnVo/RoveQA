@@ -92,6 +92,10 @@ def unquote_snapshot_value(value: str) -> str:
     return text
 
 
+_BULLET_OVERHEAD = 3
+"""What `PageState.describe()` adds around each kept value: a dash, a space and a
+newline. Counted so the parser's budget and the rendered size mean the same thing."""
+
 MAX_SNAPSHOT_LINES = 4000
 """Bound on how much of a snapshot is read.
 
@@ -191,12 +195,17 @@ def parse_text_content(snapshot: str, *, max_chars: int = MAX_CONTENT_CHARS) -> 
         # Empty paragraphs are layout, not content, and a real page is full of them.
         if not text or text in seen:
             continue
-        if spent + len(text) > max_chars:
+        # The rendered cost, not the raw length. `describe()` writes each kept value
+        # as a bullet on its own line, so a budget counting only the text
+        # under-reports by the three characters around it: fifteen hundred short
+        # values would pass a 6,000-character check and render past ten thousand.
+        rendered = len(text) + _BULLET_OVERHEAD
+        if spent + rendered > max_chars:
             kept.append("… [truncated]")
             break
         seen.add(text)
         kept.append(text)
-        spent += len(text)
+        spent += rendered
 
     return tuple(kept)
 

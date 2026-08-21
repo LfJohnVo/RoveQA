@@ -378,6 +378,9 @@ class BrowserSession:
     playwright: Playwright
     browser: Browser
     gateway: PlaywrightBrowserGateway
+    navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS
+    """Kept on the session, not only on the gateway, because a rebuilt context gets a new
+    gateway and has to be handed the same budget the run was configured with."""
 
     async def __aenter__(self) -> Self:
         return self
@@ -413,6 +416,7 @@ async def start_browser_session(
         gateway=PlaywrightBrowserGateway(
             context, page, navigation_timeout_ms=navigation_timeout_ms
         ),
+        navigation_timeout_ms=navigation_timeout_ms,
     )
 
 
@@ -426,5 +430,10 @@ async def rebuild_context(
     """
     context = await session.browser.new_context(storage_state=storage_state)
     page = await context.new_page()
-    session.gateway = PlaywrightBrowserGateway(context, page)
+    # Carried over rather than defaulted: a deployment that raised the navigation budget
+    # for a slow site would silently get 45s back the first time a context died, and the
+    # recovery would look like the site rather than like the reset.
+    session.gateway = PlaywrightBrowserGateway(
+        context, page, navigation_timeout_ms=session.navigation_timeout_ms
+    )
     return session.gateway

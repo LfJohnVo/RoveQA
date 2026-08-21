@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_qa.domain.browser.actions import (
+    NEEDS_TARGET,
     NEEDS_VALUE,
     BrowserActionType,
     IdempotencyStrategy,
@@ -206,8 +207,13 @@ class TestTheSchemaCarriesTheRule:
         assert covered == set(BrowserActionType)
 
     def test_a_valued_action_requires_its_value(self) -> None:
+        # `target` is added only where the action has one. Sending it regardless would let
+        # `extra="forbid"` raise for the wrong reason, and the test would pass while
+        # proving nothing about the missing value.
         for action_type in NEEDS_VALUE:
+            payload: dict[str, object] = {"action_type": action_type, "intent": "try it"}
+            if action_type in NEEDS_TARGET:
+                payload["target"] = {"role": "button", "name": "Save"}
+
             with pytest.raises(ValidationError, match="value"):
-                BrowserDecision.model_validate(
-                    {"action_type": action_type, "intent": "try it", "target": {"role": "button"}}
-                )
+                BrowserDecision.model_validate(payload)

@@ -141,7 +141,7 @@ puede pedir (`wait_for`) en vez de una condición implícita de toda navegación
 `aria_snapshot` entrecomilla los valores que lo necesitan, y `parse_affordances` se queda las
 comillas dentro de la URL:
 
-```
+```text
 /url: "#cookies-policy-customize"   ->   https://<host>/"#cookies-policy-customize"
 /url: "#"                           ->   https://<host>/"#"
 ```

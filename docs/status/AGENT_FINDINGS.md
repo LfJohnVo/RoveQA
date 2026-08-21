@@ -166,3 +166,64 @@ and every test under it is worthless.
 That file is the reason N1 and N2 cannot return silently. Every fixture before it was a
 local server that answered instantly and completely — the one environment in which both
 defects are invisible.
+
+## What the review caught
+
+CodeRabbit reviewed the pull request. Sixteen findings; what came out of them, because a
+review is only worth the record of what was done with it.
+
+**Fixed, and every one of them was ours:**
+
+| | |
+| --- | --- |
+| a sighting could come from the URL | `criteria_seen` matched `PageState.describe()`, which opens with `url:`. A criterion whose literal appeared only in the address — "records" in `/records` — would have been reported `met` by a page that never said it. Sightings now match `PageState.visible_text`: content and control names, no url and no title, so they agree with what `body.inner_text()` would find |
+| a rejected proposal was misclassified | a rejection never reaches the browser, so `last_action_type` still named whatever did. LangGraph keeps an untouched key, so a planner failure could be reported as `environment` for an earlier navigation. A rejection is now `model`, directly |
+| exploration lost its sightings | `observe` recorded them and `explore` did not, so a criterion satisfied on a page a crawl passed through was dropped |
+| recovery reset the navigation budget | `rebuild_context()` built a gateway without it, so a deployment that raised the timeout for a slow site silently got 45s back the first time a context died |
+| the text budget under-counted | it measured the raw string, not the `- …
+` each line renders as. Fifteen hundred short values passed a 6,000-character check and rendered past ten thousand |
+| criteria 21–100 were withheld silently | verification evaluates all of them; the prompt showed twenty and said nothing. It now says how many it is not showing, like `folded_episodes` already did |
+| a test passed for the wrong reason | the missing-value test sent `target` even to actions that have no such field, so `extra="forbid"` could raise instead of the missing value |
+| ADR 0012 overclaimed | it said an invalid action was unrepresentable. `DecisionTarget` still permits `{}`, so a `NEEDS_TARGET` action can satisfy the schema and be refused by the domain. Corrected in the ADR, with the reason for not inflating the grammar to close it |
+
+**Two gaps in the work, both real:**
+
+`validateAgainst` — the CLI module restored in this branch — had no test at all. It
+compiled, type-checked and built, and nothing called it, so a runtime failure in
+`plan lint` would have been invisible. Seven tests now exercise it.
+
+The planner-level injection test that slice 5's gate promised was not delivered. Putting
+page text into the observation widened the injection surface — before, a hostile page could
+plant a control name; now it can plant prose — and nothing exercised the whole
+`describe_page()` → prompt path with a hostile page in it.
+`tests/browser/test_injection_reaches_the_planner_as_data.py` does, and asserts the
+property rather than the model's judgement: the payload arrives as delimited data, cannot
+close its own block, and cannot widen what the run may do.
+
+**Rejected, with reasons:**
+
+*`expected_text=""` should render as a deterministic literal.* No: `_sightings` and
+`verify_criteria` both treat an empty hint as no hint (`if hint:`), so rendering it as a
+literal would have the prompt promise a check the verifier does not perform. The
+inconsistency would be the bug.
+
+*`ajv2020` has no `.default`, so the constructor call is wrong.* Checked by running it:
+`typeof default.default` is `function` and both forms construct. The repo's own
+`contract-examples.test.ts` has used `.default` since it was written. The finding is
+incorrect — but it pointed at a module with no tests, which is why the tests above exist.
+
+*The README should keep the pending Phase 15 limitation visible.* Stale: it described the
+first commit. The harness landed in the second and `HANDOFF.md` records the state.
+
+**Recorded, not fixed — and this one is security-relevant:**
+
+`GuardedBrowserGateway` validates the URL a run *asks* for, and `page.goto` follows
+redirects without interception. A navigation to an allowed origin that redirects to a
+disallowed one — a loopback or link-local address, say — is not re-checked. The allowlist
+is documented as the control against reaching internal services, so this is a real hole in
+it.
+
+It is not this branch's doing: no change here touched redirect handling. Closing it means
+adding request interception to the gateway, which is a design decision about where the
+fence lives and needs an ADR. It belongs at the top of Phase 16, which is already the phase
+that teaches the gateway about HTTP responses.
