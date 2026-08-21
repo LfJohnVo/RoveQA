@@ -350,7 +350,7 @@ class TestThePlannerIsToldWhatEachActionNeeds:
         # produced them, and this wording changes what the planner proposes.
         from agentic_qa.infrastructure.inference.prompts import PLANNING_PROMPT_VERSION
 
-        assert PLANNING_PROMPT_VERSION == "planner.v4"
+        assert PLANNING_PROMPT_VERSION == "planner.v5"
 
 
 class TestThePlannerIsShownThePage:
@@ -577,3 +577,13 @@ class TestThePlannerIsToldWhatCountsAsDone:
         )
 
         assert "<acceptance_criteria>" not in prompt
+
+
+def test_the_prompt_says_a_link_with_a_url_can_be_navigated() -> None:
+    """Measured: a read-only run died on `policy denied click` while the link it wanted
+    was listed with its url. `Affordance.url` is carried for exactly this reason — a link
+    can be followed by navigating, which is read-only, while clicking it is a write — and
+    the planner was never told."""
+    from agentic_qa.infrastructure.inference.prompts import SYSTEM_PROMPT
+
+    assert "can be reached with navigate" in SYSTEM_PROMPT

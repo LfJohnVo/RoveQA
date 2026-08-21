@@ -105,3 +105,64 @@ observation, which is why this was a diagnosis rather than a mystery — a silen
 would have looked like a page that simply lacked the content.
 
 Now 6,000: a long landing arrives whole, and a data grid is still refused.
+
+## The baseline
+
+`bash scripts/agent-baseline.sh` runs four story shapes against the bundled target app,
+served as a container so the *worker* can reach it. It emits one JSON value on stdout;
+diff it against the previous one.
+
+Measured after Phase 15, `Qwen3-4B-Instruct-2507-AWQ-4bit`, one pass:
+
+| shape | verdict | criteria met | cause |
+| --- | --- | --- | --- |
+| one-page | **`passed`** | 2 / 2 | — |
+| multi-page | `blocked` | 1 / 2 | `policy` |
+| after-a-form | `blocked` | 0 / 1 | `agent_budget` |
+| unreachable | `blocked` | 0 / 1 | `environment` |
+
+Two properties hold, and they are the ones worth stating:
+
+- **the minimum case works** — a text criterion on the first page, which was impossible;
+- **the unreachable story never came back `failed`.** That is the safety property the
+  whole design rests on, and the baseline asserts it explicitly
+  (`unreachable_never_failed`).
+
+Three of four shapes still stop short. Read the table as the honest state of the agent,
+not as a phase that failed: before this work, all four were `inconclusive` and no
+criterion was ever met.
+
+### A6 — the planner clicks a link it could navigate to
+
+The `multi-page` shape dies on `policy denied click` under a read-only policy. The guard
+is right: `click` is write-typed. What is wrong is the choice — the link was listed *with
+its url*, and `Affordance.url` exists for exactly this reason, as its own docstring says:
+"a link with a url can be followed by navigating, which is a read-only action, while a
+button can only be clicked".
+
+**A negative result, recorded because it is the useful part.** The prompt now says so
+outright — *"an element listed with a url can be reached with navigate… prefer the url
+when one is shown"* — and the 4B model's behaviour did not change. Two measured passes,
+identical outcome.
+
+That is the same lesson A1 taught: with this model a rule carried only in prose does not
+reliably change the action chosen, and the rule has to live where generation cannot
+escape it. The structural fix — making a click on a link-with-a-url unrepresentable, or
+having the adapter prefer navigation — changes what an action *means* and needs an ADR
+rather than a patch at the end of a phase. It is the next lever, and now it has a number
+behind it.
+
+## What guards this from coming back
+
+`backend/tests/browser/test_the_real_web.py`, against real Chromium, on a fixture page
+that carries the hazards a public page carries: an image pointing at a resource that never
+answers, anchor hrefs the snapshot quotes, a consent overlay, and a submit disabled until
+its form is filled.
+
+The first test in that file asserts the *hazard*, not the fix: waiting for `load` on that
+page must still time out. If it ever passes, the fixture stopped reproducing the real web
+and every test under it is worthless.
+
+That file is the reason N1 and N2 cannot return silently. Every fixture before it was a
+local server that answered instantly and completely — the one environment in which both
+defects are invisible.

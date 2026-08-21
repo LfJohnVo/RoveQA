@@ -36,16 +36,46 @@ detectó el pipeline nuevo en su primer uso real, que es exactamente para lo que
 **`scripts/validate-blueprint.sh` fijaba 15 fases.** Ahora comprueba contigüidad desde 00,
 que es la propiedad que importa y no cobra impuesto por fase.
 
-## Pendiente de la fase 15
+## Fase 15 cerrada
 
-- **Slice 0**, la línea base automatizada: `docs/status/AGENT_FINDINGS.md` tiene las
-  medidas reales, pero no hay `scripts/agent-baseline.sh` ni el *reference story set* en
-  `tests/target_app/`, ni el fixture que simula la web real (respuesta lenta, terceros que
-  no terminan, overlay). Sin ese fixture, los defectos N1 y N2 pueden volver.
-- **Slice 11**, cierre formal: falta re-medir contra una línea base que aún no existe.
+Slice 0 y slice 11 hechas. `bash scripts/agent-baseline.sh` mide cuatro formas de historia
+contra la app de fixtures servida como contenedor (perfil `baseline`), y emite un único
+valor JSON en stdout para diffear contra la corrida anterior. Sin endpoint de modelo dice
+`model: absent` y sale 3, en vez de imprimir ceros que parecen un resultado.
 
-Ambas son trabajo de test-harness, no de producto. La funcionalidad está y está probada;
-lo que falta es lo que evitaría que se rompa en silencio.
+Línea base tras la fase, una pasada:
+
+| forma | veredicto | criterios |
+| --- | --- | --- |
+| one-page | **`passed`** | 2/2 |
+| multi-page | `blocked` (`policy`) | 1/2 |
+| after-a-form | `blocked` (`agent_budget`) | 0/1 |
+| unreachable | `blocked` (`environment`) | 0/1 |
+
+Se sostienen las dos propiedades que importan: el caso mínimo funciona, y la historia
+inalcanzable **nunca** salió `failed` — la línea base lo afirma explícitamente
+(`unreachable_never_failed`). Antes de la fase las cuatro eran `inconclusive` y ningún
+criterio se cumplía nunca.
+
+**`backend/tests/browser/test_the_real_web.py`** es lo que impide que N1 y N2 vuelvan en
+silencio: 11 tests contra Chromium real sobre una página con los peligros que trae una
+página pública — imagen que nunca responde (`load` no dispara), hrefs de ancla que el
+snapshot entrecomilla, overlay de consentimiento, submit deshabilitado. El primer test
+afirma **el peligro**, no el arreglo: esperar `load` ahí tiene que seguir agotando el
+tiempo. Si algún día pasa, el fixture dejó de reproducir la web real y todo lo demás en
+ese archivo no vale nada.
+
+## Lo siguiente, con número detrás
+
+**A6 — el planner pulsa un enlace al que podría navegar.** La forma `multi-page` muere en
+`policy denied click` bajo policy read-only, con el enlace listado *con su url*. El guard
+tiene razón (`click` es de escritura por tipo); lo equivocado es la elección.
+
+Resultado negativo registrado: el prompt ya lo dice explícitamente y el 4B **no cambió de
+comportamiento** en dos pasadas medidas. Es la lección de A1 otra vez — con este modelo una
+regla que sólo vive en prosa no cambia la acción elegida de forma fiable. El arreglo
+estructural cambia lo que una acción *significa* y necesita ADR, no un parche al final de
+una fase.
 
 ## Siguiente
 

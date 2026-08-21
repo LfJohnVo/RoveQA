@@ -312,6 +312,37 @@ services:
       - cli_pnpm_store:/pnpm
     command: ["sh", "-c", "corepack enable pnpm && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test"]
 
+  # The bundled target application, served so the *worker* can reach it. The browser
+  # tests run it in-process, which is right for them and useless for a baseline: a run
+  # happens in a container, and `127.0.0.1` there is not this.
+  #
+  # Behind a profile because nothing in normal operation needs it, and it deliberately
+  # serves a page whose `load` event never fires — `/real-web`, the hazards a public page
+  # carries. A fixture that answers instantly and completely is the environment in which
+  # two shipped defects were invisible.
+  target-app:
+    build:
+      context: ./backend
+      target: dev
+    profiles: ["baseline"]
+    command:
+      - "uvicorn"
+      - "--factory"
+      - "tests.target_app.app:create_target_app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+    volumes:
+      - ./backend/tests:/app/tests
+    ports:
+      - "8090:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   # Heavy inference stays behind profiles so CPU-only development works.
   # The model tag is configuration, not a constant: it depends on the GPU on the host
   # actually running this, so it is set in .env rather than pinned here.
