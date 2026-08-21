@@ -350,7 +350,7 @@ class TestThePlannerIsToldWhatEachActionNeeds:
         # produced them, and this wording changes what the planner proposes.
         from agentic_qa.infrastructure.inference.prompts import PLANNING_PROMPT_VERSION
 
-        assert PLANNING_PROMPT_VERSION == "planner.v5"
+        assert PLANNING_PROMPT_VERSION == "planner.v6"
 
 
 class TestThePlannerIsShownThePage:
@@ -588,4 +588,4 @@ def test_the_prompt_says_a_link_with_a_url_can_be_navigated() -> None:
     the planner was never told."""
     from agentic_qa.infrastructure.inference.prompts import SYSTEM_PROMPT
 
-    assert "can be reached with navigate" in SYSTEM_PROMPT
+    assert "Use the action the element" in SYSTEM_PROMPT

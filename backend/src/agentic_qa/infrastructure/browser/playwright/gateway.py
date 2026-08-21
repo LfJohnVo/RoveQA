@@ -65,6 +65,13 @@ content was ready in three tenths of a second; the other 23 were images and thir
 tags. "Click this button" and "load this website" are not the same wait.
 """
 
+MAX_BODY_TEXT_CHARS = 20_000
+"""Rendered page text kept for matching criteria against.
+
+Larger than the observation budget on purpose: this is never shown to a model, only
+searched, so the cost is memory rather than tokens. A criterion whose literal sits
+past twenty thousand characters falls through to the deterministic check."""
+
 MAX_REPORTED_PROBLEMS = 25
 """Console errors and failed requests carried into a report.
 
@@ -293,6 +300,12 @@ class PlaywrightBrowserGateway:
             snapshot = await self._page.locator("body").aria_snapshot()
             title = await self._page.title()
             url = self._page.url
+            # The same string `assert_text` reads, so a sighting and the deterministic
+            # check cannot disagree about what the page says. Reconstructing it from the
+            # snapshot got that wrong twice.
+            body_text = await self._page.locator("body").inner_text(
+                timeout=DEFAULT_ACTION_TIMEOUT_MS
+            )
         except PlaywrightError as error:
             logger.info("could not describe the page: %s", error.message)
             return PageState(url=await self.current_url() or "")
@@ -306,6 +319,9 @@ class PlaywrightBrowserGateway:
             # From the same snapshot the affordances came out of. It was always here;
             # only the controls used to survive the trip to the planner.
             content=parse_text_content(snapshot),
+            # Bounded like everything else that crosses this boundary: a data grid's
+            # rendered text is as unbounded as its rows.
+            body_text=body_text[:MAX_BODY_TEXT_CHARS],
             http_status=self._last_http_status,
         )
 

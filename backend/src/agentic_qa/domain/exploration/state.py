@@ -39,6 +39,28 @@ the same page without one — but taking one needs a value, and inventing values
 would be generating side effects nobody asked for.
 """
 
+ACTION_FOR_ROLE: dict[str, str] = {
+    "textbox": "fill",
+    "searchbox": "fill",
+    "spinbutton": "fill",
+    "slider": "fill",
+    "combobox": "select",
+    "listbox": "select",
+    "checkbox": "check",
+    "switch": "check",
+    "radio": "check",
+    "menuitemcheckbox": "check",
+    "menuitemradio": "check",
+}
+"""Which action operates a control, by role, in the action set's own vocabulary.
+
+A textbox is not clicked, it is filled. Telling a planner otherwise is not a harmless
+simplification: it proposed `click` on a text field, a read-only policy denied it by type,
+and the episode ended having observed nothing. Roles absent from this map are operated by
+clicking — buttons, links, tabs, menu items — which is the honest default for a control
+whose only interaction is being pressed.
+"""
+
 MAX_NAME_CHARS = 80
 
 MAX_DESCRIBED_AFFORDANCES = 40
@@ -109,6 +131,39 @@ class Affordance:
     since nothing would fail. A control that greys out is the same control.
     """
 
+    filled: bool = False
+    """Whether the page showed something already in this control.
+
+    The snapshot has always said so — `textbox "Reference": BASELINE` — and dropping it
+    left an agent unable to tell a filled field from an empty one. Measured: it filled the
+    same field twenty-four times in a row, every call succeeding, until the budget ran out.
+    At temperature zero an unchanged observation gives an unchanged decision, forever.
+
+    The *fact*, never the value. A password field carries one, and an observation is
+    rendered into a prompt, stored in a state map and read by a person.
+
+    **Not part of `key`**, for the same reason `disabled` is not: a field with something in
+    it is the same field, and putting it in the signature would make every keystroke a new
+    state.
+    """
+
+    @property
+    def reached_by(self) -> str:
+        """The action that takes this affordance, named the way the action set names it.
+
+        The rule already existed, in `exploration_action`: a link whose destination the
+        page told us is followed by *navigating*, which is read-only, while a button can
+        only be clicked. The frontier has always known this — the planner never did, so it
+        proposed `click` on a link that was listed with its url and a read-only policy
+        denied it by type. Every read-only run died at its first link.
+
+        Kept here so both readers share one rule. Two copies of it would be two places for
+        them to disagree, and the disagreement would look like a model failure.
+        """
+        if self.url:
+            return "navigate"
+        return ACTION_FOR_ROLE.get(self.role.strip().lower(), "click")
+
     @property
     def is_clickable(self) -> bool:
         """Whether an explorer can take this with no information beyond the page.
@@ -147,6 +202,24 @@ class PageState:
     title: str = ""
     """Recorded for the report, never for the signature: a title carrying a cart count
     would make every cart change a new state."""
+
+    body_text: str = ""
+    """The page's rendered text, as `body.inner_text()` returns it.
+
+    Kept beside `content` rather than instead of it, because the two have different jobs.
+    `content` is the accessible tree's text nodes, structured and readable, and it is what
+    a planner is shown. This is the flat rendered string, and it exists so a *sighting*
+    can be matched against exactly what the deterministic check will read.
+
+    That identity is the whole point. Reconstructing "what the page says" from the snapshot
+    got it wrong twice: once by including the url, once by including accessible names that
+    come from `aria-label` and are nowhere in the rendered text. Both produced a criterion
+    reported `met` that `assert_text` would have failed. Asking the same source the check
+    asks removes the class of bug rather than another instance of it.
+
+    Never part of the signature: a state identified by its text is a new state every time a
+    footer date rolls over.
+    """
 
     http_status: int | None = None
     """What the server answered for the navigation that produced this page.
@@ -208,26 +281,15 @@ class PageState:
     def visible_text(self) -> str:
         """What a deterministic text check would find on this page.
 
-        Deliberately *not* `describe()`. That string opens with `url:` and `title:`, and a
-        criterion whose literal appeared only in the address — "records" in
-        `/records` — would be recorded as satisfied by a page that never said it. The
-        deterministic check runs `assert_text` against `body.inner_text()`, which contains
-        neither the URL nor the document title, so this has to agree with that or the two
-        answers diverge and the optimistic one wins.
+        `body_text` when the browser gave it, because that is literally the string
+        `assert_text` reads — the two answers cannot diverge if they come from one source.
 
-        Control names are **excluded**, and including them was wrong in the first version
-        of this. An accessible name can come from `aria-label`, and that value is nowhere
-        in `body.inner_text()` — an icon-only field labelled "Email" renders as an icon and
-        nothing else. Including names recreated the very false pass this property exists to
-        prevent. Measured on a real login form whose inputs do exactly that.
-
-        The cost is a literal rendered only inside a control — a button reading "Create
-        record" — producing no sighting. That is a lost optimisation, not a wrong answer:
-        the criterion falls through to the deterministic check, which is where it would
-        have been decided anyway. Losing precision is the safe direction; the other one
-        invents a pass.
+        The fallback is the accessible tree's text nodes, for a `PageState` built without a
+        live browser: narrower than the real thing, and narrow is the safe direction. It
+        excludes the url, the title and every accessible name, each of which produced a
+        false `met` when it was included.
         """
-        return chr(10).join(self.content)
+        return self.body_text or chr(10).join(self.content)
 
     def describe(self) -> str:
         """The page as a planner can read it: where it is, what it says, what it offers.
@@ -264,7 +326,18 @@ class PageState:
             # Said, not implied by absence. A planner that reads a disabled control as
             # available spends an action and a locator timeout finding out otherwise.
             + (" [disabled]" if affordance.disabled else "")
-            + (f" -> {affordance.url}" if affordance.url else "")
+            # Said, so an agent can tell a field it has already filled from one it has
+            # not. Without it the observation is identical before and after a `fill`.
+            + (" [already filled]" if affordance.filled else "")
+            # The action that takes it, not just its address. "link: Records -> url" reads
+            # as something to click, because that is what a link is everywhere else; the
+            # url beside it was information the planner had and did not use. Naming the
+            # action is the difference between showing a destination and offering a move.
+            + (
+                f" — navigate to {affordance.url}"
+                if affordance.reached_by == "navigate" and affordance.url
+                else f" — {affordance.reached_by}"
+            )
             for affordance in self.affordances[:MAX_DESCRIBED_AFFORDANCES]
         ]
         if offers:

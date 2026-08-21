@@ -125,13 +125,20 @@ cat > "$workdir/multi-page.json" <<'JSON'
     "verification_hint": "Create record"}]}
 JSON
 
-cat > "$workdir/after-a-form.json" <<'JSON'
+# Written per attempt, further down, because the reference has to be unique: the fixture
+# refuses a duplicate and answers "already exists", so a fixed reference passes on the
+# first run of the day and never again. A real QA run does not assume a clean database
+# either, so unique data is the honest shape rather than a workaround.
+write_after_a_form() {  # $1 = unique reference
+  cat > "$workdir/after-a-form.json" <<JSON
 {"actor": "an operator",
- "goal": "on the records page, create a record with reference BASELINE and name Probe",
+ "goal": "on the records page, create a record with reference $1 and name Probe",
  "acceptance_criteria": [
    {"criterion_id": "ac-created", "description": "the application confirms the record was created",
-    "verification_hint": "Created BASELINE"}]}
+    "verification_hint": "Created $1"}]}
 JSON
+}
+write_after_a_form "BASELINE-seed"
 
 cat > "$workdir/unreachable.json" <<'JSON'
 {"actor": "an analyst",
@@ -156,11 +163,19 @@ results="$workdir/results.jsonl"
 : > "$results"
 
 for shape in "${SHAPES[@]}"; do
-  sid="$(story "$workdir/$shape.json")"
-  pid="$(plan_for "$sid")"
+  # One story per shape, except the one whose data must not repeat.
+  if [ "$shape" != "after-a-form" ]; then
+    sid="$(story "$workdir/$shape.json")"
+    pid="$(plan_for "$sid")"
+  fi
   for attempt in $(seq 1 "$REPEATS"); do
     say "$shape, attempt $attempt"
     started="$(date +%s)"
+    if [ "$shape" = "after-a-form" ]; then
+      write_after_a_form "BASELINE-$started-$attempt"
+      sid="$(story "$workdir/$shape.json")"
+      pid="$(plan_for "$sid")"
+    fi
     run="$(curl -sS -X POST "$API/api/v1/runs" -H 'content-type: application/json' \
       -H "Idempotency-Key: baseline-$shape-$attempt-$started" \
       -d "{\"project_id\":\"$PROJECT\",\"plan_id\":\"$pid\",\"plan_version\":\"1\",

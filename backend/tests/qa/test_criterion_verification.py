@@ -5,11 +5,12 @@ behave the way the real adapters do, so what is being tested is the rule — not
 plumbing.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 import pytest
 
 from agentic_qa.application.ports.browser import ActionOutcome
+from agentic_qa.application.ports.episodes import ActionRecord
 from agentic_qa.application.ports.models import (
     CriterionJudgement,
     JudgementRequest,
@@ -429,3 +430,85 @@ class TestASightingCannotComeFromTheUrl:
         page = PageState(url="http://target.test/", content=("Order #1234 confirmed",))
 
         assert "Order #1234 confirmed" in page.visible_text
+
+
+class TestASightingReadsTheSameSourceAsTheCheck:
+    """Reconstructing "what the page says" from the snapshot got it wrong twice.
+
+    First by including the url, so a criterion for "records" matched `/records`. Then by
+    including accessible names, so a criterion for "Email" matched an `aria-label` that
+    renders as an icon. Both produced `met` for a literal `assert_text` would have failed.
+
+    `body_text` is the string `assert_text` reads. One source, so the two answers cannot
+    disagree — which removes the class of bug rather than a third instance of it.
+    """
+
+    def test_the_rendered_text_is_what_a_sighting_matches(self) -> None:
+        page = PageState(
+            url="http://target.test/records",
+            body_text="Records\nReference\nName\nCreate record",
+            content=("Records", "Reference", "Name"),
+        )
+
+        # In the rendered text but not in the accessible tree's text nodes: a button label.
+        assert "Create record" in page.visible_text
+
+    def test_the_url_is_still_not_page_text(self) -> None:
+        page = PageState(url="http://target.test/records", body_text="Nothing here yet.")
+
+        assert "records" not in page.visible_text
+
+    def test_an_aria_label_is_still_not_page_text(self) -> None:
+        # The icon-only field. Its accessible name is "Email"; the page renders an icon.
+        page = PageState(
+            url="http://target.test/login",
+            body_text="Sign in\nmail\nlock",
+            affordances=(Affordance(role="textbox", name="Email"),),
+        )
+
+        assert "Email" not in page.visible_text
+
+    def test_the_snapshot_text_is_the_fallback(self) -> None:
+        # For a PageState built without a live browser. Narrower than the real thing, and
+        # narrow is the safe direction.
+        page = PageState(url="http://target.test/", content=("Order #1234 confirmed",))
+
+        assert "Order #1234 confirmed" in page.visible_text
+
+
+class TestTheRunSaysWhatItDid:
+    """R5. Twenty-five actions used to leave three events in the durable log.
+
+    An operator with a stuck run had the verdict and a screenshot and nothing between
+    them — and it is why the multi-page blocker could not be diagnosed: no trace of which
+    click the policy denied.
+    """
+
+    def test_a_record_carries_what_a_diagnosis_needs(self) -> None:
+        record = ActionRecord(
+            index=3,
+            action="click",
+            intent="open the records page",
+            succeeded=False,
+            url="http://target.test/",
+            detail="click has side effects and this policy forbids them",
+        )
+
+        assert record.index == 3
+        assert "policy forbids" in record.detail
+
+    def test_a_record_has_nowhere_to_put_a_typed_value(self) -> None:
+        # A `fill` carries what was typed, and what was typed is the one thing in an
+        # action that can be a credential. The intent says what the step was for; the
+        # value is not needed to understand the run and cannot be published safely.
+        assert "value" not in {f.name for f in fields(ActionRecord)}
+
+    def test_the_trace_is_ordered_and_complete(self) -> None:
+        # `recent_steps` is a window the planner reads and is deliberately small. This is
+        # the whole run, because the step that went wrong is rarely one of the last twelve.
+        trace = tuple(
+            ActionRecord(index=i, action="navigate", intent=f"step {i}", succeeded=True)
+            for i in range(1, 26)
+        )
+
+        assert [r.index for r in trace] == list(range(1, 26))

@@ -111,6 +111,7 @@ class LangGraphEpisodeRunner:
                 # Read from the live browser, not from the agent's last observation:
                 # the recovery point has to name where the page actually ended up.
                 observed_url=await raw.current_url(),
+                actions=final.get("action_log", ()),
                 # Asked while the page still exists, for the same reason the screenshot
                 # is taken then: the browser is about to be closed and nothing survives
                 # it. Absent for a gateway that does not watch, which is a real case and

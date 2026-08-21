@@ -27,7 +27,7 @@ from agentic_qa.domain.browser.actions import (
     BrowserActionType,
 )
 
-PLANNING_PROMPT_VERSION = "planner.v5"
+PLANNING_PROMPT_VERSION = "planner.v6"
 JUDGEMENT_PROMPT_VERSION = "judge.v1"
 DEEP_ANALYSIS_PROMPT_VERSION = "deep-analysis.v1"
 """Bumped whenever the wording changes.
@@ -84,9 +84,10 @@ test (submitting, saving, deleting, purchasing, sending).
 - These actions cannot change anything and must not be marked side_effect: \
 {_READ_ONLY_ACTIONS}. Marking one of them anyway does not make a run safer; it \
 spends the run.
-- An element listed with a url after it can be reached with navigate, which changes \
-nothing. Clicking it is a write, and a read-only run will be refused. Prefer the \
-url when one is shown.
+- Each element says the action that takes it. An element marked "navigate to \
+<url>" is reached with navigate, which changes nothing; one marked "click" needs \
+click, which may change the world and needs permission. Use the action the element \
+names.
 - <acceptance_criteria> is what this run will be judged by. A criterion with an \
 expected text is checked literally, so assert_text with that exact text as the \
 value is how you confirm it. A criterion without one is judged separately — never \

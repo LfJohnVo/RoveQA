@@ -14,6 +14,12 @@ from typing import Any, Protocol
 # Event types are part of the public contract (docs/12).
 RUN_CREATED = "run.created"
 RUN_STATUS_CHANGED = "run.status.changed"
+RUN_ACTION_TAKEN = "run.action.taken"
+"""One browser action, appended after the episode that took it.
+
+Additive: the contract types `type` as a plain string, so a consumer that does not
+know this one ignores it. Not published while the episode runs -- the graph holds no
+unit of work, and giving it one would put a database write on the browser loop."""
 
 MAX_EVENT_PAGE_SIZE = 500
 DEFAULT_EVENT_PAGE_SIZE = 100

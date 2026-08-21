@@ -1,5 +1,11 @@
 # Session Handoff
 
+> **Continuing on another machine, or with no memory of this session?** Read
+> [`CONTINUE_HERE.md`](CONTINUE_HERE.md) first. It carries the four exit gates, the
+> next concrete step, how to bring the stack up on a new host, and the lessons that
+> cost real time. This file records what each phase closed; that one records where the
+> work stands.
+
 Última sesión: 2026-08-20 (Opus 5). **Phase 15 implementada; gates verdes.**
 
 `bash scripts/ci-local.sh` → `ci-local: all green` (backend 946+, CLI 149, frontend 51,
@@ -181,7 +187,10 @@ Falta: nada de la fase. Cerrada.
 # Phase Status
 
 - Phases 00 – 15: **DONE**.
-- Phase 16 (`plans/phase-16-any-site.md`): **IN_PROGRESS** — slice 1 hecha.
+- Phase 16 (`plans/phase-16-any-site.md`): **IN_PROGRESS** — slices 1 y 5 hechas.
+  Runs con historia funcionan: 9 de 9 alcanzables pasan con `BASELINE_REPEATS=3`.
+  Pendiente: recorridos sin historia (R1), fallos observados en el reporte, y el
+  smoke contra sitios públicos reales.
 - Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar.
 
 # Last Stable State

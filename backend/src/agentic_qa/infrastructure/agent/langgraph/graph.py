@@ -28,6 +28,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import BrowserGateway, UnperformableActionError
+from agentic_qa.application.ports.episodes import ActionRecord
 from agentic_qa.application.ports.models import ModelGateway, PlanCriterion, PlanningRequest
 from agentic_qa.application.services.criterion_verification import (
     verify_criteria as verify_plan_criteria,
@@ -44,6 +45,7 @@ from agentic_qa.domain.browser.actions import (
     BrowserActionType,
 )
 from agentic_qa.domain.browser.evidence import EvidenceRef
+from agentic_qa.domain.browser.policy_guard import evaluate_action
 from agentic_qa.domain.exploration.actions import exploration_action, is_takeable
 from agentic_qa.domain.exploration.frontier import (
     ExplorationBudget,
@@ -53,6 +55,7 @@ from agentic_qa.domain.exploration.frontier import (
     StopReason,
     stop_reason,
 )
+from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.domain.knowledge.memory_context import MemoryItem
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep
@@ -80,6 +83,22 @@ class GraphState(TypedDict, total=False):
     """The planner proposed an action the domain refused. Distinguished from a policy
     denial because it *should* be retried: the planner can correct a missing target
     once it is told, while a policy refusal will refuse the same action again."""
+
+    last_page: PageState | None
+    """The page the last observation described.
+
+    Kept so a refusal can name the alternative the page offers. The domain guard cannot
+    do this -- it decides on the action alone, which is what makes it testable without a
+    browser -- and the graph is the layer that has both.
+    """
+
+    action_log: tuple[ActionRecord, ...]
+    """What the agent did, in order, for the durable log.
+
+    Separate from `agent.recent_steps`, which is a *window* the planner reads and is
+    deliberately small. This one is the whole run: an operator diagnosing a stuck run needs
+    the step that went wrong, not the last twelve.
+    """
 
     criteria_seen: dict[str, str]
     """Criteria whose literal has already been seen on a page this run visited, and
@@ -183,6 +202,52 @@ def build_agent_graph(
                 found[criterion_id] = f"step {step} at {url}"
         return found
 
+    def _allowed_alternative(state: GraphState, action: BrowserAction) -> BrowserAction | None:
+        """The action this policy *does* allow for the element the refused one named.
+
+        Verified with the same guard that refused the original, never assumed: telling a
+        planner an alternative is permitted and being wrong would be worse than saying
+        nothing. Only the element the model itself named is considered — nothing is
+        inferred about what it was really trying to do.
+        """
+        named = (action.target.name or action.target.text or "").strip().lower()
+        page = state.get("last_page")
+        if not named or page is None or policy is None:
+            return None
+        for affordance in page.affordances:
+            if affordance.name.strip().lower() != named:
+                continue
+            candidate = exploration_action(affordance)
+            if candidate.type is action.type:
+                return None
+            if evaluate_action(candidate, policy).allowed:
+                return candidate
+        return None
+
+    def _logged(
+        state: GraphState,
+        action: BrowserAction,
+        succeeded: bool,
+        *,
+        detail: str = "",
+        url: str | None = None,
+        http_status: int | None = None,
+    ) -> tuple[ActionRecord, ...]:
+        """Append one record. Appending rather than replacing is what makes it a trace."""
+        so_far = state.get("action_log", ())
+        return (
+            *so_far,
+            ActionRecord(
+                index=len(so_far) + 1,
+                action=action.type.value,
+                intent=action.intent,
+                succeeded=succeeded,
+                url=url,
+                http_status=http_status,
+                detail=detail,
+            ),
+        )
+
     exploring = exploration_budget is not None
     started = now()
     # The plan's criteria, in the shape the planner reads. Built once here because this
@@ -234,6 +299,7 @@ def build_agent_graph(
         return {
             "agent": agent,
             "safe_point": None,
+            "last_page": page,
             "criteria_seen": _sightings(
                 state.get("criteria_seen"), page.visible_text, page.url, agent.step_index
             ),
@@ -397,6 +463,29 @@ def build_agent_graph(
         try:
             outcome = await browser.execute(action)
         except ActionDeniedError as denied:
+            # A refusal that does not carry the correction is a refusal the planner
+            # cannot act on. The trace showed exactly this: intent
+            # "navigate_to_records_page", action `click`, denied with "click has side
+            # effects" -- the planner already knew where it wanted to go and was told
+            # only that it could not go that way.
+            #
+            # The alternative is on the page, and the graph is holding the page. Naming
+            # it changes the feedback, never the action: `recover` puts this sentence in
+            # the next prompt, and the planner decides again.
+            # A refusal that does not carry the correction is a refusal the planner
+            # cannot act on. The trace showed exactly this: intent
+            # "navigate_to_records_page", action `click`, denied with "click has side
+            # effects" -- it already knew where it wanted to go and was told only that it
+            # could not go that way.
+            alternative = _allowed_alternative(state, action)
+            detail = denied.decision.detail
+            if alternative is not None:
+                detail = (
+                    f"{detail}. {action.target.name or action.target.text} is reachable "
+                    f"with {alternative.type.value}"
+                    + (f" to {alternative.target.url}" if alternative.target.url else "")
+                    + ", which this policy allows"
+                )
             # A policy refusal is a fact about the run, not a malfunction. Letting it
             # escape would surface as an activity crash and let Temporal retry the
             # episode, re-proposing an action the policy will refuse again (ADR 0009).
@@ -404,9 +493,16 @@ def build_agent_graph(
             return {
                 "actions_taken": taken,
                 "last_outcome_succeeded": False,
-                "last_detail": denied.decision.detail,
+                "last_detail": detail,
                 "last_action_type": action.type,
-                "last_denied": True,
+                # Terminal *unless* the policy itself permits another way to the element
+                # the planner named. Ending on any refusal is what stops an agent hunting
+                # for a way around a policy, and that stance is right — but taking the
+                # path the policy allows is not hunting for a way around it, it is the
+                # policy's own answer. Bounded by MAX_RECOVERY_ATTEMPTS either way, so
+                # this cannot become probing by another name.
+                "last_denied": alternative is None,
+                "action_log": _logged(state, action, False, detail=detail),
             }
         except UnperformableActionError as unusable:
             # Same reasoning, different cause: the planner asked for something the page
@@ -421,6 +517,7 @@ def build_agent_graph(
                 "last_detail": str(unusable),
                 "last_action_type": action.type,
                 "last_denied": False,
+                "action_log": _logged(state, action, False, detail=str(unusable)),
             }
         return {
             "actions_taken": taken,
@@ -428,6 +525,14 @@ def build_agent_graph(
             "last_detail": outcome.detail,
             "last_action_type": action.type,
             "last_denied": False,
+            "action_log": _logged(
+                state,
+                action,
+                outcome.succeeded,
+                detail=outcome.detail,
+                url=outcome.current_url,
+                http_status=outcome.http_status,
+            ),
         }
 
     async def verify(state: GraphState) -> GraphState:

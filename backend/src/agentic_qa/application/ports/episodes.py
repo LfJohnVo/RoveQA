@@ -49,6 +49,28 @@ class EpisodeRequest:
 
 
 @dataclass(frozen=True)
+class ActionRecord:
+    """One thing the agent asked the browser to do, and what came back.
+
+    Enough to reconstruct a run and no more. `detail` carries the browser's own first line
+    on failure -- a locator timeout, a policy refusal -- because that sentence is usually
+    the whole diagnosis.
+
+    No value field, deliberately. A `fill` carries what was typed, and what was typed is
+    the one thing in an action that can be a credential. The intent says what the step was
+    for; the value is not needed to understand the run and cannot be published safely.
+    """
+
+    index: int
+    action: str
+    intent: str
+    succeeded: bool
+    url: str | None = None
+    http_status: int | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class EpisodeResult:
     more_work: bool
     """Whether another episode should follow."""
@@ -67,6 +89,13 @@ class EpisodeResult:
 
     evidence: tuple[EvidenceRef, ...] = ()
     """Artifacts captured while the browser was still open. The caller indexes them."""
+
+    actions: tuple[ActionRecord, ...] = ()
+    """Every action the episode sent to the browser, in order.
+
+    Bounded by construction: the RunPolicy caps how many actions a run may take, so this
+    cannot grow past that cap however long the run lasts.
+    """
 
     page_problems: PageProblems = field(default_factory=PageProblems)
     """Console errors and failed requests seen during the episode.

@@ -29,6 +29,7 @@ from agentic_qa.application.commands.transition_run import (
 )
 from agentic_qa.application.errors import NotFoundError
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
+from agentic_qa.application.ports.events import RUN_ACTION_TAKEN, NewRunEvent
 from agentic_qa.application.queries.memory_context import (
     MemoryContextRequest,
     retrieve_memory_context,
@@ -36,9 +37,11 @@ from agentic_qa.application.queries.memory_context import (
 from agentic_qa.application.services.experience_consolidation import DEFAULT_ENVIRONMENT
 from agentic_qa.application.services.policy_resolution import resolve_run_policy
 from agentic_qa.bootstrap.container import Container
+from agentic_qa.domain.browser.urls import safe_url
 from agentic_qa.domain.exploration.frontier import ExplorationBudget
 from agentic_qa.domain.knowledge.compatibility import MemoryScope
 from agentic_qa.domain.knowledge.memory_context import MemoryContext, MemoryItem
+from agentic_qa.domain.knowledge.redaction import redact_secrets
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.verification import derive_verdict
@@ -182,8 +185,50 @@ class RunActivities:
         if result.safe_point and result.graph_checkpoint_id:
             await self._record_recovery_point(params, result)
 
+        await self._record_actions(params.run_id, result)
         verdict = await self._record_results(params, plan, result)
         return EpisodeOutcome(more_work=result.more_work, verdict=verdict)
+
+    async def _record_actions(self, run_id: str, result: EpisodeResult) -> None:
+        """Append one event per action the episode took.
+
+        Twenty-five actions used to leave three events -- `run.created` and two status
+        changes -- so an operator with a stuck run had the verdict and a screenshot and
+        nothing between them (R5).
+
+        Swallowed on failure, like the screenshot and unlike the state map: a run whose
+        trace could not be written still produced a verdict, and refusing to report the
+        verdict because the trace failed would trade the answer for the audit of it.
+
+        The URL is sanitised and no typed value is carried at all -- see `ActionRecord`.
+        """
+        if not result.actions:
+            return
+        try:
+            async with self._container.unit_of_work() as uow:
+                for record in result.actions:
+                    await uow.events.append(
+                        NewRunEvent(
+                            run_id=run_id,
+                            type=RUN_ACTION_TAKEN,
+                            payload={
+                                "index": record.index,
+                                "action": record.action,
+                                "intent": record.intent,
+                                "succeeded": record.succeeded,
+                                # Query strings are where tokens ride, and this one comes
+                                # from a page we do not control.
+                                "url": safe_url(record.url or "") or None,
+                                "http_status": record.http_status,
+                                "detail": redact_secrets(record.detail),
+                            },
+                        )
+                    )
+                await uow.commit()
+        except Exception:
+            logger.exception("could not record the action trace for run %s", run_id)
+            return
+        logger.info("recorded %d action(s) for run %s", len(result.actions), run_id)
 
     async def _record_state_map(self, run_id: str, project_id: str, result: EpisodeResult) -> None:
         """Store what an exploration mapped, or nothing for a planned episode.

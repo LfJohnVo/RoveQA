@@ -7,10 +7,17 @@ que alguien puede revisar.
 Nada sale de tu máquina: el modelo corre en tu GPU, la evidencia en tu disco, la base de
 datos en tu red. No hay cuenta que crear ni API key de nadie.
 
-**Estado: `v1.0.0-rc`.** Las 15 fases del plan están cerradas con sus gates verdes.
+**Estado: `v1.0.0-rc`.** Las fases 00–15 están cerradas con sus gates verdes; la 16
+está en curso. Runs con historia funcionan y están medidos —9 de 9 con tres repeticiones—
+y los recorridos sin historia todavía no: `docs/status/CONTINUE_HERE.md` lo detalla.
 [Qué promete y qué no](CHANGELOG.md).
 
 ---
+
+> **Picking this up mid-flight?** `docs/status/CONTINUE_HERE.md` is written for a
+> session with no memory of the last one: what the agent can and cannot do today,
+> measured; what to do next; and how to bring the stack up on a machine that has not
+> run it before.
 
 ## En cinco minutos
 
@@ -104,7 +111,7 @@ frontend/   React 19 · Vite · MVVM
 cli/        TypeScript · sin dependencias del runtime
 contracts/  Los tres schemas públicos, con ejemplo canónico cada uno
 docs/       Especificación, arquitectura, ADRs y estado
-plans/      Las 15 fases, todas cerradas
+plans/      Las fases 00-15 cerradas; 16 en curso, 17 escrita
 ```
 
 Las invariantes que no se negocian están en [CLAUDE.md](CLAUDE.md), y hay tests que las

@@ -229,3 +229,117 @@ class TestPageText:
 
     def test_an_empty_snapshot_says_nothing(self) -> None:
         assert parse_text_content("") == ()
+
+
+class TestTheActionThatTakesIt:
+    """A control says how it is operated, in the action set's own words.
+
+    "link: Records -> url" read as something to click, because that is what a link is
+    everywhere else, and the url beside it was information the planner had and did not
+    use. Worse, a textbox was labelled `click`: it proposed clicking a text field, a
+    read-only policy denied it by type, and the episode ended having observed nothing.
+    """
+
+    def test_a_link_with_a_destination_is_navigated(self) -> None:
+        found = parse_affordances(
+            '- link "Records":\n  - /url: /records', base_url="https://app.test/"
+        )
+
+        assert found[0].reached_by == "navigate"
+
+    def test_a_link_without_one_can_only_be_clicked(self) -> None:
+        found = parse_affordances('- link "Open menu"')
+
+        assert found[0].reached_by == "click"
+
+    def test_a_textbox_is_filled(self) -> None:
+        found = parse_affordances('- textbox "Reference"')
+
+        assert found[0].reached_by == "fill"
+
+    def test_a_checkbox_is_checked(self) -> None:
+        found = parse_affordances('- checkbox "Remember me"')
+
+        assert found[0].reached_by == "check"
+
+    def test_a_combobox_is_selected(self) -> None:
+        found = parse_affordances('- combobox "Country"')
+
+        assert found[0].reached_by == "select"
+
+    def test_a_button_is_clicked(self) -> None:
+        found = parse_affordances('- button "Create record"')
+
+        assert found[0].reached_by == "click"
+
+    def test_the_description_names_the_action(self) -> None:
+        from agentic_qa.domain.exploration.state import PageState
+
+        page = PageState(
+            url="https://app.test/records",
+            affordances=parse_affordances(
+                '- textbox "Reference"\n- button "Create record"\n- link "Home":\n  - /url: /',
+                base_url="https://app.test/records",
+            ),
+        )
+
+        described = page.describe()
+
+        assert "textbox: Reference — fill" in described
+        assert "button: Create record — click" in described
+        assert "link: Home — navigate to https://app.test/" in described
+
+
+class TestAControlThatAlreadyHasSomethingInIt:
+    """Measured: the agent filled one field twenty-four times in a row.
+
+    Every call succeeded. The observation is identical before and after a `fill`, and at
+    temperature zero an unchanged observation gives an unchanged decision — forever, until
+    the budget runs out. The snapshot had always said the field had a value.
+    """
+
+    def test_a_filled_control_says_so(self) -> None:
+        found = parse_affordances('- textbox "Reference": BASELINE')
+
+        assert found[0].filled is True
+
+    def test_an_empty_one_does_not(self) -> None:
+        found = parse_affordances('- textbox "Reference"')
+
+        assert found[0].filled is False
+
+    def test_the_value_itself_is_not_kept(self) -> None:
+        # A password field carries one, and an observation is rendered into a prompt,
+        # stored in a state map and read by a person. The fact is enough to break the loop.
+        found = parse_affordances('- textbox "Password": hunter2')
+
+        assert found[0].filled is True
+        assert "hunter2" not in repr(found[0])
+
+    def test_the_value_never_reaches_the_description(self) -> None:
+        from agentic_qa.domain.exploration.state import PageState
+
+        page = PageState(
+            url="https://app.test/login",
+            affordances=parse_affordances('- textbox "Password": hunter2'),
+        )
+
+        described = page.describe()
+
+        assert "[already filled]" in described
+        assert "hunter2" not in described
+
+    def test_attaching_a_url_does_not_forget_it(self) -> None:
+        found = parse_affordances(
+            '- combobox "Country": Spain:\n  - /url: /country', base_url="https://app.test/"
+        )
+
+        assert found[0].filled is True
+
+    def test_the_state_stays_out_of_the_key(self) -> None:
+        # A field with something in it is the same field. In the signature, every keystroke
+        # would be a new state.
+        empty = parse_affordances('- textbox "Reference"')[0]
+        full = parse_affordances('- textbox "Reference": BASELINE')[0]
+
+        assert empty.key == full.key
