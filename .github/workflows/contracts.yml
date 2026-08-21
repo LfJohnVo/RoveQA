@@ -23,6 +23,9 @@ jobs:
           # Both sides of the comparison, so the diff is against the merge base rather
           # than against whatever the shallow clone happened to fetch.
           fetch-depth: 0
+          # The job token is written into .git/config by default. This job reads history
+          # and pushes nothing.
+          persist-credentials: false
 
       - name: Every example still validates against its schema
         run: docker compose --profile gates run --rm backend-tests pytest tests/contracts -q

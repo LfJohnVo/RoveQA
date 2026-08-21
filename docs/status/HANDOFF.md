@@ -180,8 +180,9 @@ Falta: nada de la fase. Cerrada.
 
 # Phase Status
 
-- Phases 00 – 14: **DONE**.
-- Siguiente: no hay Phase 15 en `plans/`. El repositorio está en v1.0.0-rc.
+- Phases 00 – 15: **DONE**.
+- Phase 16 (`plans/phase-16-any-site.md`): **IN_PROGRESS** — slice 1 hecha.
+- Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar.
 
 # Last Stable State
 

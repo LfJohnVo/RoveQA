@@ -16,12 +16,14 @@ from collections.abc import AsyncIterator
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
+from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.infrastructure.browser.playwright.gateway import (
     DEFAULT_ACTION_TIMEOUT_MS,
+    MAX_REPORTED_PROBLEMS,
     BrowserSession,
     start_browser_session,
 )
-from tests.target_app.app import TargetState
+from tests.target_app.app import LEAKED_TOKEN, TargetState
 from tests.target_app.server import running_target_app
 
 
@@ -218,3 +220,141 @@ class TestTheObservationCarriesTheContent:
         assert any("We use cookies" in line for line in page.content)
         assert any("Pricing that scales" in line for line in page.content)
         assert any(a.name == "Only essentials" for a in page.affordances)
+
+
+class TestWhatWentWrongIsReported:
+    """`ObservedFailures` was collected in the adapter and had no consumer outside it.
+
+    A script that throws and an image that 404s are first-class QA signal on any site,
+    and both were already being measured (ADR 0015).
+    """
+
+    async def test_a_console_error_is_reported(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/console-error", wait_until="domcontentloaded")
+        await session.gateway.page.wait_for_load_state("networkidle")
+
+        problems = await session.gateway.page_problems()
+
+        assert any("deliberate console failure" in message for message in problems.console_errors)
+
+    async def test_a_failed_request_is_reported(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # The first version of this asserted `isinstance(..., tuple)`, which cannot fail.
+        # A request to a port nothing is listening on fails immediately and deterministically,
+        # which is what `/hang` -- designed never to answer -- could not provide.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+        await session.gateway.page.evaluate(
+            "fetch('http://127.0.0.1:1/nothing-here').catch(() => {})"
+        )
+        await session.gateway.page.wait_for_timeout(500)
+
+        problems = await session.gateway.page_problems()
+
+        assert any("127.0.0.1" in url for url in problems.failed_requests)
+
+    async def test_a_healthy_page_reports_nothing(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+
+        problems = await session.gateway.page_problems()
+
+        assert not problems
+
+    async def test_a_token_in_a_failed_url_does_not_survive(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # The security-relevant half. A failed request carries its URL, and a URL carries
+        # tokens in its query string — the same reason `PageState` sanitises the one it
+        # stores.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+        await session.gateway.page.evaluate(
+            "fetch('/missing-endpoint?session_token=" + LEAKED_TOKEN + "').catch(() => {})"
+        )
+        await session.gateway.page.wait_for_timeout(500)
+
+        problems = await session.gateway.page_problems()
+
+        for url in problems.failed_requests:
+            assert LEAKED_TOKEN not in url
+        for message in problems.console_errors:
+            assert LEAKED_TOKEN not in message
+
+    async def test_the_report_is_bounded(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # A page in a redirect loop or a broken carousel produces thousands of identical
+        # entries, and a report nobody can read is a report nobody reads.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+        await session.gateway.page.evaluate(
+            "for (let i = 0; i < 60; i++) { console.error('noise ' + i); }"
+        )
+        await session.gateway.page.wait_for_timeout(300)
+
+        problems = await session.gateway.page_problems()
+
+        assert len(problems.console_errors) <= MAX_REPORTED_PROBLEMS
+
+
+class TestAnErrorPageSaysSo:
+    """The fixture's `/broken` answers 500 with a page that renders fine.
+
+    Nothing in its prose says it is an error, which is the point: an application is under
+    no obligation to explain itself, and a run that cannot see the status reports whatever
+    the error page rendered as the application (ADR 0015).
+    """
+
+    async def test_the_status_reaches_the_observation(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/broken", wait_until="domcontentloaded")
+
+        page = await session.gateway.describe_page()
+
+        assert page.http_status == 500
+
+    async def test_the_planner_is_told_in_words(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/broken", wait_until="domcontentloaded")
+
+        described = (await session.gateway.describe_page()).describe()
+
+        assert "http status: 500" in described
+        assert "error page" in described
+
+    async def test_a_healthy_page_is_not_annotated(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # A line on every observation is a line the planner learns to skip, and then it
+        # skips the one that mattered.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+
+        described = (await session.gateway.describe_page()).describe()
+
+        assert "http status" not in described
+
+    async def test_the_status_stays_out_of_the_signature(
+        self, target: tuple[str, TargetState], session: BrowserSession
+    ) -> None:
+        # The same place answering 500 today and 200 tomorrow is the same place. In the
+        # key it would give every stored baseline a new meaning the first time a deploy
+        # went wrong.
+        base, _ = target
+        await session.gateway.page.goto(f"{base}/broken", wait_until="domcontentloaded")
+        broken = await session.gateway.describe_page()
+
+        assert (
+            broken.signature == PageState(url=broken.url, affordances=broken.affordances).signature
+        )

@@ -148,6 +148,20 @@ class PageState:
     """Recorded for the report, never for the signature: a title carrying a cart count
     would make every cart change a new state."""
 
+    http_status: int | None = None
+    """What the server answered for the navigation that produced this page.
+
+    So the observation can say "this is an error page" rather than leaving the planner to
+    infer it from prose an error page is under no obligation to provide. A run that could
+    not see this observed a 404 and reported whatever it rendered as the application
+    (ADR 0015).
+
+    **Deliberately not part of the signature**, for the same reason `disabled` is not: a
+    signature identifies a place, and the same place answering 500 today and 200 tomorrow
+    is the same place. Putting it in the key would give every stored baseline a new meaning
+    the first time a deploy went wrong.
+    """
+
     content: tuple[str, ...] = field(default=())
     """What the page says, for the planner to read.
 
@@ -201,10 +215,19 @@ class PageState:
         neither the URL nor the document title, so this has to agree with that or the two
         answers diverge and the optimistic one wins.
 
-        Control names are included because they are body text: a heading rendered inside a
-        button is exactly the kind of literal a criterion names.
+        Control names are **excluded**, and including them was wrong in the first version
+        of this. An accessible name can come from `aria-label`, and that value is nowhere
+        in `body.inner_text()` — an icon-only field labelled "Email" renders as an icon and
+        nothing else. Including names recreated the very false pass this property exists to
+        prevent. Measured on a real login form whose inputs do exactly that.
+
+        The cost is a literal rendered only inside a control — a button reading "Create
+        record" — producing no sighting. That is a lost optimisation, not a wrong answer:
+        the criterion falls through to the deterministic check, which is where it would
+        have been decided anyway. Losing precision is the safe direction; the other one
+        invents a pass.
         """
-        return "\n".join([*self.content, *(a.name for a in self.affordances)])
+        return chr(10).join(self.content)
 
     def describe(self) -> str:
         """The page as a planner can read it: where it is, what it says, what it offers.
@@ -225,6 +248,11 @@ class PageState:
         header = f"url: {self.url or 'about:blank'}"
         if self.title:
             header += f"\ntitle: {self.title}"
+        # Only when it is news. A 200 tells a planner nothing it needs, and a line on
+        # every observation is a line it learns to skip -- which is how the one that
+        # mattered gets skipped too.
+        if self.http_status is not None and self.http_status >= 400:
+            header += f"\nhttp status: {self.http_status} (an error page)"
 
         sections = [header]
 

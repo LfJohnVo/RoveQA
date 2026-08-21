@@ -17,7 +17,11 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
-from agentic_qa.application.ports.browser import BrowserGateway
+from agentic_qa.application.ports.browser import (
+    BrowserGateway,
+    PageProblems,
+    ReportsPageProblems,
+)
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
 from agentic_qa.application.ports.models import ModelGateway
 from agentic_qa.application.services.guarded_browser import GuardedBrowserGateway
@@ -107,6 +111,15 @@ class LangGraphEpisodeRunner:
                 # Read from the live browser, not from the agent's last observation:
                 # the recovery point has to name where the page actually ended up.
                 observed_url=await raw.current_url(),
+                # Asked while the page still exists, for the same reason the screenshot
+                # is taken then: the browser is about to be closed and nothing survives
+                # it. Absent for a gateway that does not watch, which is a real case and
+                # not a degraded one.
+                page_problems=(
+                    await raw.page_problems()
+                    if isinstance(raw, ReportsPageProblems)
+                    else PageProblems()
+                ),
                 state_map=_state_map(final.get("exploration"), report),
                 exploration_report=report,
             )

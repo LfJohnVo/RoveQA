@@ -401,15 +401,29 @@ class TestASightingCannotComeFromTheUrl:
         assert "records" not in page.visible_text
         assert "Records" not in page.visible_text
 
-    def test_a_control_name_is_page_text(self) -> None:
-        # A heading rendered inside a button is exactly the kind of literal a criterion
-        # names, and `inner_text()` would find it.
+    def test_an_accessible_name_is_not_page_text(self) -> None:
+        # Raised in review, and it was the same false pass again. An icon-only control
+        # takes its accessible name from `aria-label`, and that value is nowhere in
+        # `body.inner_text()` — so crediting a sighting from it would report `met` for a
+        # literal the deterministic check cannot find. Measured on a real login form whose
+        # inputs render as icons.
+        page = PageState(
+            url="http://target.test/login",
+            affordances=(Affordance(role="textbox", name="Email"),),
+        )
+
+        assert "Email" not in page.visible_text
+
+    def test_losing_a_rendered_button_label_is_the_price(self) -> None:
+        # Stated rather than hidden: a literal rendered only inside a control produces no
+        # sighting. The criterion falls through to the deterministic check, which is where
+        # it would have been decided anyway — a lost optimisation, not a wrong answer.
         page = PageState(
             url="http://target.test/records",
             affordances=(Affordance(role="button", name="Create record"),),
         )
 
-        assert "Create record" in page.visible_text
+        assert "Create record" not in page.visible_text
 
     def test_the_content_is_page_text(self) -> None:
         page = PageState(url="http://target.test/", content=("Order #1234 confirmed",))

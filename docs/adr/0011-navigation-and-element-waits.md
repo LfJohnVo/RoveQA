@@ -34,5 +34,5 @@ A page whose DOM is ready but whose images are not is now observed, which is the
 reading for an agent that reads the accessible tree. A test that relied on navigation
 implying a fully settled network must ask for that explicitly.
 
-Phase 16 classifies a navigation timeout as `environment`; before this it fell out as
+Phase 15 slice 10 classifies a navigation timeout as `environment`; before that it fell out as
 `inconclusive` with no kind at all.

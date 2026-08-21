@@ -24,6 +24,7 @@ from playwright.async_api import (
     Page,
     Playwright,
     Request,
+    Response,
     StorageState,
     async_playwright,
 )
@@ -31,9 +32,15 @@ from playwright.async_api import (
     Error as PlaywrightError,
 )
 
-from agentic_qa.application.ports.browser import ActionOutcome, UnperformableActionError
+from agentic_qa.application.ports.browser import (
+    ActionOutcome,
+    PageProblems,
+    UnperformableActionError,
+)
 from agentic_qa.domain.browser.actions import ActionTarget, BrowserAction, BrowserActionType
+from agentic_qa.domain.browser.urls import safe_url
 from agentic_qa.domain.exploration.state import PageState
+from agentic_qa.domain.knowledge.redaction import redact_secrets
 from agentic_qa.infrastructure.browser.playwright.affordances import (
     parse_affordances,
     parse_text_content,
@@ -57,6 +64,12 @@ site died in `Page.goto: Timeout 10000ms exceeded` without ever seeing the page.
 content was ready in three tenths of a second; the other 23 were images and third-party
 tags. "Click this button" and "load this website" are not the same wait.
 """
+
+MAX_REPORTED_PROBLEMS = 25
+"""Console errors and failed requests carried into a report.
+
+A page in a redirect loop or a broken carousel produces thousands of identical
+entries, and a report nobody can read is a report nobody reads."""
 
 NAVIGATION_WAIT_UNTIL: Literal["domcontentloaded"] = "domcontentloaded"
 """What "the page is ready" means for navigation.
@@ -198,9 +211,15 @@ class PlaywrightBrowserGateway:
         self._context = context
         self._page = page
         self._navigation_timeout_ms = navigation_timeout_ms
+        # Observed passively, like the console errors beside it, rather than recorded in
+        # `execute`. A click or a form submit navigates too, and a status remembered only
+        # for navigations *we* performed would go stale -- reporting a 200 for a page that
+        # is now a 500, which is worse than reporting nothing.
+        self._last_http_status: int | None = None
         self.failures = ObservedFailures()
         page.on("console", self._on_console)
         page.on("requestfailed", self._on_request_failed)
+        page.on("response", self._on_response)
 
     def _on_console(self, message: ConsoleMessage) -> None:
         if message.type == "error":
@@ -208,6 +227,20 @@ class PlaywrightBrowserGateway:
 
     def _on_request_failed(self, request: Request) -> None:
         self.failures.failed_requests.append(f"{request.method} {request.url}")
+
+    def _on_response(self, response: Response) -> None:
+        """Keep the status of the document the main frame is showing.
+
+        Sub-resources are ignored: an image answering 404 is a finding in its own right
+        (`failures.failed_requests`) and says nothing about whether the page loaded. A
+        response in a sub-frame is ignored for the same reason — an ad iframe failing is
+        not the page failing.
+        """
+        try:
+            if response.request.is_navigation_request() and response.frame == self._page.main_frame:
+                self._last_http_status = response.status
+        except PlaywrightError:  # the frame went away mid-event
+            return
 
     @property
     def page(self) -> Page:
@@ -223,6 +256,30 @@ class PlaywrightBrowserGateway:
         """The viewport as it is now. Never the full page: a tall page produces an
         artifact nobody reads and a file nobody wants to store."""
         return await self._page.screenshot()
+
+    async def page_problems(self) -> PageProblems:
+        """What went wrong while this page was driven, cleaned and bounded.
+
+        A failed request carries its URL, and a URL carries tokens in its query string —
+        so it goes through `safe_url`, the same helper `PageState` uses for the same
+        reason. A console message is arbitrary text, so it goes through the secret
+        patterns instead: evidence is cleaned and kept, never refused, because a console
+        error is worth reporting precisely when it is strange.
+        """
+        return PageProblems(
+            console_errors=tuple(
+                redact_secrets(message)
+                for message in self.failures.console_errors[:MAX_REPORTED_PROBLEMS]
+            ),
+            failed_requests=tuple(
+                dict.fromkeys(
+                    # Deduplicated after cleaning: a page that retries one broken image
+                    # forty times has one broken image.
+                    safe_url(url.split(" ", 1)[-1]) or url
+                    for url in self.failures.failed_requests[:MAX_REPORTED_PROBLEMS]
+                )
+            ),
+        )
 
     async def describe_page(self) -> PageState:
         """What the page offers, from the accessible tree.
@@ -249,6 +306,7 @@ class PlaywrightBrowserGateway:
             # From the same snapshot the affordances came out of. It was always here;
             # only the controls used to survive the trip to the planner.
             content=parse_text_content(snapshot),
+            http_status=self._last_http_status,
         )
 
     async def storage_state(self) -> StorageState:
@@ -271,10 +329,20 @@ class PlaywrightBrowserGateway:
     async def _dispatch(self, action: BrowserAction) -> ActionOutcome:
         match action.type:
             case BrowserActionType.NAVIGATE:
-                await self._page.goto(
+                # The response is the point, not a by-product: without its status a run
+                # cannot tell a page from an error page, and reads the error page as the
+                # application (ADR 0015).
+                response = await self._page.goto(
                     action.target.url or "",
                     timeout=self._navigation_timeout_ms,
                     wait_until=NAVIGATION_WAIT_UNTIL,
+                )
+                return ActionOutcome(
+                    succeeded=True,
+                    current_url=self._page.url,
+                    # From the response in hand, not from the remembered one: this is the
+                    # navigation the caller asked about.
+                    http_status=response.status if response is not None else None,
                 )
             case BrowserActionType.CLICK:
                 await self._locate(action.target).click(timeout=DEFAULT_ACTION_TIMEOUT_MS)
@@ -332,7 +400,14 @@ class PlaywrightBrowserGateway:
                     detail=f"captured {len(captured)} bytes",
                 )
             case BrowserActionType.BACK:
-                await self._page.go_back(timeout=DEFAULT_ACTION_TIMEOUT_MS)
+                back = await self._page.go_back(
+                    timeout=self._navigation_timeout_ms, wait_until=NAVIGATION_WAIT_UNTIL
+                )
+                return ActionOutcome(
+                    succeeded=True,
+                    current_url=self._page.url,
+                    http_status=back.status if back is not None else None,
+                )
 
         return ActionOutcome(succeeded=True, current_url=self._page.url)
 
