@@ -46,7 +46,7 @@ from agentic_qa.domain.browser.actions import (
 )
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.browser.policy_guard import evaluate_action
-from agentic_qa.domain.exploration.actions import exploration_action, is_takeable
+from agentic_qa.domain.exploration.actions import exploration_action, is_takeable, seed_action
 from agentic_qa.domain.exploration.frontier import (
     ExplorationBudget,
     ExplorationReport,
@@ -397,6 +397,38 @@ def build_agent_graph(
         """
         assert exploration_budget is not None  # `exploring` gates this node
         agent = state["agent"]
+
+        # A browser opens on `about:blank`, and nothing in production ever navigated away
+        # from it: a crawl described the blank page, found nothing to do, and reported a
+        # *complete* map of one state. The Phase 12 gate passed only because the test
+        # called `page.goto` itself before building the graph.
+        #
+        # Two facts decide whether to seed, and both are needed:
+        #
+        #   `exploration is None`   nothing has been described yet, so we are not mid-crawl
+        #                           and a resumed run never starts over.
+        #   last action failed      the seed did not land, so we are still on the blank
+        #                           page. Falling through here would describe it and call
+        #                           the map complete — the exact lie this exists to stop.
+        #
+        # The first entry has no last action, which reads as "not succeeded", so it seeds.
+        # A failed seed simply seeds again, bounded by Recover, which classifies a
+        # navigation that will not complete as `environment` and ends the run `blocked`.
+        if (
+            state.get("exploration") is None
+            and policy is not None
+            and not state.get("last_outcome_succeeded", False)
+        ):
+            # Through `act`, so it passes the guarded browser and counts against the
+            # action budget like every other step. A seed exempt from the allowlist would
+            # be the one navigation the policy does not govern.
+            logger.info("run %s seeding exploration at %s", agent.run_id, policy.allowed_origins[0])
+            return {
+                "agent": agent,
+                "pending_action": seed_action(policy),
+                "safe_point": None,
+            }
+
         frontier = Frontier.from_snapshot(
             exploration_budget, state.get("exploration"), takeable=takeable
         )

@@ -7,6 +7,16 @@ import { z } from "zod";
 import { isFullyModelJudged, unverifiable } from "@domain/qa/story";
 import { useGateways } from "@viewmodels/gateways-context";
 import { useProjectViewModel } from "@viewmodels/projects/use-projects-viewmodel";
+import {
+  Button,
+  Card,
+  Field,
+  Lede,
+  Notice,
+  PageTitle,
+  SectionTitle,
+} from "@views/components/ui";
+import { inputClass } from "@views/components/form-classes";
 
 /**
  * Writing a story, and compiling it into a plan.
@@ -111,154 +121,183 @@ export function StoriesPage() {
 
   return (
     <section>
-      <h2 className="page__title">Stories</h2>
-      <p className="page__lede">
+      <PageTitle>Stories</PageTitle>
+      <Lede>
         What this application is supposed to do, in the words a report will quote back.
-      </p>
+      </Lede>
 
-      <ul className="card-list">
+      <ul className="mb-8 grid gap-4">
         {(stories.data ?? []).map((story) => {
           const unchecked = unverifiable(story);
           return (
-            <li className="card" key={story.storyId}>
-              <div className="card__name">
-                As {story.actor}, {story.goal}
+            <li
+              className="min-w-0 rounded-lg bg-white p-4 shadow-xs dark:bg-gray-800"
+              key={story.storyId}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-gray-700 dark:text-gray-200">
+                    As {story.actor}, {story.goal}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                    {story.acceptanceCriteria.length} criteria
+                    {unchecked.length > 0 ? (
+                      <>
+                        {" · "}
+                        <span className="text-yellow-600 dark:text-yellow-400">
+                          {unchecked.length} judged by a model
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
+                </div>
+                <Button
+                  variant="secondary"
+                  type="button"
+                  onClick={() => compile.mutate(story.storyId)}
+                  disabled={compile.isPending || runPolicyId === null}
+                >
+                  {compile.isPending ? "Compiling…" : "Compile into a plan"}
+                </Button>
               </div>
-              <div className="card__meta">
-                {story.acceptanceCriteria.length} criteria
-                {unchecked.length > 0 ? ` · ${unchecked.length} judged by a model` : ""}
-              </div>
+
               {isFullyModelJudged(story) ? (
-                <p className="notice" role="status">
-                  No criterion here can be checked deterministically, so a run of this
-                  story can only end <code>inconclusive</code> — never a pass or a
-                  defect.
-                </p>
+                <div className="mt-3">
+                  <Notice tone="warning">
+                    No criterion here can be checked deterministically, so a run of this
+                    story can only end <code>inconclusive</code> — never a pass or a defect.
+                  </Notice>
+                </div>
               ) : null}
-              <button
-                className="button"
-                type="button"
-                onClick={() => compile.mutate(story.storyId)}
-                disabled={compile.isPending || runPolicyId === null}
-              >
-                {compile.isPending ? "Compiling…" : "Compile into a plan"}
-              </button>
             </li>
           );
         })}
       </ul>
 
-      {stories.data?.length === 0 ? <p className="notice">No stories yet.</p> : null}
+      {stories.data?.length === 0 ? <Notice>No stories yet.</Notice> : null}
 
       {runPolicyId === null && (stories.data?.length ?? 0) > 0 ? (
-        <p className="notice" role="status">
-          This project has no default run policy, so a story cannot be compiled into a
-          plan yet — a plan with no limits is one nobody chose.
-        </p>
+        <Notice tone="warning">
+          This project has no default run policy, so a story cannot be compiled into a plan
+          yet — a plan with no limits is one nobody chose.
+        </Notice>
       ) : null}
 
       {compile.error !== null ? (
-        <p className="notice notice--error" role="alert">
+        <Notice tone="error">
           {compile.error instanceof Error ? compile.error.message : "the plan was not compiled"}
-        </p>
+        </Notice>
       ) : null}
 
-      <h3 className="section__title">New story</h3>
-      <form onSubmit={(event) => void handleSubmit((values) => create.mutate(values))(event)}>
-        <div className="field">
-          <label htmlFor="actor">As</label>
-          <input id="actor" {...register("actor")} placeholder="a signed-in customer" />
-          {errors.actor ? <span className="field__error">{errors.actor.message}</span> : null}
-        </div>
+      <Card>
+        <SectionTitle>New story</SectionTitle>
+        <form onSubmit={(event) => void handleSubmit((values) => create.mutate(values))(event)}>
+          <Field label="As" htmlFor="actor" error={errors.actor?.message}>
+            <input
+              id="actor"
+              className={inputClass(errors.actor !== undefined)}
+              {...register("actor")}
+              placeholder="a signed-in customer"
+            />
+          </Field>
 
-        <div className="field">
-          <label htmlFor="goal">I want to</label>
-          <input id="goal" {...register("goal")} placeholder="place an order" />
-          {errors.goal ? <span className="field__error">{errors.goal.message}</span> : null}
-        </div>
+          <Field label="I want to" htmlFor="goal" error={errors.goal?.message}>
+            <input
+              id="goal"
+              className={inputClass(errors.goal !== undefined)}
+              {...register("goal")}
+              placeholder="place an order"
+            />
+          </Field>
 
-        <h4 className="section__title">Acceptance criteria</h4>
-        {criteria.fields.map((field, index) => (
-          <fieldset className="criterion" key={field.id}>
-            <div className="field">
-              <label htmlFor={`criterion-${index}`}>Id</label>
-              <input
-                id={`criterion-${index}`}
-                {...register(`criteria.${index}.criterionId`)}
-                placeholder="ac-order-confirmed"
-              />
-              {errors.criteria?.[index]?.criterionId ? (
-                <span className="field__error">
-                  {errors.criteria[index].criterionId.message}
-                </span>
+          <h4 className="mt-6 mb-2 text-sm font-semibold text-gray-600 dark:text-gray-300">
+            Acceptance criteria
+          </h4>
+          {criteria.fields.map((field, index) => (
+            <fieldset
+              className="mb-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700"
+              key={field.id}
+            >
+              <Field
+                label="Id"
+                htmlFor={`criterion-${index}`}
+                error={errors.criteria?.[index]?.criterionId?.message}
+              >
+                <input
+                  id={`criterion-${index}`}
+                  className={inputClass(errors.criteria?.[index]?.criterionId !== undefined)}
+                  {...register(`criteria.${index}.criterionId`)}
+                  placeholder="ac-order-confirmed"
+                />
+              </Field>
+
+              <Field
+                label="Has to be true"
+                htmlFor={`description-${index}`}
+                error={errors.criteria?.[index]?.description?.message}
+              >
+                <input
+                  id={`description-${index}`}
+                  className={inputClass(errors.criteria?.[index]?.description !== undefined)}
+                  {...register(`criteria.${index}.description`)}
+                  placeholder="the order confirmation page appears"
+                />
+              </Field>
+
+              <Field
+                label="Text the page must contain"
+                htmlFor={`hint-${index}`}
+                hint="Leave it empty and a model judges this criterion — which can never fail the product, only leave the run inconclusive."
+              >
+                <input
+                  id={`hint-${index}`}
+                  className={inputClass()}
+                  {...register(`criteria.${index}.verificationHint`)}
+                  placeholder="Order confirmed"
+                />
+              </Field>
+
+              {criteria.fields.length > 1 ? (
+                <div className="mt-4">
+                  <Button variant="secondary" type="button" onClick={() => criteria.remove(index)}>
+                    Remove criterion
+                  </Button>
+                </div>
               ) : null}
+            </fieldset>
+          ))}
+
+          {errors.criteria?.root ? (
+            <p className="text-xs text-red-600 dark:text-red-400">{errors.criteria.root.message}</p>
+          ) : null}
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Button variant="secondary" type="button" onClick={() => criteria.append(EMPTY_CRITERION)}>
+              Add criterion
+            </Button>
+            <Button type="submit" disabled={create.isPending}>
+              {create.isPending ? "Saving…" : "Save story"}
+            </Button>
+          </div>
+
+          {withoutHint > 0 ? (
+            <div className="mt-4">
+              <Notice tone="warning">
+                {withoutHint} of {draftCriteria.length} criteria have no text to check for. A
+                run can only report <code>inconclusive</code> for those.
+              </Notice>
             </div>
+          ) : null}
 
-            <div className="field">
-              <label htmlFor={`description-${index}`}>Has to be true</label>
-              <input
-                id={`description-${index}`}
-                {...register(`criteria.${index}.description`)}
-                placeholder="the order confirmation page appears"
-              />
-              {errors.criteria?.[index]?.description ? (
-                <span className="field__error">
-                  {errors.criteria[index].description.message}
-                </span>
-              ) : null}
+          {create.error !== null ? (
+            <div className="mt-4">
+              <Notice tone="error">
+                {create.error instanceof Error ? create.error.message : "the story was not saved"}
+              </Notice>
             </div>
-
-            <div className="field">
-              <label htmlFor={`hint-${index}`}>Text the page must contain</label>
-              <input
-                id={`hint-${index}`}
-                {...register(`criteria.${index}.verificationHint`)}
-                placeholder="Order confirmed"
-              />
-              <span className="field__note">
-                Leave it empty and a model judges this criterion — which can never fail
-                the product, only leave the run inconclusive.
-              </span>
-            </div>
-
-            {criteria.fields.length > 1 ? (
-              <button className="button" type="button" onClick={() => criteria.remove(index)}>
-                Remove criterion
-              </button>
-            ) : null}
-          </fieldset>
-        ))}
-
-        {errors.criteria?.root ? (
-          <p className="field__error">{errors.criteria.root.message}</p>
-        ) : null}
-
-        <div className="commands">
-          <button
-            className="button"
-            type="button"
-            onClick={() => criteria.append(EMPTY_CRITERION)}
-          >
-            Add criterion
-          </button>
-          <button className="button button--primary" type="submit" disabled={create.isPending}>
-            {create.isPending ? "Saving…" : "Save story"}
-          </button>
-        </div>
-
-        {withoutHint > 0 ? (
-          <p className="notice" role="status">
-            {withoutHint} of {draftCriteria.length} criteria have no text to check for. A
-            run can only report <code>inconclusive</code> for those.
-          </p>
-        ) : null}
-
-        {create.error !== null ? (
-          <p className="notice notice--error" role="alert">
-            {create.error instanceof Error ? create.error.message : "the story was not saved"}
-          </p>
-        ) : null}
-      </form>
+          ) : null}
+        </form>
+      </Card>
     </section>
   );
 }

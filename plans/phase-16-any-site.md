@@ -104,8 +104,16 @@ policy read-only arreglada se rechaza.
    taparlo.
 
 **Gates**
-- Una exploración mapea más de un estado sin ayuda del test.
-- Un origen inalcanzable sale `blocked` con causa, no `frontier_exhausted`.
+- Una exploración mapea más de un estado sin ayuda del test. ✅
+- Un origen inalcanzable sale `blocked` con causa, no `frontier_exhausted`. ✅
+
+**Cerrada.** `seed_action` en `domain/exploration/actions.py`; el nodo `explore` la emite
+mientras no haya descrito ninguna página **y** la última acción no haya tenido éxito — las
+dos condiciones hacen falta: una bandera puesta al *pedir* la navegación sigue en alto
+cuando falla, y el reintento describiría `about:blank` y lo llamaría mapa completo. El
+segundo gate no necesitó código nuevo: Recover ya clasifica una navegación que no completa
+como `environment`. Los dos `page.goto` que los tests hacían por cuenta de producción están
+fuera.
 
 ### Slice 3 — Barrido de sitio
 

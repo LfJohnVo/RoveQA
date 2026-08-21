@@ -102,12 +102,13 @@ PostgreSQL, y hay un test que lo comprueba contra una violación plantada.
 | [Perfil de rendimiento](docs/status/PERFORMANCE_PROFILE.md) | Qué cuesta un run largo |
 | [Arquitectura](docs/01-architecture.md) | Cómo encaja todo |
 | [Grafo del código](docs/22-codebase-graph.md) | El mapa navegable del repositorio |
+| [ADR 0016](docs/adr/0016-windmill-design-system-and-tailwind.md) | Por qué el frontend usa Windmill Dashboard y Tailwind |
 
 ## Cómo está construido
 
 ```
 backend/    FastAPI · Clean Architecture · Temporal · LangGraph · Playwright
-frontend/   React 19 · Vite · MVVM
+frontend/   React 19 · Vite · MVVM · Tailwind 4 sobre Windmill Dashboard
 cli/        TypeScript · sin dependencias del runtime
 contracts/  Los tres schemas públicos, con ejemplo canónico cada uno
 docs/       Especificación, arquitectura, ADRs y estado

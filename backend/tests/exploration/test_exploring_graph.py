@@ -11,8 +11,14 @@ from dataclasses import dataclass, field
 from agentic_qa.application.ports.browser import ActionOutcome
 from agentic_qa.domain.agent.state import AgentState
 from agentic_qa.domain.browser.actions import BrowserAction
-from agentic_qa.domain.exploration.frontier import ExplorationBudget
+from agentic_qa.domain.exploration.frontier import (
+    ExplorationBudget,
+    ExplorationReport,
+    FrontierSnapshot,
+)
 from agentic_qa.domain.exploration.state import Affordance, PageState
+from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.verification import FailureKind
 from agentic_qa.infrastructure.agent.langgraph.graph import build_agent_graph
 from tests.fakes.agent import ScriptedModelGateway
 
@@ -22,8 +28,12 @@ GENEROUS = ExplorationBudget(
 
 
 def _path_of(url: str) -> str:
-    """`https://app.test/alpha` -> `alpha`, and the root -> the empty string."""
-    return url.removeprefix("https://app.test/")
+    """`https://app.test/alpha` -> `alpha`, and the root -> the empty string.
+
+    The trailing slash is stripped separately because a policy origin is normalised
+    without one, and the seed navigates to exactly that string.
+    """
+    return url.removeprefix("https://app.test").removeprefix("/")
 
 
 def page(path: str, *names: str) -> PageState:
@@ -182,3 +192,116 @@ async def test_a_page_that_offers_nothing_ends_the_exploration_immediately() -> 
 
     assert browser.clicked == []
     assert agent.goal_reached is True
+
+
+def crawlable_policy(origin: str = "https://app.test") -> RunPolicy:
+    """Read-only, which is the mode a crawl of somebody else's site deserves."""
+    return RunPolicy(
+        policy_id="pol-explore",
+        project_id="proj-explore",
+        allowed_origins=(origin,),
+        max_duration_seconds=600,
+        max_actions=50,
+        max_model_calls=0,
+        destructive_actions=False,
+    )
+
+
+async def explore_with_policy(
+    browser: SiteBrowser, policy: RunPolicy, budget: ExplorationBudget = GENEROUS
+) -> dict[str, object]:
+    model = ScriptedModelGateway(script=[])
+    graph = build_agent_graph(
+        browser=browser, model=model, exploration_budget=budget, policy=policy
+    )
+    result = await graph.ainvoke(
+        {"agent": AgentState(run_id="run-1", goal="explore the application")}
+    )
+    assert model.calls == 0
+    return dict(result)
+
+
+class TestAnExplorationFindsItsOwnWayToTheApplication:
+    """A browser opens on `about:blank`, and nothing in production ever navigated away
+    from it. An exploring run therefore mapped exactly one state — the blank one — and
+    reported it as a *complete* map.
+
+    The Phase 12 gate passed anyway, because the test called `page.goto` itself before
+    building the graph. A gate that supplies the step it is checking is not a gate.
+    """
+
+    async def test_it_navigates_to_the_policy_origin_first(self) -> None:
+        # Starts where a real browser starts: nowhere.
+        browser = SiteBrowser(
+            pages={
+                "/": page("/", "alpha", "beta"),
+                "/alpha": page("/alpha"),
+                "/beta": page("/beta"),
+            },
+            current="/about:blank",
+        )
+
+        agent = (await explore_with_policy(browser, crawlable_policy()))["agent"]
+        assert isinstance(agent, AgentState)
+
+        # The seed is the first thing it does, and it goes through the ordinary action
+        # path — so it is bounded and policed like every other step.
+        assert browser.clicked[0] == ""
+        assert sorted(browser.clicked[1:]) == ["alpha", "beta"]
+        assert agent.goal_reached is True
+
+    async def test_it_maps_more_than_one_state_without_help(self) -> None:
+        browser = SiteBrowser(
+            pages={
+                "/": page("/", "alpha"),
+                "/alpha": page("/alpha", "beta"),
+                "/beta": page("/beta"),
+            },
+            current="/about:blank",
+        )
+
+        result = await explore_with_policy(browser, crawlable_policy())
+
+        report = result["exploration_report"]
+        assert isinstance(report, ExplorationReport)
+        # The blank page is not one of them: it is never described, so it never becomes
+        # a state. Three real pages, reached without the test touching the browser.
+        assert report.states_discovered == 3
+
+    async def test_an_unreachable_origin_is_blocked_with_a_cause(self) -> None:
+        # Nothing at the other end. The run must say so — `frontier_exhausted` would
+        # claim it had seen the whole application, which is the opposite of the truth.
+        browser = SiteBrowser(pages={}, current="/about:blank", unclickable={""})
+
+        result = await explore_with_policy(browser, crawlable_policy())
+
+        agent = result["agent"]
+        assert isinstance(agent, AgentState)
+        assert agent.goal_reached is False
+        assert result["failure_kind"] is FailureKind.ENVIRONMENT
+        assert result.get("exploration_report") is None
+
+    async def test_a_resumed_crawl_does_not_start_over(self) -> None:
+        # `exploration is None` is what "not seeded yet" means, so a state that already
+        # carries a frontier must go straight back to crawling. Re-seeding would send a
+        # browser that died on page nine back to page one.
+        browser = SiteBrowser(pages={"/": page("/", "alpha"), "/alpha": page("/alpha")})
+        model = ScriptedModelGateway(script=[])
+        graph = build_agent_graph(
+            browser=browser,
+            model=model,
+            exploration_budget=GENEROUS,
+            policy=crawlable_policy(),
+        )
+
+        result = await graph.ainvoke(
+            {
+                "agent": AgentState(run_id="run-1", goal="explore the application"),
+                "exploration": FrontierSnapshot(),
+            }
+        )
+
+        assert isinstance(result["agent"], AgentState)
+        # No seed navigation: the first thing it did was take a link off the page it was
+        # already on.
+        assert browser.clicked == ["alpha"]

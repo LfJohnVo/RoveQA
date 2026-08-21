@@ -26,7 +26,7 @@ The work is not finished until all four hold, **measured, not asserted**.
 | | Gate | State |
 | --- | --- | --- |
 | 1 | Story-driven runs pass on the fixture app | ✅ **9 of 9** with `BASELINE_REPEATS=3` |
-| 2 | Traversals with no story — exploration maps a real site | ❌ R1: exploration cannot leave `about:blank` |
+| 2 | Traversals with no story — exploration maps a real site | ✅ seeds itself from the policy origin |
 | 3 | Reports carry analysis — per-page findings reach the report | ❌ collected in the adapter, never surfaced |
 | 4 | A smoke against ≥2 real public sites of different archetypes | ❌ not started |
 
@@ -37,17 +37,31 @@ green gate 1 with no gate 4 means "it works on the thing we built it against".
 
 ## 3. Where to start, concretely
 
-**Gate 2 is next**, and its blocker is already removed. Phase 16 slice 2 in
-`plans/phase-16-any-site.md`: exploration goes `START → explore`, which describes the page
-the browser is *currently* on, and nothing in the production path ever navigates to the
-application. The Phase 12 gate passes only because the test itself calls
-`page.goto(base_url)` — see `backend/tests/browser/test_exploring_a_real_app.py:60`. Delete
-that line as part of the fix, or the gate goes on hiding it.
+**Gate 3 is next.** Gate 2 is done: the `explore` node seeds itself from the run policy's
+origin (`seed_action` in `domain/exploration/actions.py`), through the guarded browser and
+counted as an action like any other step. The two `page.goto` calls the tests were making
+on production's behalf are gone — including
+`backend/tests/browser/test_exploring_a_real_app.py:60`, which was the only reason the
+Phase 12 gate had ever passed.
 
-It needed two things that now exist: a read-only policy that can navigate (ADR 0014) and a
-navigation timeout that survives a real site (ADR 0011).
+Two details of that fix are worth not re-deriving:
 
-Then gate 3, then gate 4.
+- **The seed condition is "nothing described yet **and** the last action did not succeed",
+  not a `seeded` flag.** A flag set when the navigation is *requested* stays true when it
+  fails, and the retry then describes `about:blank`, finds nothing, and reports a complete
+  map — the exact lie the seed exists to prevent. The first entry has no last action, which
+  reads as "not succeeded", so it seeds; a resumed crawl has a frontier, so it does not.
+- **An unreachable origin re-seeds until Recover's bound**, and Recover already classifies a
+  navigation that will not complete as `environment` → `blocked`. No new code path was
+  needed for the second gate; it fell out once the seed stopped lying about success.
+
+Also: `test_it_cannot_wander_outside_the_allowed_origin` had to change its setup. It used to
+point the policy at a host that was not the target, which only tested the frontier while
+nothing navigated on its own. Now that a run seeds from that same policy, such a setup tests
+a run that never arrives. The fixture's home page carries a link to `elsewhere.test`
+instead, which is what a real page looks like anyway.
+
+Then gate 4.
 
 ## 4. Bring it up on a new machine
 

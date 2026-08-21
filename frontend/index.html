@@ -5,6 +5,28 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RoveQA</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // Before first paint, so a dark-theme user never sees a white flash. The stored
+      // choice wins over the OS preference, because it was made deliberately.
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("dark");
+          var dark =
+            stored !== null
+              ? JSON.parse(stored)
+              : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          if (dark) document.documentElement.classList.add("theme-dark");
+        } catch (error) {
+          /* A blocked localStorage is not a reason to fail to render. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

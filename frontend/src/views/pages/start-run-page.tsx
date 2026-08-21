@@ -6,6 +6,8 @@ import { z } from "zod";
 
 import { prepareRun } from "@application/usecases/start-run";
 import { useGateways } from "@viewmodels/gateways-context";
+import { Button, Card, Field, Lede, Notice, PageTitle } from "@views/components/ui";
+import { inputClass } from "@views/components/form-classes";
 
 /**
  * Starting a run.
@@ -57,39 +59,62 @@ export function StartRunPage() {
 
   return (
     <section>
-      <h2 className="page__title">Start a run</h2>
-      <p className="page__lede">
-        Leave the plan empty for an exploratory run. A run with no plan verifies nothing,
-        so it reports <code>inconclusive</code> rather than a pass.
-      </p>
+      <PageTitle>Start a run</PageTitle>
+      <Lede>
+        Leave the plan empty for an exploratory run. A run with no plan verifies nothing, so
+        it reports{" "}
+        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-xs dark:bg-gray-700">
+          inconclusive
+        </code>{" "}
+        rather than a pass.
+      </Lede>
 
-      <form onSubmit={(event) => void handleSubmit((values) => start.mutate(values))(event)}>
-        <div className="field">
-          <label htmlFor="planId">Plan id</label>
-          <input id="planId" {...register("planId")} placeholder="optional" />
-          {errors.planId ? <span className="field__error">{errors.planId.message}</span> : null}
-        </div>
+      <Card className="mb-8">
+        <form onSubmit={(event) => void handleSubmit((values) => start.mutate(values))(event)}>
+          <Field label="Plan id" htmlFor="planId" error={errors.planId?.message}>
+            <input
+              id="planId"
+              className={inputClass(errors.planId !== undefined)}
+              {...register("planId")}
+              placeholder="optional"
+            />
+          </Field>
 
-        <div className="field">
-          <label htmlFor="planVersion">Plan version</label>
-          <input id="planVersion" {...register("planVersion")} placeholder="optional" />
-        </div>
+          <Field label="Plan version" htmlFor="planVersion">
+            <input
+              id="planVersion"
+              className={inputClass()}
+              {...register("planVersion")}
+              placeholder="optional"
+            />
+          </Field>
 
-        <div className="field">
-          <label htmlFor="environmentId">Environment</label>
-          <input id="environmentId" {...register("environmentId")} placeholder="optional" />
-        </div>
+          <Field label="Environment" htmlFor="environmentId">
+            <input
+              id="environmentId"
+              className={inputClass()}
+              {...register("environmentId")}
+              placeholder="optional"
+            />
+          </Field>
 
-        {start.error !== null ? (
-          <p className="notice notice--error" role="alert">
-            {start.error instanceof Error ? start.error.message : "the run could not be started"}
-          </p>
-        ) : null}
+          {start.error !== null ? (
+            <div className="mt-4">
+              <Notice tone="error">
+                {start.error instanceof Error
+                  ? start.error.message
+                  : "the run could not be started"}
+              </Notice>
+            </div>
+          ) : null}
 
-        <button className="button button--primary" type="submit" disabled={start.isPending}>
-          {start.isPending ? "Starting…" : "Start run"}
-        </button>
-      </form>
+          <div className="mt-6">
+            <Button type="submit" disabled={start.isPending}>
+              {start.isPending ? "Starting…" : "Start run"}
+            </Button>
+          </div>
+        </form>
+      </Card>
     </section>
   );
 }

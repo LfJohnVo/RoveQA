@@ -60,6 +60,11 @@ puede planificar.
 
 Abre **http://localhost:5173** y pulsa **New project**.
 
+La consola usa el sistema de diseño de
+[Windmill Dashboard](https://github.com/estevanmaito/windmill-dashboard) (MIT). El botón de
+la luna/sol en la cabecera cambia entre claro y oscuro, y recuerda tu elección por encima de
+lo que prefiera el sistema operativo.
+
 Te pide cuatro cosas, y las cuatro importan:
 
 **Nombre.** Para ti.

@@ -58,7 +58,13 @@ def create_target_app(state: TargetState | None = None) -> FastAPI:
     async def home() -> HTMLResponse:
         return _page(
             "Home",
-            '<a href="/login">Sign in</a><a href="/records">Records</a><p id="status">ready</p>',
+            '<a href="/login">Sign in</a><a href="/records">Records</a>'
+            # A real page links off its own origin. Without one here, "an explorer does
+            # not wander off-origin" could only be tested by pointing the policy at a
+            # different host — which, now that a run seeds itself from that policy, tests
+            # something else entirely.
+            '<a href="https://elsewhere.test/pricing">Elsewhere</a>'
+            '<p id="status">ready</p>',
         )
 
     @app.get("/login", response_class=HTMLResponse)

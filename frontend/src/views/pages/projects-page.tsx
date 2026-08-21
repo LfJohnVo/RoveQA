@@ -5,6 +5,24 @@ import { Link, useNavigate } from "react-router";
 import { z } from "zod";
 
 import { useCreateProject, useProjectsViewModel } from "@viewmodels/projects/use-projects-viewmodel";
+import { PlusIcon } from "@views/components/icons";
+import {
+  Badge,
+  Button,
+  Card,
+  Field,
+  Lede,
+  Notice,
+  PageTitle,
+  SectionTitle,
+  TableBody,
+  TableCard,
+  TableHead,
+  Td,
+  Th,
+  Tr,
+} from "@views/components/ui";
+import { checkboxClass, inputClass } from "@views/components/form-classes";
 
 /**
  * Every project, and the way in.
@@ -58,40 +76,55 @@ export function ProjectsPage() {
 
   return (
     <section>
-      <h2 className="page__title">Projects</h2>
-      <p className="page__lede">Every application this control plane knows how to test.</p>
+      <PageTitle>Projects</PageTitle>
+      <Lede>Every application this control plane knows how to test.</Lede>
 
-      {isLoading ? <p className="notice">Loading projects…</p> : null}
-      {error !== null ? (
-        <p className="notice notice--error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {isLoading ? <Notice>Loading projects…</Notice> : null}
+      {error !== null ? <Notice tone="error">{error}</Notice> : null}
 
       {!isLoading && error === null && projects.length === 0 ? (
-        <p className="notice">Nothing here yet. Add the first application below.</p>
+        <Notice>Nothing here yet. Add the first application below.</Notice>
       ) : null}
 
-      <ul className="card-list">
-        {projects.map((project) => (
-          <li key={project.projectId}>
-            <Link className="card" to={`/projects/${project.projectId}`}>
-              <div className="card__name">{project.name}</div>
-              <div className="card__meta">
-                {project.defaultRunPolicyId === null ? (
-                  <span className="card__warning">no run policy — cannot start a run</span>
-                ) : (
-                  project.projectId
-                )}
-              </div>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      {projects.length > 0 ? (
+        <TableCard label="Projects">
+          <TableHead>
+            <Th>Project</Th>
+            <Th>Id</Th>
+            <Th>Can run</Th>
+          </TableHead>
+          <TableBody>
+            {projects.map((project) => (
+              <Tr key={project.projectId}>
+                <Td>
+                  <Link
+                    className="font-semibold text-purple-600 hover:underline dark:text-purple-400"
+                    to={`/projects/${project.projectId}`}
+                  >
+                    {project.name}
+                  </Link>
+                </Td>
+                <Td className="font-mono text-xs text-gray-500 dark:text-gray-500">
+                  {project.projectId}
+                </Td>
+                <Td>
+                  {project.defaultRunPolicyId === null ? (
+                    // Said on the row rather than discovered two screens later, where it
+                    // reads as a broken control plane instead of a missing setting.
+                    <Badge tone="unsure">no run policy</Badge>
+                  ) : (
+                    <Badge tone="pass">ready</Badge>
+                  )}
+                </Td>
+              </Tr>
+            ))}
+          </TableBody>
+        </TableCard>
+      ) : null}
 
       {showForm ? (
-        <>
-          <h3 className="section__title">New project</h3>
+        <Card className="mb-8">
+          <SectionTitle>New project</SectionTitle>
           <form
             onSubmit={(event) =>
               void handleSubmit((values) =>
@@ -106,78 +139,95 @@ export function ProjectsPage() {
               )(event)
             }
           >
-            <div className="field">
-              <label htmlFor="name">Name</label>
-              <input id="name" {...register("name")} placeholder="Checkout" />
-              {errors.name ? <span className="field__error">{errors.name.message}</span> : null}
-            </div>
+            <Field label="Name" htmlFor="name" error={errors.name?.message}>
+              <input
+                id="name"
+                className={inputClass(errors.name !== undefined)}
+                {...register("name")}
+                placeholder="Checkout"
+              />
+            </Field>
 
-            <div className="field">
-              <label htmlFor="origin">Application origin</label>
-              <input id="origin" {...register("origin")} placeholder="http://localhost:3000" />
-              <span className="field__note">
-                The only place that knows which application this tests. A run may go here
-                and nowhere else, and the planner is told this address — without it a run
-                starts on a blank page with nothing to aim at.
-              </span>
-              {errors.origin ? <span className="field__error">{errors.origin.message}</span> : null}
-            </div>
+            <Field
+              label="Application origin"
+              htmlFor="origin"
+              error={errors.origin?.message}
+              hint="The only place that knows which application this tests. A run may go here and nowhere else, and the planner is told this address — without it a run starts on a blank page with nothing to aim at."
+            >
+              <input
+                id="origin"
+                className={inputClass(errors.origin !== undefined)}
+                {...register("origin")}
+                placeholder="http://localhost:3000"
+              />
+            </Field>
 
-            <div className="field field--inline">
-              <label htmlFor="destructive">
-                <input id="destructive" type="checkbox" {...register("destructiveActions")} />
-                Let runs click, type and submit
+            <div className="mt-4">
+              <label className="flex items-center text-sm text-gray-700 dark:text-gray-400">
+                <input id="destructive" type="checkbox" className={checkboxClass()} {...register("destructiveActions")} />
+                <span className="ml-2">Let runs click, type and submit</span>
               </label>
-              <span className="field__note">
-                Off means the agent can look and never touch: every click is refused and
-                the run ends. Leave it off against anything whose data you care about.
+              <span className="mt-1 block text-xs text-gray-600 dark:text-gray-400">
+                Off means the agent can look and never touch: every click is refused and the
+                run ends. Leave it off against anything whose data you care about.
               </span>
             </div>
 
-            <h4 className="section__title">What one run may spend</h4>
-            <div className="field">
-              <label htmlFor="max-actions">Actions</label>
-              <input id="max-actions" type="number" {...register("maxActions")} />
+            <h4 className="mt-6 mb-2 text-sm font-semibold text-gray-600 dark:text-gray-300">
+              What one run may spend
+            </h4>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Actions" htmlFor="max-actions">
+                <input
+                  id="max-actions"
+                  type="number"
+                  className={inputClass()}
+                  {...register("maxActions")}
+                />
+              </Field>
+              <Field label="Model calls" htmlFor="max-model-calls">
+                <input
+                  id="max-model-calls"
+                  type="number"
+                  className={inputClass()}
+                  {...register("maxModelCalls")}
+                />
+              </Field>
+              <Field label="Seconds" htmlFor="max-duration">
+                <input
+                  id="max-duration"
+                  type="number"
+                  className={inputClass()}
+                  {...register("maxDurationSeconds")}
+                />
+              </Field>
             </div>
-            <div className="field">
-              <label htmlFor="max-model-calls">Model calls</label>
-              <input id="max-model-calls" type="number" {...register("maxModelCalls")} />
-            </div>
-            <div className="field">
-              <label htmlFor="max-duration">Seconds</label>
-              <input id="max-duration" type="number" {...register("maxDurationSeconds")} />
-              <span className="field__note">
-                A run that hits one of these stops and reports <code>blocked</code>. It
-                never reports a problem with the product it did not finish looking at.
-              </span>
-            </div>
+            <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+              A run that hits one of these stops and reports <code>blocked</code>. It never
+              reports a problem with the product it did not finish looking at.
+            </p>
 
-            <div className="commands">
-              <button className="button" type="button" onClick={() => setShowForm(false)}>
+            <div className="mt-6 flex gap-3">
+              <Button variant="secondary" type="button" onClick={() => setShowForm(false)}>
                 Cancel
-              </button>
-              <button
-                className="button button--primary"
-                type="submit"
-                disabled={creation.isCreating}
-              >
+              </Button>
+              <Button type="submit" disabled={creation.isCreating}>
                 {creation.isCreating ? "Creating…" : "Create project"}
-              </button>
+              </Button>
             </div>
 
             {creation.error !== null ? (
-              <p className="notice notice--error" role="alert">
-                {creation.error}
-              </p>
+              <div className="mt-4">
+                <Notice tone="error">{creation.error}</Notice>
+              </div>
             ) : null}
           </form>
-        </>
+        </Card>
       ) : (
-        <div className="commands">
-          <button className="button button--primary" type="button" onClick={() => setShowForm(true)}>
-            New project
-          </button>
-        </div>
+        <Button type="button" onClick={() => setShowForm(true)}>
+          <PlusIcon className="mr-2 h-4 w-4" />
+          New project
+        </Button>
       )}
     </section>
   );

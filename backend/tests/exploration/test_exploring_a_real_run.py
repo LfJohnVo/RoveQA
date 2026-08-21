@@ -76,9 +76,9 @@ async def exploring_project(base_url: str) -> AsyncIterator[tuple[Container, str
     async def browser_factory() -> AsyncIterator[BrowserGateway]:
         session = await start_browser_session(headless=True)
         try:
-            # The explorer maps from wherever the page already is; the run's entry
-            # point is the browser's starting page, not something the frontier picks.
-            await session.gateway.page.goto(base_url)
+            # Handed over exactly as production hands it over: freshly opened, on
+            # `about:blank`. The run navigates itself, from the origin its policy names.
+            # Pre-navigating here would hide the one thing this test is for.
             yield session.gateway
         finally:
             await session.aclose()

@@ -57,7 +57,11 @@ async def explore(
     session: BrowserSession, base_url: str, *, policy: RunPolicy, max_actions: int = 12
 ) -> tuple[AgentState, ScriptedModelGateway]:
     model = ScriptedModelGateway(script=[])
-    await session.gateway.page.goto(base_url)
+    # Deliberately no `page.goto` here. This line used to be the only thing that put the
+    # browser in front of the application, so the gate passed while production could not
+    # leave `about:blank` — the test was supplying the very step it was meant to check.
+    # The run seeds itself from the policy's origin now, and if that ever stops working
+    # this file is where it shows.
     graph = build_agent_graph(
         browser=GuardedBrowserGateway(session.gateway, policy),
         model=model,
@@ -123,20 +127,18 @@ async def test_it_cannot_wander_outside_the_allowed_origin(
     refuses one a planner proposed.
     """
     base_url, _state = target
-    elsewhere = RunPolicy(
-        policy_id="pol-elsewhere",
-        project_id="proj-explore",
-        # Deliberately not the target: every navigation it tries must be refused.
-        allowed_origins=("https://not-the-target.test",),
-        max_duration_seconds=120,
-        max_actions=25,
-        max_model_calls=0,
-    )
 
-    agent, _model = await explore(session, base_url, policy=elsewhere, max_actions=4)
+    agent, _model = await explore(session, base_url, policy=read_only_policy(base_url))
 
-    # Nothing was taken at all: every link on the page leads somewhere this run may
-    # not go, so the frontier was empty from the start. Off-origin links are declined
-    # before they are attempted, by the same guard that would have refused them.
-    assert agent.episode_summaries[-1].steps_taken == 0
+    # The home page carries a link to `elsewhere.test`. It was never taken: an
+    # off-origin affordance is declined *before* it enters the frontier, by the same
+    # guard that would have refused a planner proposing it.
+    #
+    # This used to be tested by pointing the policy at a host that was not the target,
+    # which worked only while nothing navigated on its own. A run now seeds itself from
+    # that same policy, so such a setup no longer tests the frontier — it tests a run
+    # that never arrives.
+    assert agent.episode_summaries[-1].steps_taken > 1
     assert agent.failure_reason is None
+    for step in agent.recent_steps:
+        assert "elsewhere.test" not in step.intent

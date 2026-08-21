@@ -7,7 +7,7 @@
  */
 
 import { QueryClient } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -43,8 +43,10 @@ function gatewaysWith(runs: FakeRunGateway, events: FakeRunEventStream): Gateway
 }
 
 function timelineRows(): HTMLElement[] {
-  const timeline = document.querySelector(".timeline");
-  return timeline === null ? [] : Array.from(timeline.querySelectorAll(".timeline__row"));
+  // By role and accessible name rather than by class: a query tied to `.timeline__row`
+  // breaks the moment the timeline is restyled, which says nothing about the timeline.
+  const timeline = screen.queryByRole("table", { name: "Timeline" });
+  return timeline === null ? [] : within(timeline).getAllByRole("row").slice(1);
 }
 
 describe("a reload rebuilds the run from the durable log", () => {

@@ -47,6 +47,28 @@ def exploration_action(affordance: Affordance) -> BrowserAction:
     )
 
 
+def seed_action(policy: RunPolicy) -> BrowserAction:
+    """The navigation that puts an exploring run in front of the application.
+
+    A browser opens on `about:blank`, which offers nothing, so a crawl seeded from
+    whatever page happens to be loaded maps exactly one state — the blank one — and
+    reports it as a complete map. Nothing in production ever navigated first; the Phase 12
+    gate passed only because the test did it by hand.
+
+    The origin comes from the RunPolicy, which is the same source that already tells the
+    planner where the application is. Using anything else would introduce a second answer
+    to "what are we testing", and the allowlist would refuse whichever one was wrong.
+
+    Read-only by construction: a navigation is in `READ_ONLY_ACTIONS`, so this works under
+    a policy that forbids everything else — which is the policy a public site deserves.
+    """
+    return BrowserAction(
+        type=BrowserActionType.NAVIGATE,
+        intent="open the application",
+        target=ActionTarget(url=policy.allowed_origins[0]),
+    )
+
+
 def is_takeable(affordance: Affordance, policy: RunPolicy) -> bool:
     """Whether this run may take this affordance at all.
 
