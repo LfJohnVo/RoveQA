@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePath
 
-from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
+from agentic_qa.domain.browser.actions import (
+    READ_ONLY_ACTIONS,
+    BrowserAction,
+    BrowserActionType,
+)
 from agentic_qa.domain.projects.run_policy import RunPolicy
 
 
@@ -45,8 +49,19 @@ def evaluate_action(action: BrowserAction, policy: RunPolicy) -> PolicyDecision:
                 f"navigation to {url} is outside the allowed origins",
             )
 
-    if action.side_effect and not policy.destructive_actions:
-        # Deny-by-default: a write only happens when the policy said writes are fine.
+    if action.type not in READ_ONLY_ACTIONS and not policy.destructive_actions:
+        # Deny-by-default, decided by the action *type* rather than by the model's own
+        # `side_effect` flag (ADR 0014). The flag can only be raised, never lowered, so
+        # keying the ban on it meant a planner marking `navigate` as state-changing —
+        # over-cautious, not wrong — made a read-only run impossible: every one died on
+        # its first navigation, and the verdict blamed `policy`, which reads as the
+        # user's own configuration.
+        #
+        # Nothing is loosened. `click`, `fill` and every other write is outside
+        # READ_ONLY_ACTIONS, so the case this guard exists for — an unverified click on
+        # "Delete account" — is refused by type, as it always was. What the escalation
+        # still buys is what it should: `to_domain_action` gives the action a real
+        # idempotency strategy and a verification strategy.
         return PolicyDecision.deny(
             PolicyViolation.DESTRUCTIVE_NOT_ALLOWED,
             f"{action.type} has side effects and this policy forbids them",

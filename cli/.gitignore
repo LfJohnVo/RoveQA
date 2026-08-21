@@ -1,5 +1,8 @@
 dist/
-contracts/
+# Anchored: unanchored, this also matched `src/contracts/`, and a source file the
+# CLI cannot build without was silently never committed. What belongs here is the
+# build-time copy of the published schemas, nothing else.
+/contracts/
 node_modules/
 # Packed tarballs: a build output, produced by `npm pack` for install drills.
 *.tgz

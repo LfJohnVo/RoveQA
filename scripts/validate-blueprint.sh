@@ -57,8 +57,25 @@ for f in "${required[@]}"; do
   test -f "$f" || { echo "missing: $f" >&2; exit 1; }
 done
 
-phase_count="$(find plans -maxdepth 1 -type f -name 'phase-[0-9][0-9]-*.md' | wc -l | tr -d ' ')"
-test "$phase_count" = "15" || { echo "expected 15 phase plans (00-14), found $phase_count" >&2; exit 1; }
+# The property worth guarding is contiguity, not a total: a plan numbered 19 beside a
+# missing 18 means a phase was skipped or deleted, while a hardcoded count has to be
+# edited on every phase — and a check that taxes the work it guards gets deleted.
+phase_files="$(find plans -maxdepth 1 -type f -name 'phase-[0-9][0-9]-*.md' | sort)"
+phase_numbers="$(printf '%s\n' "$phase_files" | sed -E 's|.*/phase-([0-9][0-9])-.*|\1|')"
+phase_count="$(printf '%s\n' "$phase_numbers" | grep -c '[0-9]')"
+
+test "$phase_count" -ge 15 || {
+  echo "expected at least the 15 closed phases, found $phase_count" >&2
+  exit 1
+}
+
+expected="$(seq -w 0 "$((phase_count - 1))")"
+test "$phase_numbers" = "$expected" || {
+  echo "phase plans are not contiguous from 00" >&2
+  echo "found:    $(printf '%s ' $phase_numbers)" >&2
+  echo "expected: $(printf '%s ' $expected)" >&2
+  exit 1
+}
 
 for schema in contracts/*.schema.json; do
   python -m json.tool "$schema" >/dev/null

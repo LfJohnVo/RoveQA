@@ -11,6 +11,7 @@ from agentic_qa.domain.exploration.state import MAX_AFFORDANCES
 from agentic_qa.infrastructure.browser.playwright.affordances import (
     MAX_SNAPSHOT_LINES,
     parse_affordances,
+    parse_text_content,
 )
 
 SNAPSHOT = """
@@ -123,3 +124,108 @@ class TestResolvingLinkDestinations:
         found = parse_affordances('- link "First"\n- /url: /second', base_url="https://app.test/")
 
         assert found[0].url is None
+
+
+class TestQuotedValues:
+    """Playwright quotes a value that would otherwise read as syntax.
+
+    Keeping the quotes turned every anchor link into a path no browser can open. Three
+    of forty-one affordances on a real marketing page came out this way, and all three
+    were the in-page navigation.
+    """
+
+    def test_an_anchor_href_resolves_to_a_navigable_url(self) -> None:
+        found = parse_affordances(
+            '- link "Contact":\n  - /url: "#contact"', base_url="https://app.test/home"
+        )
+
+        assert found[0].url == "https://app.test/home#contact"
+
+    def test_a_bare_fragment_stays_on_the_page(self) -> None:
+        found = parse_affordances(
+            '- link "Services":\n  - /url: "#"', base_url="https://app.test/home"
+        )
+
+        assert found[0].url is not None
+        assert '"' not in found[0].url
+
+    def test_a_quoted_text_node_loses_its_quotes(self) -> None:
+        # A criterion looking for `@2026 Acme` must match. A deterministic criterion
+        # that fails is the one verdict that accuses the product.
+        assert parse_text_content('- text: "@2026 Acme - All rights reserved"') == (
+            "@2026 Acme - All rights reserved",
+        )
+
+
+class TestDisabledControls:
+    def test_a_disabled_control_says_so(self) -> None:
+        found = parse_affordances('- button "Sign in" [disabled]')
+
+        assert found[0].disabled is True
+
+    def test_an_enabled_control_is_the_default(self) -> None:
+        found = parse_affordances('- button "Sign in"')
+
+        assert found[0].disabled is False
+
+    def test_a_disabled_control_is_not_takeable(self) -> None:
+        # The frontier must not spend an action on something the page already refused.
+        found = parse_affordances('- button "Sign in" [disabled]')
+
+        assert found[0].is_clickable is False
+
+    def test_attaching_a_url_does_not_re_enable_it(self) -> None:
+        found = parse_affordances(
+            '- link "Checkout" [disabled]:\n  - /url: /checkout', base_url="https://app.test/"
+        )
+
+        assert found[0].url == "https://app.test/checkout"
+        assert found[0].disabled is True
+
+    def test_other_attributes_do_not_disable_anything(self) -> None:
+        found = parse_affordances('- checkbox "Remember me" [checked]')
+
+        assert found[0].disabled is False
+
+    def test_the_state_stays_out_of_the_key(self) -> None:
+        # `key` feeds `state_signature`. Putting a transient state in it would give
+        # every stored baseline and memory fingerprint a new meaning overnight, and
+        # nothing would fail to say so. A control that greys out is the same control.
+        enabled = parse_affordances('- button "Sign in"')[0]
+        disabled = parse_affordances('- button "Sign in" [disabled]')[0]
+
+        assert enabled.key == disabled.key
+
+
+class TestPageText:
+    """What the page says, which used to be discarded by the method that captured it."""
+
+    def test_it_reads_headings_paragraphs_and_text(self) -> None:
+        assert parse_text_content(SNAPSHOT) == ("Records", "Copyright 2026")
+
+    def test_a_control_name_is_not_page_text(self) -> None:
+        # The two readings answer different questions and stay in separate sections.
+        assert "New record" not in parse_text_content(SNAPSHOT)
+
+    def test_empty_nodes_are_layout_not_content(self) -> None:
+        assert parse_text_content("- paragraph:\n- text: \n- paragraph: Real") == ("Real",)
+
+    def test_repetition_is_collapsed(self) -> None:
+        assert parse_text_content("- paragraph: Same\n- paragraph: Same") == ("Same",)
+
+    def test_it_is_bounded_by_characters(self) -> None:
+        snapshot = "\n".join(f"- paragraph: line number {index}" for index in range(500))
+
+        content = parse_text_content(snapshot, max_chars=100)
+
+        assert sum(len(line) for line in content) <= 100 + len("… [truncated]")
+
+    def test_truncation_is_marked(self) -> None:
+        # A planner told a partial page is complete concludes the page lacks what it
+        # was looking for.
+        snapshot = "\n".join(f"- paragraph: line number {index}" for index in range(500))
+
+        assert parse_text_content(snapshot, max_chars=50)[-1] == "… [truncated]"
+
+    def test_an_empty_snapshot_says_nothing(self) -> None:
+        assert parse_text_content("") == ()

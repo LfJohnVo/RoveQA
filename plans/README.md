@@ -17,3 +17,6 @@ Run exactly one phase at a time with `/implement-phase XX`.
 12 exploration/scheduling
 13 hardening
 14 release candidate
+15 agent reliability
+16 any site
+17 authenticated runs

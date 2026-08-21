@@ -23,7 +23,10 @@ from agentic_qa.bootstrap.settings import Settings
 from agentic_qa.domain.inference.tasks import InferenceBudget, ModelCapability
 from agentic_qa.infrastructure.agent.langgraph.checkpointer import open_checkpointer
 from agentic_qa.infrastructure.agent.langgraph.episode_runner import LangGraphEpisodeRunner
-from agentic_qa.infrastructure.browser.playwright.gateway import start_browser_session
+from agentic_qa.infrastructure.browser.playwright.gateway import (
+    DEFAULT_NAVIGATION_TIMEOUT_MS,
+    start_browser_session,
+)
 from agentic_qa.infrastructure.cache.redis.semaphores import RedisResourceSemaphore
 from agentic_qa.infrastructure.inference.airllm.gateway import AirLLMDeepAnalyst
 from agentic_qa.infrastructure.inference.router import ModelEndpoint, ModelRouter
@@ -112,7 +115,14 @@ def build_episode_runner(
 
     @asynccontextmanager
     async def browser_factory() -> AsyncIterator[BrowserGateway]:
-        session = await start_browser_session(headless=settings.browser_headless)
+        session = await start_browser_session(
+            headless=settings.browser_headless,
+            # `or` on purpose: an unset override means the adapter's own default, so the
+            # number lives in exactly one place instead of two that can drift.
+            navigation_timeout_ms=(
+                settings.browser_navigation_timeout_ms or DEFAULT_NAVIGATION_TIMEOUT_MS
+            ),
+        )
         try:
             yield session.gateway
         finally:

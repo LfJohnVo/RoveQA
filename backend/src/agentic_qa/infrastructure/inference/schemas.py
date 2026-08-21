@@ -9,11 +9,13 @@ cannot name a capability that does not exist (there is no `evaluate`, no
 `execute_script`).
 """
 
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
 
 from agentic_qa.domain.browser.actions import (
+    NEEDS_TARGET,
+    NEEDS_VALUE,
     READ_ONLY_ACTIONS,
     ActionTarget,
     BrowserAction,
@@ -23,6 +25,8 @@ from agentic_qa.domain.browser.actions import (
 
 
 class DecisionTarget(BaseModel):
+    """Semantic locator, for the actions that read one."""
+
     model_config = ConfigDict(extra="forbid")
 
     role: str | None = Field(default=None, max_length=50)
@@ -37,43 +41,45 @@ class DecisionTarget(BaseModel):
         )
 
 
-class BrowserDecision(BaseModel):
-    """One step the model proposes. `finished=true` means it proposes nothing."""
+class NavigationTarget(BaseModel):
+    """Where to navigate. `url` is required here because the domain requires it there."""
 
     model_config = ConfigDict(extra="forbid")
 
-    finished: bool = False
-    action_type: BrowserActionType | None = None
-    intent: str | None = Field(default=None, max_length=500)
-    target: DecisionTarget | None = None
-    value: str | None = Field(default=None, max_length=4000)
-    side_effect: bool = False
-    """The model's own read. It can only *raise* the safety level — see below."""
+    url: str = Field(max_length=2000)
+
+    def to_domain(self) -> ActionTarget:
+        return ActionTarget(url=self.url)
+
+
+class _DecisionBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
     rationale: str = Field(default="", max_length=2000)
     """Model-derived by definition; recorded, never treated as an observation."""
 
     def to_domain_action(self) -> BrowserAction | None:
-        """Build the typed action, letting domain invariants reject nonsense.
-
-        Nothing is coerced here: a decision missing what its action type requires
-        raises out of the domain rather than being patched into something plausible.
+        """Build the typed action, or None when the planner proposes nothing.
 
         Whether an action changes state is decided by its *type*, not by the model.
-        Anything outside the read-only set is treated as side-effecting even if the
-        model claimed otherwise, so a model cannot talk its way into an unverified
-        click on "Delete account". The flag only lets it go the other way — marking a
-        nominally read-only navigation as state-changing when it knows better.
+        Anything outside the read-only set is treated as side-effecting even if the model
+        claimed otherwise, so a model cannot talk its way into an unverified click on
+        "Delete account". The flag only lets it go the other way — marking a nominally
+        read-only action as state-changing when it knows better.
         """
-        if self.finished or self.action_type is None:
+        action_type = getattr(self, "action_type", None)
+        if action_type is None:
             return None
 
-        side_effect = self.side_effect or self.action_type not in READ_ONLY_ACTIONS
+        target = getattr(self, "target", None)
+        side_effect = bool(getattr(self, "side_effect", False)) or (
+            action_type not in READ_ONLY_ACTIONS
+        )
         return BrowserAction(
-            type=self.action_type,
-            intent=self.intent or f"perform {self.action_type}",
-            target=(self.target or DecisionTarget()).to_domain(),
-            value=self.value,
+            type=action_type,
+            intent=getattr(self, "intent", "") or f"perform {action_type}",
+            target=target.to_domain() if target is not None else ActionTarget(),
+            value=getattr(self, "value", None),
             side_effect=side_effect,
             idempotency_strategy=(
                 IdempotencyStrategy.VERIFY_BEFORE_RETRY
@@ -84,6 +90,85 @@ class BrowserDecision(BaseModel):
                 "verify the expected postcondition on the resulting page" if side_effect else None
             ),
         )
+
+
+class FinishedDecision(_DecisionBase):
+    """The planner proposes nothing further: the goal is already satisfied."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    finished: Literal[True]
+
+
+def _variant_for(action_type: BrowserActionType) -> type[_DecisionBase]:
+    """One model per action, with its requirements derived from the domain's own sets.
+
+    Generated rather than hand-written for the reason `prompts.py` renders those same
+    frozensets: a copy would drift, and the drift would be silent. A member added to
+    `NEEDS_VALUE` changes what the model is *able* to emit, in the same commit.
+    """
+    fields: dict[str, Any] = {
+        "finished": (Literal[False], False),
+        "action_type": (Literal[action_type], ...),
+        "intent": (str, Field(max_length=500)),
+        "side_effect": (bool, False),
+    }
+
+    # A target only exists on the actions that read one. `assert_text` used to accept a
+    # target its execution ignores, and that field is exactly where the literal landed.
+    if action_type is BrowserActionType.NAVIGATE:
+        fields["target"] = (NavigationTarget, ...)
+    elif action_type in NEEDS_TARGET:
+        fields["target"] = (DecisionTarget, ...)
+
+    if action_type in NEEDS_VALUE:
+        fields["value"] = (str, Field(max_length=4000))
+
+    return create_model(
+        f"{action_type.value.title().replace('_', '')}Decision",
+        __base__=_DecisionBase,
+        **fields,
+    )
+
+
+ACTION_VARIANTS: tuple[type[_DecisionBase], ...] = tuple(
+    _variant_for(action_type) for action_type in BrowserActionType
+)
+
+if TYPE_CHECKING:
+    # A static checker cannot name the members of a union assembled at import time, so it
+    # is given the common base instead — which is precisely the interface `BrowserDecision`
+    # exposes, so nothing is lost. Pydantic gets the real union, which is what constrains
+    # generation. What guards the set is a test: every member of `BrowserActionType` must
+    # have a variant, so an action added to the domain fails the suite rather than quietly
+    # becoming impossible to ask for.
+    _DecisionRoot = _DecisionBase
+else:
+    # `Union[...]` rather than `X | Y`: the members come from a tuple built at import
+    # time, and the operator form cannot be applied to one.
+    _DecisionRoot = Union[tuple([FinishedDecision, *ACTION_VARIANTS])]  # noqa: UP007
+
+
+class BrowserDecision(RootModel[_DecisionRoot]):
+    """One step the planner proposes, as a union the server can actually enforce.
+
+    The old shape was one flat object whose every field was optional, so
+    `required` came back empty and `response_format: json_schema` had nothing to
+    hold the model to. The rule that `assert_text` needs a `value` lived only as
+    prose in the prompt and as a rejection in the domain — after a model call had
+    already been spent.
+
+    A union makes the invalid combination unrepresentable rather than refused. The
+    domain still validates: this narrows what can be *asked for*, and
+    `BrowserAction` remains the authority on what is legal.
+    """
+
+    @property
+    def rationale(self) -> str:
+        return self.root.rationale
+
+    def to_domain_action(self) -> BrowserAction | None:
+        return self.root.to_domain_action()
 
 
 class ExtractionResult(BaseModel):

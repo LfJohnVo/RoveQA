@@ -72,6 +72,28 @@ services:
       timeout: 5s
       retries: 10
 
+  # Schema before anything reads it. `docker compose up -d` used to leave every service
+  # healthy and the API answering 500 on its first real request: nobody had run Alembic,
+  # and `/health` said `ok` because it does not touch a table. The symptom named neither
+  # the cause nor the fix, so the five-minute path in the README was a lie by omission.
+  #
+  # One shot, then gone. `api` and `worker` wait for it to *succeed*, which is what makes
+  # a fresh clone correct by construction rather than by remembering `make migrate`.
+  migrate:
+    build:
+      context: ./backend
+      target: dev
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@postgres:5432/${POSTGRES_DB:-agentic_qa}
+    volumes:
+      - ./backend/alembic:/app/alembic:ro
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build:
       context: ./backend
@@ -101,6 +123,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       temporal:
@@ -156,6 +180,8 @@ services:
       # The references live in PostgreSQL (docs/11); this is where the bytes live.
       - artifact_data:/data/runs
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       temporal:
@@ -285,6 +311,37 @@ services:
       - cli_node_modules:/app/node_modules
       - cli_pnpm_store:/pnpm
     command: ["sh", "-c", "corepack enable pnpm && pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test"]
+
+  # The bundled target application, served so the *worker* can reach it. The browser
+  # tests run it in-process, which is right for them and useless for a baseline: a run
+  # happens in a container, and `127.0.0.1` there is not this.
+  #
+  # Behind a profile because nothing in normal operation needs it, and it deliberately
+  # serves a page whose `load` event never fires — `/real-web`, the hazards a public page
+  # carries. A fixture that answers instantly and completely is the environment in which
+  # two shipped defects were invisible.
+  target-app:
+    build:
+      context: ./backend
+      target: dev
+    profiles: ["baseline"]
+    command:
+      - "uvicorn"
+      - "--factory"
+      - "tests.target_app.app:create_target_app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+    volumes:
+      - ./backend/tests:/app/tests
+    ports:
+      - "8090:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   # Heavy inference stays behind profiles so CPU-only development works.
   # The model tag is configuration, not a constant: it depends on the GPU on the host

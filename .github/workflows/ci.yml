@@ -1,0 +1,122 @@
+# The gate, on a runner.
+#
+# It mirrors `scripts/ci-local.sh` deliberately rather than re-deriving the checks: one
+# definition of green means a red pipeline reproduces with one command on a laptop, and a
+# green laptop is not a different claim from a green pipeline.
+#
+# What it does not do is run a model. The real-model tests skip themselves unless
+# VLLM_BASE_URL and VLLM_MODEL are set, because a runner has no GPU and a suite that
+# silently needs one goes red for the wrong reason.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A second push supersedes the first: nobody needs the verdict on a commit that has
+  # already been replaced.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    name: compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate the compose file
+        run: docker compose config --quiet
+
+      - name: Blueprint
+        run: docker compose --profile gates run --rm blueprint-check
+
+  backend:
+    name: backend (ruff, mypy, migrations, pytest)
+    runs-on: ubuntu-latest
+    # The suite talks to real PostgreSQL, Redis, Temporal and FalkorDB. Doubles here
+    # would test the doubles: the durability and graph tests are about what those
+    # services actually do under a restart.
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Start the dependencies
+        run: docker compose up -d --wait postgres redis temporal falkordb
+
+      - name: Build the toolchain image
+        run: docker compose --profile gates build backend-tests
+
+      - name: Lint, type-check, migrate, test
+        run: |
+          docker compose --profile gates run --rm backend-tests sh -c '
+            set -e
+            ruff check .
+            ruff format --check .
+            mypy
+            alembic upgrade head
+            alembic check
+            # The suite owns its own database and is migrated the same way. Reset first:
+            # pytest falls back to create_all when the schema is missing, which leaves
+            # tables no migration created and makes the upgrade below fail on a table it
+            # is about to create.
+            python scripts/reset_test_schema.py
+            POSTGRES_DSN="$POSTGRES_TEST_DSN" alembic upgrade head
+            pytest -q
+          '
+
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --tail=200 postgres redis temporal falkordb
+
+  cli:
+    name: cli (eslint, typecheck, contract tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker compose --profile gates run --rm cli-tests
+
+  frontend:
+    name: frontend (eslint, typecheck, vitest, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker compose --profile gates run --rm frontend-tests
+
+  migration-downgrade:
+    name: migrations reverse
+    runs-on: ubuntu-latest
+    # Its own job because it proves a different property: that the newest migration can
+    # be walked back. A chain that only goes forwards is a chain you cannot back out of.
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker compose up -d --wait postgres
+      - run: docker compose --profile gates build backend-tests
+      - name: Up from empty, then down one
+        run: |
+          docker compose --profile gates run --rm backend-tests sh -c '
+            set -e
+            alembic upgrade head
+            alembic downgrade -1
+            alembic upgrade head
+          '
+
+  gate:
+    name: all green
+    # A single required check to protect the branch with, so adding a job above does not
+    # mean editing branch protection.
+    needs: [compose, backend, cli, frontend, migration-downgrade]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if anything upstream failed
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "one or more gates are red"
+            exit 1
+          fi
+          echo "ci: all green"

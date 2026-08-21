@@ -350,7 +350,7 @@ class TestThePlannerIsToldWhatEachActionNeeds:
         # produced them, and this wording changes what the planner proposes.
         from agentic_qa.infrastructure.inference.prompts import PLANNING_PROMPT_VERSION
 
-        assert PLANNING_PROMPT_VERSION == "planner.v3"
+        assert PLANNING_PROMPT_VERSION == "planner.v5"
 
 
 class TestThePlannerIsShownThePage:
@@ -509,3 +509,81 @@ class TestARefusedProposalIsNotTheEndOfTheRun:
 
         assert planner.calls <= MAX_RECOVERY_ATTEMPTS + 1
         assert verdict_of(final) is not Verdict.PASSED
+
+
+class TestThePlannerIsToldWhatCountsAsDone:
+    """Phase 15, slices 6 and 9.
+
+    The plan's literals reached only the final verification node, and the one frozenset
+    that would have stopped the planner over-declaring `side_effect` was the one the
+    prompt did not render. Both are information the process held and did not hand over.
+    """
+
+    def test_the_prompt_names_the_read_only_actions(self) -> None:
+        from agentic_qa.domain.browser.actions import READ_ONLY_ACTIONS
+        from agentic_qa.infrastructure.inference.prompts import _READ_ONLY_ACTIONS, SYSTEM_PROMPT
+
+        rendered = SYSTEM_PROMPT
+        for action in READ_ONLY_ACTIONS:
+            assert action.value in _READ_ONLY_ACTIONS
+        assert "must not be marked side_effect" in rendered
+
+    def test_a_criterion_with_a_literal_arrives_with_it(self) -> None:
+        from agentic_qa.application.ports.models import PlanCriterion, PlanningRequest
+        from agentic_qa.infrastructure.inference.prompts import build_planning_prompt
+
+        prompt = build_planning_prompt(
+            PlanningRequest(
+                goal="see the screen",
+                observation="url: https://app.test/",
+                criteria=(
+                    PlanCriterion(
+                        criterion_id="ac-title",
+                        description="the screen shows its title",
+                        expected_text="Sign in",
+                    ),
+                ),
+            )
+        )
+
+        assert "<acceptance_criteria>" in prompt
+        assert "ac-title" in prompt
+        assert '"Sign in"' in prompt
+
+    def test_a_criterion_without_a_literal_says_so(self) -> None:
+        # Otherwise the planner invents one, and an invented literal asserted against
+        # the page is a deterministic check of something nobody asked for.
+        from agentic_qa.application.ports.models import PlanCriterion, PlanningRequest
+        from agentic_qa.infrastructure.inference.prompts import build_planning_prompt
+
+        prompt = build_planning_prompt(
+            PlanningRequest(
+                goal="see the screen",
+                observation="url: https://app.test/",
+                criteria=(
+                    PlanCriterion(criterion_id="ac-vibe", description="it feels responsive"),
+                ),
+            )
+        )
+
+        assert "not assertable" in prompt
+
+    def test_no_criteria_means_no_section(self) -> None:
+        from agentic_qa.application.ports.models import PlanningRequest
+        from agentic_qa.infrastructure.inference.prompts import build_planning_prompt
+
+        prompt = build_planning_prompt(
+            PlanningRequest(goal="explore", observation="url: https://app.test/")
+        )
+
+        assert "<acceptance_criteria>" not in prompt
+
+
+def test_the_prompt_says_a_link_with_a_url_can_be_navigated() -> None:
+    """Measured: a read-only run died on `policy denied click` while the link it wanted
+    was listed with its url. `Affordance.url` is carried for exactly this reason — a link
+    can be followed by navigating, which is read-only, while clicking it is a write — and
+    the planner was never told."""
+    from agentic_qa.infrastructure.inference.prompts import SYSTEM_PROMPT
+
+    assert "can be reached with navigate" in SYSTEM_PROMPT

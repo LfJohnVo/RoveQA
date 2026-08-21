@@ -23,7 +23,7 @@ from agentic_qa.application.services.guarded_browser import (
 from agentic_qa.domain.browser.actions import BrowserAction
 from agentic_qa.domain.browser.policy_guard import PolicyDecision, PolicyViolation
 from agentic_qa.domain.errors import InvalidEntityError
-from agentic_qa.domain.exploration.state import PageState
+from agentic_qa.domain.exploration.state import Affordance, PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.test_plan import PlanStep, PlanStepType
 from agentic_qa.domain.qa.verification import (
@@ -59,6 +59,18 @@ class PageDouble:
 
     async def aclose(self) -> None:
         return None
+
+
+def permissive_policy() -> RunPolicy:
+    """Enough policy to let a deterministic check run, and nothing more."""
+    return RunPolicy(
+        policy_id="policy-1",
+        project_id="project-1",
+        allowed_origins=("http://target.test",),
+        max_duration_seconds=60,
+        max_actions=10,
+        max_model_calls=10,
+    )
 
 
 def assertion(criterion_id: str, description: str) -> PlanStep:
@@ -270,3 +282,136 @@ def test_a_deterministic_result_cannot_claim_a_model_invocation() -> None:
             model_derived=False,
             model_invocation_id="inv-1",
         )
+
+
+class TestASightingEarlierInTheRun:
+    """Phase 15, slice 8 — ADR 0013.
+
+    A criterion is checked on every observation, because a `verification_hint` is a
+    substring and costs no inference. Two failures had the same cause: a story spanning
+    pages ended on the last of them, so a literal shown on page two came back `not_met`
+    — the one verdict that accuses the product — and a run that stopped early reported
+    "did not reach this criterion" for criteria it had visibly already satisfied.
+    """
+
+    async def test_a_literal_gone_from_the_final_page_is_still_met(self) -> None:
+        # The multi-page case. The page the run ended on no longer shows it.
+        page = PageDouble(text="Step three of three")
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-step-one", "step one was reached"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-step-one": "Step one of three"},
+            observed_earlier={"ac-step-one": "step 1 at http://target.test/one"},
+        )
+
+        assert results[0].outcome is CriterionOutcome.MET
+        assert "step 1" in results[0].observation
+        assert results[0].model_derived is False
+
+    async def test_a_sighting_cannot_manufacture_a_failure(self) -> None:
+        # The one direction that matters. Nothing added here may accuse the product.
+        page = PageDouble(text="Order #1234 confirmed")
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-done", "the order is confirmed"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-done": "Order #1234 confirmed"},
+            observed_earlier={},
+        )
+
+        assert results[0].outcome is CriterionOutcome.MET
+
+    async def test_a_criterion_never_seen_is_still_unreached(self) -> None:
+        page = PageDouble()
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-never", "something that never happened"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-never": "never rendered"},
+            goal_failure="the run reached its limit of 25 model call(s)",
+            goal_failure_kind=FailureKind.AGENT_BUDGET,
+            observed_earlier={},
+        )
+
+        assert results[0].outcome is CriterionOutcome.NOT_MET
+        assert results[0].failure_kind is FailureKind.AGENT_BUDGET
+
+    async def test_a_stopped_run_still_reports_what_it_saw(self) -> None:
+        # It ran out of budget later, which says nothing about a criterion it watched
+        # come true on the way.
+        page = PageDouble()
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-title", "the screen showed its title"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-title": "Sign in"},
+            goal_failure="the run reached its limit of 25 model call(s)",
+            goal_failure_kind=FailureKind.AGENT_BUDGET,
+            observed_earlier={"ac-title": "step 1 at http://target.test/login"},
+        )
+
+        assert results[0].outcome is CriterionOutcome.MET
+        assert results[0].failure_kind is None
+        assert "http://target.test/login" in results[0].observation
+
+    async def test_the_deterministic_check_still_wins_when_it_passes(self) -> None:
+        page = PageDouble(text="Order #1234 confirmed")
+        browser = GuardedBrowserGateway(page, permissive_policy())
+
+        results = await verify_criteria(
+            (assertion("ac-done", "the order is confirmed"),),
+            browser=browser,
+            model=ScriptedModelGateway([]),
+            hints={"ac-done": "Order #1234 confirmed"},
+            observed_earlier={"ac-done": "step 2 at http://target.test/cart"},
+        )
+
+        # Checked live, so the observation names the page rather than the sighting.
+        assert results[0].outcome is CriterionOutcome.MET
+        assert "contains" in results[0].observation
+
+
+class TestASightingCannotComeFromTheUrl:
+    """Raised in review, and it was real.
+
+    Sightings were matched against `PageState.describe()`, which opens with `url:` and
+    `title:`. A criterion whose literal appeared only in the address — "records" in
+    `/records` — would have been recorded as satisfied by a page that never said it, and
+    then reported `met`. The deterministic check runs against `body.inner_text()`, which
+    contains neither, so the two answers would have diverged with the optimistic one
+    winning.
+    """
+
+    def test_the_url_is_not_page_text(self) -> None:
+        page = PageState(
+            url="http://target.test/records",
+            title="Records",
+            content=("Nothing here yet.",),
+        )
+
+        assert "records" not in page.visible_text
+        assert "Records" not in page.visible_text
+
+    def test_a_control_name_is_page_text(self) -> None:
+        # A heading rendered inside a button is exactly the kind of literal a criterion
+        # names, and `inner_text()` would find it.
+        page = PageState(
+            url="http://target.test/records",
+            affordances=(Affordance(role="button", name="Create record"),),
+        )
+
+        assert "Create record" in page.visible_text
+
+    def test_the_content_is_page_text(self) -> None:
+        page = PageState(url="http://target.test/", content=("Order #1234 confirmed",))
+
+        assert "Order #1234 confirmed" in page.visible_text

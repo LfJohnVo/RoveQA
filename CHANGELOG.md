@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased — Phase 15, agent reliability
+
+El agente ya puede apuntarse a **cualquier URL** y verificar una historia contra ella. Una
+historia de cuatro criterios contra un sitio público que nadie usó para desarrollar esto
+pasa de `inconclusive` a **`passed`** con el mismo modelo 4B cuantizado; el detalle y los
+números están en `docs/status/AGENT_FINDINGS.md`.
+
+### Corregido — un diagnóstico, no sólo un defecto
+
+La limitación que este CHANGELOG y el README documentaban —«ninguna historia llega a
+`passed`, un modelo mayor es la variable»— era un diagnóstico equivocado. El planner
+elegía la acción correcta con el literal correcto y lo ponía en un campo que la acción no
+lee; nada en el contrato decía cuál era el campo. Diez arreglos, ninguno de ellos un
+cambio de modelo.
+
+### Cambios que se notan
+
+- **El agente puede abrir un sitio real.** La navegación tiene su propio presupuesto y
+  espera `domcontentloaded`, no `load` (ADR 0011). Una sola constante de 10 s servía para
+  «pulsa este botón» y «carga este sitio web»; en un sitio público medido, `load` tardaba
+  23,1 s y el DOM estaba listo en 0,3.
+- **Una acción inválida ya no se puede generar.** El schema de decisión es una unión con
+  una variante por acción, generada desde los frozensets del dominio (ADR 0012).
+- **La observación lleva el texto de la página**, no sólo los controles.
+- **El planner recibe los criterios de aceptación.**
+- **Los criterios deterministas se comprueban en cada observación**, así que una historia
+  que recorre varias páginas puede cumplirse (ADR 0013). Un avistamiento sólo puede
+  convertir `not_met` en `met`, nunca al revés: ninguna ruta nueva puede acusar al
+  producto.
+- **Una policy de sólo lectura puede navegar** (ADR 0014). El tipo de la acción decide lo
+  prohibido; `click` sigue denegado.
+- **`docker compose up -d` deja el stack usable.** Un servicio `migrate` de un disparo, y
+  `api`/`worker` esperan a que termine.
+- **Los enlaces de ancla ya no se corrompen** al parsear el snapshot.
+- **Un fallo diagnosticable ya no se reporta como misterio**: un timeout de localización y
+  uno de navegación tienen tipos distintos, ninguno `null`.
+
+### Contratos
+
+`roveqa.run-report.v1` gana provenance de observación en un resultado de criterio —
+aditivo, sin cambio de versión. Un criterio acreditado por avistamiento dice dónde y
+cuándo se vio.
+
+### Pipelines
+
+`.github/workflows/ci.yml` reproduce `scripts/ci-local.sh` job por job, más un job que
+comprueba que la migración más nueva se puede deshacer. `contracts.yml` exige que un
+cambio en `contracts/` se declare en este archivo.
+
 ## v1.0.0-rc — 2026-08-20
 
 Primer candidato a release. RoveQA es una plataforma de QA agéntica, local-first y
