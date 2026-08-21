@@ -131,6 +131,22 @@ class Affordance:
     since nothing would fail. A control that greys out is the same control.
     """
 
+    filled: bool = False
+    """Whether the page showed something already in this control.
+
+    The snapshot has always said so — `textbox "Reference": BASELINE` — and dropping it
+    left an agent unable to tell a filled field from an empty one. Measured: it filled the
+    same field twenty-four times in a row, every call succeeding, until the budget ran out.
+    At temperature zero an unchanged observation gives an unchanged decision, forever.
+
+    The *fact*, never the value. A password field carries one, and an observation is
+    rendered into a prompt, stored in a state map and read by a person.
+
+    **Not part of `key`**, for the same reason `disabled` is not: a field with something in
+    it is the same field, and putting it in the signature would make every keystroke a new
+    state.
+    """
+
     @property
     def reached_by(self) -> str:
         """The action that takes this affordance, named the way the action set names it.
@@ -310,6 +326,9 @@ class PageState:
             # Said, not implied by absence. A planner that reads a disabled control as
             # available spends an action and a locator timeout finding out otherwise.
             + (" [disabled]" if affordance.disabled else "")
+            # Said, so an agent can tell a field it has already filled from one it has
+            # not. Without it the observation is identical before and after a `fill`.
+            + (" [already filled]" if affordance.filled else "")
             # The action that takes it, not just its address. "link: Records -> url" reads
             # as something to click, because that is what a link is everywhere else; the
             # url beside it was information the planner had and did not use. Naming the

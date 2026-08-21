@@ -54,7 +54,7 @@ purpose. They describe how a page is arranged, and including them would make a
 reflowed layout look like a new state while telling an explorer nothing it can act on.
 """
 
-_LINE = re.compile(r'^(\s*)-\s+([a-z]+)(?:\s+"([^"]*)")?((?:\s*\[[^\]]*\])*)')
+_LINE = re.compile(r'^(\s*)-\s+([a-z]+)(?:\s+"([^"]*)")?((?:\s*\[[^\]]*\])*)(.*)$')
 _URL_LINE = re.compile(r"^(\s*)-\s+/url:\s*(\S+)")
 _TEXT_LINE = re.compile(
     # A heading carries its level as a trailing attribute -- `[level=1]` -- so the
@@ -64,6 +64,15 @@ _TEXT_LINE = re.compile(
 )
 
 _DISABLED = re.compile(r"\[disabled\]")
+_HAS_VALUE = re.compile(r"^\s*:\s*\S")
+"""Whether the snapshot showed a value after the control's name.
+
+The snapshot writes `- textbox "Reference": BASELINE`, and the *fact* is what matters:
+an agent that cannot tell a filled field from an empty one fills the same field until
+its budget runs out. Twenty-four times, measured.
+
+The value itself is deliberately not read. A password field carries one, and an
+observation is rendered into a prompt, stored in a state map and read by a person."""
 
 TEXT_ROLES = frozenset({"heading", "paragraph", "text"})
 """Roles that carry what the page *says*, as opposed to what it offers.
@@ -140,8 +149,10 @@ def parse_affordances(snapshot: str, *, base_url: str = "") -> tuple[Affordance,
                         name=existing.name,
                         url=resolved,
                         # Carried over rather than defaulted: rebuilding the affordance
-                        # to attach its url must not quietly re-enable a disabled one.
+                        # to attach its url must not quietly re-enable a disabled one, or
+                        # forget that a field already has something in it.
                         disabled=existing.disabled,
+                        filled=existing.filled,
                     )
                 pending_key = None
                 continue
@@ -155,7 +166,10 @@ def parse_affordances(snapshot: str, *, base_url: str = "") -> tuple[Affordance,
             continue
 
         affordance = Affordance(
-            role=role, name=name, disabled=bool(_DISABLED.search(match.group(4) or ""))
+            role=role,
+            name=name,
+            disabled=bool(_DISABLED.search(match.group(4) or "")),
+            filled=bool(_HAS_VALUE.match(match.group(5) or "")),
         )
         # Keyed by the *normalised* key, so a table of a thousand rows collapses to the
         # handful of distinct things it actually offers before the cap is applied.

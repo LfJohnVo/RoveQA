@@ -181,7 +181,10 @@ Falta: nada de la fase. Cerrada.
 # Phase Status
 
 - Phases 00 – 15: **DONE**.
-- Phase 16 (`plans/phase-16-any-site.md`): **IN_PROGRESS** — slice 1 hecha.
+- Phase 16 (`plans/phase-16-any-site.md`): **IN_PROGRESS** — slices 1 y 5 hechas.
+  Runs con historia funcionan: 9 de 9 alcanzables pasan con `BASELINE_REPEATS=3`.
+  Pendiente: recorridos sin historia (R1), fallos observados en el reporte, y el
+  smoke contra sitios públicos reales.
 - Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar.
 
 # Last Stable State

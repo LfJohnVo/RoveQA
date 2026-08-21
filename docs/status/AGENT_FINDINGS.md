@@ -279,3 +279,85 @@ it is required work that also happens to be the diagnostic this needs.
 **after-a-form: the budget runs out.** A fill/fill/submit flow does not converge. Whether
 that is the observation, the history window or the model is not yet established, and
 guessing would be the n=1 mistake again.
+
+## Story-driven runs work
+
+`BASELINE_REPEATS=3`, nine reachable runs, every one of them:
+
+| shape | verdict | criteria |
+| --- | --- | --- |
+| one-page | **`passed` 3/3** | 6 / 6 |
+| multi-page | **`passed` 3/3** | 6 / 6 |
+| after-a-form | **`passed` 3/3** | 3 / 3 |
+| unreachable | `blocked` 3/3 | never `failed` |
+
+Three findings closed it, and R5 is why the last two could be found at all: a run that took
+twenty-five actions used to leave three events in the durable log, so there was nothing to
+read. Publishing the trace turned two guesses into two two-line diagnoses.
+
+### R5 — the run says what it did
+
+One event per action: type, intent, outcome, url, HTTP status, and the browser's own first
+line on failure. The URL is sanitised and there is no field for a typed value at all — a
+`fill` carries what was typed, and what was typed is the one thing in an action that can be
+a credential. The intent says what the step was for, which is what a diagnosis needs.
+
+Swallowed on failure, unlike the state map: a run whose trace could not be written still
+produced a verdict, and refusing to report the verdict because the audit of it failed would
+trade the answer for the record.
+
+### A7 — a refusal that carries the correction
+
+The trace said it in two lines:
+
+```text
+1 ok   navigate   go_to_home_page
+2 FAIL click      navigate_to_records_page
+       click has side effects and this policy forbids them
+```
+
+The intent was `navigate_to_records_page`. The agent knew where it wanted to go and was
+told only that it could not go that way. The element was on the page with its url, and the
+graph was holding the page.
+
+A refusal now names the action the policy *does* allow for the element the planner named —
+verified with the same guard that refused the original, never assumed. And such a refusal is
+no longer terminal. Ending on any refusal is what stops an agent hunting for a way around a
+policy, and that stance is right; but taking the path the policy allows is not hunting for a
+way around it, it is the policy's own answer. Bounded by `MAX_RECOVERY_ATTEMPTS` either way,
+so it cannot become probing under another name.
+
+multi-page went from 0/3 to 3/3.
+
+### A8 — a control that already has something in it
+
+The trace again, unmistakably: **twenty-four consecutive `fill` actions on the same field,
+every one succeeding.** The observation is identical before and after a `fill`, and at
+temperature zero an unchanged observation gives an unchanged decision — forever, until the
+budget runs out.
+
+The snapshot had always said it: `textbox "Reference": BASELINE`. `Affordance.filled` keeps
+the *fact* and never the value, because a password field carries one and an observation is
+rendered into a prompt, stored in a state map and read by a person. Out of the signature
+key, like `disabled`: a field with something in it is the same field.
+
+### And one defect in the harness itself
+
+With the loop broken, `after-a-form` still failed — on `assert_text: Created BASELINE`. Not
+the agent: the fixture refuses a duplicate reference and answers "already exists", so a
+fixed reference passes on the first run and never again. **The baseline was not
+idempotent**, and it had been quietly contaminating that shape for every measurement in this
+file before this one.
+
+The reference is now unique per attempt. A real QA run does not assume a clean database
+either, so unique data is the honest shape rather than a workaround for the fixture.
+
+## Still open
+
+Three of the four exit gates remain:
+
+- **traversals without a story** — R1, exploration still cannot leave `about:blank`;
+- **reports with analysis** — the observed failures are collected and do not reach the
+  report;
+- **a smoke against real public sites** — the only gate that catches a fix tuned to the
+  fixture.
