@@ -26,9 +26,18 @@ The **type** decides what is forbidden: an action outside `READ_ONLY_ACTIONS` ne
 gives an escalated action a `VERIFY_BEFORE_RETRY` strategy and a verification strategy —
 but it no longer converts a read-only action into a forbidden one.
 
-Nothing is loosened. `click`, `fill`, `select`, `check`, `uncheck` and `upload` are all
-outside the read-only set, and the domain refuses to *construct* one of them that claims
-to be harmless, so the guard never sees such an action in the first place.
+Nothing is loosened, and the chain is worth stating exactly because the first draft of
+this ADR described a refusal that never actually fires. `click`, `fill`, `select`, `check`,
+`uncheck` and `upload` are all outside the read-only set, and two independent things hold:
+
+- `schemas.py` **forces** `side_effect=True` for any action outside that set, so a model
+  cannot even express one of them as harmless — the flag is a one-way ratchet at the
+  adapter boundary;
+- `policy_guard` then denies by *type*, so the decision does not depend on the flag at all.
+
+`BrowserAction.__post_init__` does refuse to construct a write that declares itself
+harmless, and there is a test for it — but on the model path that state is unreachable,
+because the adapter already set the flag. It is a belt beside the braces, not the control.
 
 ## Consequences
 A read-only run can navigate, observe and verify text criteria — which is what

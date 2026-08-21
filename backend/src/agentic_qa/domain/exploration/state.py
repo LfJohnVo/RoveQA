@@ -215,10 +215,19 @@ class PageState:
         neither the URL nor the document title, so this has to agree with that or the two
         answers diverge and the optimistic one wins.
 
-        Control names are included because they are body text: a heading rendered inside a
-        button is exactly the kind of literal a criterion names.
+        Control names are **excluded**, and including them was wrong in the first version
+        of this. An accessible name can come from `aria-label`, and that value is nowhere
+        in `body.inner_text()` — an icon-only field labelled "Email" renders as an icon and
+        nothing else. Including names recreated the very false pass this property exists to
+        prevent. Measured on a real login form whose inputs do exactly that.
+
+        The cost is a literal rendered only inside a control — a button reading "Create
+        record" — producing no sighting. That is a lost optimisation, not a wrong answer:
+        the criterion falls through to the deterministic check, which is where it would
+        have been decided anyway. Losing precision is the safe direction; the other one
+        invents a pass.
         """
-        return "\n".join([*self.content, *(a.name for a in self.affordances)])
+        return chr(10).join(self.content)
 
     def describe(self) -> str:
         """The page as a planner can read it: where it is, what it says, what it offers.

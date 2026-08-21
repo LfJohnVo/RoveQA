@@ -180,8 +180,7 @@ review is only worth the record of what was done with it.
 | a rejected proposal was misclassified | a rejection never reaches the browser, so `last_action_type` still named whatever did. LangGraph keeps an untouched key, so a planner failure could be reported as `environment` for an earlier navigation. A rejection is now `model`, directly |
 | exploration lost its sightings | `observe` recorded them and `explore` did not, so a criterion satisfied on a page a crawl passed through was dropped |
 | recovery reset the navigation budget | `rebuild_context()` built a gateway without it, so a deployment that raised the timeout for a slow site silently got 45s back the first time a context died |
-| the text budget under-counted | it measured the raw string, not the `- …
-` each line renders as. Fifteen hundred short values passed a 6,000-character check and rendered past ten thousand |
+| the text budget under-counted | it measured the raw string, not the bullet and newline each line renders as. Fifteen hundred short values passed a 6,000-character check and rendered past ten thousand |
 | criteria 21–100 were withheld silently | verification evaluates all of them; the prompt showed twenty and said nothing. It now says how many it is not showing, like `folded_episodes` already did |
 | a test passed for the wrong reason | the missing-value test sent `target` even to actions that have no such field, so `extra="forbid"` could raise instead of the missing value |
 | ADR 0012 overclaimed | it said an invalid action was unrepresentable. `DecisionTarget` still permits `{}`, so a `NEEDS_TARGET` action can satisfy the schema and be refused by the domain. Corrected in the ADR, with the reason for not inflating the grammar to close it |

@@ -243,14 +243,19 @@ class TestWhatWentWrongIsReported:
     async def test_a_failed_request_is_reported(
         self, target: tuple[str, TargetState], session: BrowserSession
     ) -> None:
+        # The first version of this asserted `isinstance(..., tuple)`, which cannot fail.
+        # A request to a port nothing is listening on fails immediately and deterministically,
+        # which is what `/hang` -- designed never to answer -- could not provide.
         base, _ = target
-        await session.gateway.page.goto(f"{base}/real-web", wait_until="domcontentloaded")
+        await session.gateway.page.goto(f"{base}/", wait_until="domcontentloaded")
+        await session.gateway.page.evaluate(
+            "fetch('http://127.0.0.1:1/nothing-here').catch(() => {})"
+        )
+        await session.gateway.page.wait_for_timeout(500)
 
         problems = await session.gateway.page_problems()
 
-        # `/hang` never answers, and the page is closed before it does.
-        await session.gateway.page.goto("about:blank")
-        assert isinstance(problems.failed_requests, tuple)
+        assert any("127.0.0.1" in url for url in problems.failed_requests)
 
     async def test_a_healthy_page_reports_nothing(
         self, target: tuple[str, TargetState], session: BrowserSession

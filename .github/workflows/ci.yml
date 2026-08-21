@@ -30,6 +30,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The job token is written into .git/config by default, where any
+          # later step can read it. Nothing here pushes, so nothing here needs
+          # it to survive the checkout.
+          persist-credentials: false
       - name: Validate the compose file
         run: docker compose config --quiet
 
@@ -44,6 +49,11 @@ jobs:
     # services actually do under a restart.
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The job token is written into .git/config by default, where any
+          # later step can read it. Nothing here pushes, so nothing here needs
+          # it to survive the checkout.
+          persist-credentials: false
 
       - name: Start the dependencies
         run: docker compose up -d --wait postgres redis temporal falkordb
@@ -78,6 +88,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The job token is written into .git/config by default, where any
+          # later step can read it. Nothing here pushes, so nothing here needs
+          # it to survive the checkout.
+          persist-credentials: false
       - run: docker compose --profile gates run --rm cli-tests
 
   frontend:
@@ -85,6 +100,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The job token is written into .git/config by default, where any
+          # later step can read it. Nothing here pushes, so nothing here needs
+          # it to survive the checkout.
+          persist-credentials: false
       - run: docker compose --profile gates run --rm frontend-tests
 
   migration-downgrade:
@@ -94,6 +114,11 @@ jobs:
     # be walked back. A chain that only goes forwards is a chain you cannot back out of.
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The job token is written into .git/config by default, where any
+          # later step can read it. Nothing here pushes, so nothing here needs
+          # it to survive the checkout.
+          persist-credentials: false
       - run: docker compose up -d --wait postgres
       - run: docker compose --profile gates build backend-tests
       - name: Up from empty, then down one

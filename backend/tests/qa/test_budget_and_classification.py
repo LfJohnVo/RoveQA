@@ -521,12 +521,14 @@ class TestThePlannerIsToldWhatCountsAsDone:
 
     def test_the_prompt_names_the_read_only_actions(self) -> None:
         from agentic_qa.domain.browser.actions import READ_ONLY_ACTIONS
-        from agentic_qa.infrastructure.inference.prompts import _READ_ONLY_ACTIONS, SYSTEM_PROMPT
+        from agentic_qa.infrastructure.inference.prompts import SYSTEM_PROMPT
 
-        rendered = SYSTEM_PROMPT
+        # Asserting a frozenset member is in the string built from that frozenset is
+        # tautological -- raised in review. What matters is that each one reaches the
+        # planner, so the assertion is against the prompt the planner receives.
         for action in READ_ONLY_ACTIONS:
-            assert action.value in _READ_ONLY_ACTIONS
-        assert "must not be marked side_effect" in rendered
+            assert action.value in SYSTEM_PROMPT, f"{action.value} is read-only, unsaid"
+        assert "must not be marked side_effect" in SYSTEM_PROMPT
 
     def test_a_criterion_with_a_literal_arrives_with_it(self) -> None:
         from agentic_qa.application.ports.models import PlanCriterion, PlanningRequest
