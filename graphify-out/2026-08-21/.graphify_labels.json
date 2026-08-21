@@ -464,8 +464,5 @@
   "462": "plan_id",
   "463": "project_id",
   "464": "read_contracts",
-  "465": "valid_from",
-  "466": "@types/react",
-  "467": "@types/react-dom",
-  "468": "init-test-db.sql"
+  "465": "valid_from"
 }
