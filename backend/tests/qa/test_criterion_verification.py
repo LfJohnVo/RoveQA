@@ -429,3 +429,47 @@ class TestASightingCannotComeFromTheUrl:
         page = PageState(url="http://target.test/", content=("Order #1234 confirmed",))
 
         assert "Order #1234 confirmed" in page.visible_text
+
+
+class TestASightingReadsTheSameSourceAsTheCheck:
+    """Reconstructing "what the page says" from the snapshot got it wrong twice.
+
+    First by including the url, so a criterion for "records" matched `/records`. Then by
+    including accessible names, so a criterion for "Email" matched an `aria-label` that
+    renders as an icon. Both produced `met` for a literal `assert_text` would have failed.
+
+    `body_text` is the string `assert_text` reads. One source, so the two answers cannot
+    disagree — which removes the class of bug rather than a third instance of it.
+    """
+
+    def test_the_rendered_text_is_what_a_sighting_matches(self) -> None:
+        page = PageState(
+            url="http://target.test/records",
+            body_text="Records\nReference\nName\nCreate record",
+            content=("Records", "Reference", "Name"),
+        )
+
+        # In the rendered text but not in the accessible tree's text nodes: a button label.
+        assert "Create record" in page.visible_text
+
+    def test_the_url_is_still_not_page_text(self) -> None:
+        page = PageState(url="http://target.test/records", body_text="Nothing here yet.")
+
+        assert "records" not in page.visible_text
+
+    def test_an_aria_label_is_still_not_page_text(self) -> None:
+        # The icon-only field. Its accessible name is "Email"; the page renders an icon.
+        page = PageState(
+            url="http://target.test/login",
+            body_text="Sign in\nmail\nlock",
+            affordances=(Affordance(role="textbox", name="Email"),),
+        )
+
+        assert "Email" not in page.visible_text
+
+    def test_the_snapshot_text_is_the_fallback(self) -> None:
+        # For a PageState built without a live browser. Narrower than the real thing, and
+        # narrow is the safe direction.
+        page = PageState(url="http://target.test/", content=("Order #1234 confirmed",))
+
+        assert "Order #1234 confirmed" in page.visible_text

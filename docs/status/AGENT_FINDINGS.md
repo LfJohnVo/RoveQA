@@ -226,3 +226,56 @@ It is not this branch's doing: no change here touched redirect handling. Closing
 adding request interception to the gateway, which is a design decision about where the
 fence lives and needs an ADR. It belongs at the top of Phase 16, which is already the phase
 that teaches the gateway about HTTP responses.
+
+## Measured again, with three repeats
+
+The earlier table in this file was one run per shape. That is not enough to tell a cause
+from variance, and it misled me: an `after-a-form` pass at n=1 looked like a fix working and
+disappeared at n=3. Recorded here because the mistake is the kind this project exists to
+prevent.
+
+`BASELINE_REPEATS=3`, after the observation changes below:
+
+| shape | verdict | criteria met | cause |
+| --- | --- | --- | --- |
+| one-page | **`passed` 3/3** | 6 / 6 | — |
+| multi-page | `blocked` 3/3 | 3 / 6 | `policy` — a click denied under read-only |
+| after-a-form | `blocked` 3/3 | 0 / 3 | `agent_budget` |
+| unreachable | `blocked` 3/3 | 0 / 3 | never `failed` |
+
+Consistent, which is what n=3 buys: both remaining failures are causes, not noise.
+
+### What changed the observation
+
+**Each element now names the action that takes it.** `link: Records -> url` read as
+something to click, because that is what a link is everywhere else, and the url beside it
+was information the planner had and did not use. The rule already existed — in
+`exploration_action`, whose docstring says a link whose destination the page gave is
+followed by navigating, which is read-only — but only the frontier knew it. It now lives on
+`Affordance.reached_by`, which both the frontier and the observation read, so they cannot
+disagree.
+
+A textbox was worse than unhelpful: labelled `click`. It is filled. `ACTION_FOR_ROLE` maps
+each role to the action that operates it, in the action set's own vocabulary.
+
+**A sighting reads the same source the check reads.** Reconstructing "what the page says"
+from the accessible tree got it wrong twice — once by including the url, once by including
+accessible names that come from `aria-label` and render as icons. Both produced a criterion
+reported `met` that `assert_text` would have failed. `PageState.body_text` is the string
+`assert_text` reads, so the two answers come from one source and the class of bug is gone
+rather than its third instance.
+
+That also fixed a blind spot the second attempt had introduced: a criterion whose literal
+is a button label — "Create record" — is genuinely rendered text, and excluding all control
+names had made it unmatchable.
+
+### The two remaining blockers
+
+**multi-page: a click is denied under read-only.** Which element is not yet known, and the
+reason it is not known is defect R5: the durable log records three events for a run that
+took twenty-five actions, so there is no trace to read. R5 is Phase 16 slice 5 and is next —
+it is required work that also happens to be the diagnostic this needs.
+
+**after-a-form: the budget runs out.** A fill/fill/submit flow does not converge. Whether
+that is the observation, the history window or the model is not yet established, and
+guessing would be the n=1 mistake again.
