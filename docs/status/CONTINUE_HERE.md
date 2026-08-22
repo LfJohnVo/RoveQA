@@ -4,7 +4,7 @@ Written for whoever picks this up next, on a different machine, with no memory o
 session that produced it. Read this before `HANDOFF.md`: that file records what each phase
 closed, this one records where the work actually stands and what to do next.
 
-Last touched: 2026-08-21. Branch: `phase-16-slice-2`.
+Last touched: 2026-08-22. Branch: `phase-16-slice-2`. Nothing pushed to any remote.
 
 ---
 
@@ -85,7 +85,52 @@ structural here rather than a number that came out at zero.
 3. **Every healthy run showed a red alert** — a passing run has no failure context, the
    server says 404, and the UI called it an error.
 
-What is left is slices, not gates — see below for the two the smoke made concrete.
+### The baseline, measured twice (2026-08-22, `scripts/agent-baseline.sh`)
+
+Six shapes, 3 repeats each, the real model, zero timeouts. Two fixes landed between the
+two columns and both are the same fix: the process knew something and did not tell the
+part that decides.
+
+| shape | before | after |
+| --- | --- | --- |
+| `one-page` | 3 passed, 26 s | 3 passed, **6 s** |
+| `multi-page` | 3 passed, 26 s | 3 passed, **10 s** |
+| `after-a-form` | 1 passed / 2 blocked, 42 s | **3 passed**, **11 s** |
+| `unreachable` | 3 blocked, 32 s | 3 blocked, **6 s** |
+| `sweep-only` | 3 passed, 5 s | 3 passed, 5 s |
+| `story-and-sweep` | 3 passed, 5 s | 3 passed, 6 s |
+
+`reachable_passed` went 13/15 → **15/15**, no criterion lost. The two shapes that already
+made no model calls did not move, which is the whole reading: what cost time was
+inference nobody needed. `PERFORMANCE_PROFILE.md` has both action logs.
+
+1. A planner invented a form field the page does not have and asked for it **three
+   identical times**, ten seconds of locator timeout each. `PlanningRequest.failed_targets`
+   now carries what did not resolve, rendered as `<targets_that_did_not_work>`.
+2. With that fixed, the same log showed the bigger waste: the criterion was asserted at
+   action 5 and **twenty more times** after that, until the budget ran out. `criteria_seen`
+   had known since step 0. `story_is_done` ends the episode once every criterion a
+   substring can answer has been seen.
+
+### The console can reach a report again
+
+`GET /api/v1/projects/{id}/runs` and a runs table on the project page. Before this, a run
+was reachable only while the tab that started it stayed open — everything from a schedule,
+the CLI, or yesterday had a report in the database and no route to it. Verified against
+the 22 real runs this session left behind.
+
+### One background leak, closed
+
+Every CI run left three `AgentRunWorkflow` executions open forever: the durability tests
+asserted a *row* said `completed`, exited the worker block with a workflow task still
+pending, and nothing polled that queue again. They now wait for the workflow. **Ten
+orphans from before the fix are still open** — terminating them is destructive and is
+waiting on someone to ask:
+
+```bash
+docker compose exec temporal tctl --address temporal:7233 workflow list --open
+```
+
 
 ### What gate 4 found
 
@@ -243,9 +288,9 @@ QA run does not assume a clean database either.
 | Branch | Commit | State |
 | --- | --- | --- |
 | `main` | `0b2b7ae` | PRs #1 and #2 merged |
-| `phase-16-slice-2` | `3c7ad55` | **this branch** — pushed, PR not yet opened |
+| `phase-16-slice-2` | `9b01909` | **this branch** — four commits ahead of what was pushed; nothing new pushed |
 
-`bash scripts/ci-local.sh` → `ci-local: all green` on `3c7ad55`.
+`bash scripts/ci-local.sh` → `ci-local: all green` on `9b01909`.
 
 To open the PR, the body is ready at `docs/status/pr-phase-16-slice-2.md`.
 

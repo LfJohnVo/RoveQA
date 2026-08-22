@@ -6,10 +6,65 @@
 > cost real time. This file records what each phase closed; that one records where the
 > work stands.
 
-Última sesión: 2026-08-20 (Opus 5). **Phase 15 implementada; gates verdes.**
+Última sesión: 2026-08-22 (Opus 5). **Phase 16 completada; 8/8 gates de fase.**
 
-`bash scripts/ci-local.sh` → `ci-local: all green` (backend 946+, CLI 149, frontend 51,
-migraciones sin drift, build, compose).
+`bash scripts/ci-local.sh` → `ci-local: all green` (backend **1115**, CLI **160**,
+frontend **64**, migraciones sin drift incluido el downgrade de `a3f81c02d7b4`, build,
+compose).
+
+## Phase 16 — lo que se cerró y con qué se comprobó
+
+Comandos realmente ejecutados, con su resultado:
+
+```bash
+bash scripts/ci-local.sh                     # ci-local: all green
+BASELINE_REPEATS=3 bash scripts/agent-baseline.sh > baseline-phase16.json
+bash scripts/smoke-archetypes.sh smoke-archetypes.json
+```
+
+**Baseline, 18 runs, modelo real, cero timeouts** — antes y después de las dos
+correcciones de esta sesión:
+
+| Forma | Antes | Después |
+| --- | --- | --- |
+| `one-page` | 3 passed, 26 s | 3 passed, **6 s** |
+| `multi-page` | 3 passed, 26 s | 3 passed, **10 s** |
+| `after-a-form` | 1 passed / 2 blocked, 42 s | **3 passed**, **11 s** |
+| `unreachable` | 3 blocked, 32 s | 3 blocked, **6 s** |
+| `sweep-only` | 3 passed, 5 s | 3 passed, 5 s |
+| `story-and-sweep` | 3 passed, 5 s | 3 passed, 6 s |
+
+`reachable_passed` 13/15 → **15/15**, `unreachable_never_failed: true`, `timed_out: 0`.
+El detalle de por qué está en `PERFORMANCE_PROFILE.md`.
+
+**Smoke contra cuatro sitios públicos, sin endpoint de modelo en el worker:**
+
+| Arquetipo | Sitio | Veredicto | Páginas | Segundos |
+| --- | --- | --- | --- | --- |
+| minimal | example.com | passed | 1 | 6 |
+| institutional | iana.org | passed | 11 | 18 |
+| government-with-banner | gov.uk (`consent: reject`) | passed | 10 | 12 |
+| machine-facing | httpbin.org | passed | 2 | 6 |
+
+Cero llamadas al modelo en las cuatro: el worker no tenía `VLLM_BASE_URL`. Eso es lo que
+hace estructural la afirmación "un barrido no cuesta inferencia" en vez de ser un número
+que salió cero.
+
+**La consola, verificada en vivo** contra los 22 runs que dejó esta sesión: la lista de
+runs de un proyecto, el reporte con sus 11 page checks, el mapa de exploración dibujado
+y la línea de tiempo. `GET /api/v1/runs/{id}/report` responde JSON o Markdown según
+`Accept`, y `roveqa run report --output text|json` da lo mismo por la CLI.
+
+**Una fuga cerrada:** cada corrida de CI dejaba tres `AgentRunWorkflow` abiertos para
+siempre porque los tests de durabilidad esperaban a la fila y no al workflow. Quedan
+**diez huérfanos anteriores** de antes del arreglo; terminarlos es destructivo y está
+pendiente de que alguien lo pida:
+
+```bash
+docker compose exec temporal tctl --address temporal:7233 workflow list --open
+```
+
+
 
 ## Lo que cambió
 
@@ -186,17 +241,15 @@ Falta: nada de la fase. Cerrada.
 
 # Phase Status
 
-- Phases 00 – 15: **DONE**.
-- Phase 16 (`plans/phase-16-any-site.md`): **IN_PROGRESS** — slices 1 y 5 hechas.
-  Runs con historia funcionan: 9 de 9 alcanzables pasan con `BASELINE_REPEATS=3`.
-  Pendiente: recorridos sin historia (R1), fallos observados en el reporte, y el
-  smoke contra sitios públicos reales.
+- Phases 00 – 16: **DONE**.
+- Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar. Es la
+  siguiente, y no se empieza sin que se pida.
 - Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar.
 
 # Last Stable State
 
-- Git branch `main`.
-- `bash scripts/ci-local.sh` → **all green**: 946 tests backend (5 skips sin GPU/deep), 149 CLI, 46 frontend, migraciones sin drift, build frontend, compose config.
+- Git branch `phase-16-slice-2` (sin push; nada se ha subido a ningún remoto).
+- `bash scripts/ci-local.sh` → **all green**: 1115 tests backend (skips sin GPU/deep), 160 CLI, 64 frontend, migraciones sin drift, build frontend, compose config.
 - Con la GPU arriba los skips corren: `VLLM_BASE_URL=http://vllm:8000 VLLM_MODEL=Qwen/Qwen3-4B-Instruct-2507`. Los skips son el test de modelo real de Phase 06, las dos mediciones de memoria de Phase 09 y los dos de deep analysis de Phase 11 (`DEEP_BASE_URL`/`DEEP_MODEL`).
 - Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker, **frontend** (Vite dev server en el 5173, proxy de `/api` y `/ws` al API). Schema en `8b3ac8f35fa4`.
 - El modelo es elegible por configuración: `VLLM_MODEL` más `VLLM_QUANTIZATION`, `VLLM_ENFORCE_EAGER` y `VLLM_EXTRA_ARGS` deciden si uno más grande entra en la tarjeta. `.env.example` lista qué modelos Qwen caben en 16GB. `vllm-embed` (perfil `memory-gpu`) sirve el modelo de embeddings, también elegible.
