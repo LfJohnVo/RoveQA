@@ -38,14 +38,21 @@ FAST_ENDPOINT_NAME = "vllm-fast"
 DEEP_ENDPOINT_NAME = "deep"
 
 
-def build_model_router(settings: Settings) -> ModelRouter | None:
-    """None when no endpoint is configured at all — an honest absence, not a fake model.
+def build_model_router(settings: Settings) -> ModelRouter:
+    """A router for whatever is configured, including nothing.
 
     The capabilities are genuinely independent, and each absence costs exactly one
-    thing. No fast endpoint means no episodes; no deep endpoint means no hypotheses.
-    A machine configured with only the deep model — the sensible way to run analysis on
-    a second box — still gets a router, because refusing to build one there would make
-    a fully configured capability unreachable.
+    thing: no fast endpoint means no *planned* episode, no deep endpoint means no
+    hypotheses. A machine configured with only the deep model — the sensible way to run
+    analysis on a second box — still gets a router, because refusing to build one there
+    would make a fully configured capability unreachable.
+
+    An empty router used to be `None`, which read as "there is nothing to run" and was
+    wrong in one important case: **an exploring run calls no model at all.** A site sweep
+    needed a GPU in order not to use it. An empty router raises
+    `NoEndpointConfiguredError` the first time somebody actually asks for a model, which
+    is the honest moment — and the callers already turn that into a reported failure
+    rather than a crash.
     """
     endpoints = []
     if settings.vllm_base_url and settings.vllm_model:
@@ -60,7 +67,10 @@ def build_model_router(settings: Settings) -> ModelRouter | None:
             )
         )
     else:
-        logger.info("no fast model endpoint configured; the worker will not run episodes")
+        logger.info(
+            "no fast model endpoint configured; exploring runs still work, "
+            "planned runs will report a model failure"
+        )
 
     if settings.deep_base_url and settings.deep_model:
         endpoints.append(
@@ -84,7 +94,7 @@ def build_model_router(settings: Settings) -> ModelRouter | None:
     else:
         logger.info("no deep endpoint configured; failure triage runs without hypotheses")
 
-    return ModelRouter(endpoints) if endpoints else None
+    return ModelRouter(endpoints)
 
 
 def build_deep_analyst(

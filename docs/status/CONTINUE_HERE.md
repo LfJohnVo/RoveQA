@@ -28,16 +28,60 @@ The work is not finished until all four hold, **measured, not asserted**.
 | 1 | Story-driven runs pass on the fixture app | ✅ **9 of 9** with `BASELINE_REPEATS=3` |
 | 2 | Traversals with no story — exploration maps a real site | ✅ seeds itself from the policy origin |
 | 3 | Reports carry analysis — what the browser saw reaches the report | ✅ `observed_failures`, in its own section |
-| 4 | A smoke against ≥2 real public sites of different archetypes | ❌ not started |
+| 4 | A smoke against ≥2 real public sites of different archetypes | ✅ three sites, `scripts/smoke-public.sh` |
 
 Gate 4 is the one that matters most and is easiest to skip. Every serious defect in this
 project so far was invisible against a local fixture that answered instantly and
 completely, and only appeared against a public site nobody had used for development. A
 green gate 1 with no gate 4 means "it works on the thing we built it against".
 
+**Run on 2026-08-21** with `bash scripts/smoke-public.sh`, against three sites nobody here
+chose for development, read-only, a handful of navigations each:
+
+| site | states mapped | stopped on | observed |
+| --- | --- | --- | --- |
+| example.com | 1 | `frontier_exhausted` | — |
+| iana.org | 9, with real titles | `max_actions` | 1 console error |
+| gov.uk | 8 | `max_actions` | — |
+
+**With no model endpoint configured at all.** That is the part worth keeping: exploration
+decides from what the page offers, so a sweep costs zero inference — and running it against
+a worker that has no model makes "zero model calls" structural rather than a number that
+happened to come out at zero. It also fixed a documented limitation on the way (below).
+
+The console error from iana.org travelled the whole gate-3 chain — Playwright → the
+`observed_failures` table → `GET /runs/{id}/report` — on its first outing against a site
+nobody controlled.
+
 ## 3. Where to start, concretely
 
-**Gate 4 is next**, and it is the one that matters most. Gate 3 is done.
+**All four gates hold.** What is left is slices, not gates — see below for the two the
+smoke made concrete.
+
+### What gate 4 found
+
+**A sweep needed a GPU in order not to use one.** `build_model_router` returned `None` with
+nothing configured, so `with_agent_runtime` left `container.episodes` unset and *every* run
+on that worker "executed no episode" and came back `inconclusive`, with the only
+explanation in a log line. It is now an empty router: it exists, serves nothing, and raises
+`NoEndpointConfiguredError` the first time somebody actually asks — which the gateway
+already turns into a reported failure. A planned run on a model-less worker now ends
+`blocked` with kind `model` and the reason attached, instead of silently doing nothing.
+
+**Every sweep reports `inconclusive`,** including the one that mapped nine pages and found
+a console error. A story-less run has no criteria, `_record_results` returns early, and the
+verdict falls through to "nobody knows". That is slice 3's job (a run mode with its own
+reporting), and the smoke turns it from a design note into a thing you can see.
+
+**The consent banner is real and the agent sees it.** gov.uk's first state carries
+`button:accept additional cookies` and `button:reject additional cookies` as affordances the
+frontier *declined* — correctly, under a read-only policy. Slice 4's input already exists;
+what is missing is the decision about closing one, which is a consent decision and belongs
+in an ADR before any code.
+
+---
+
+Gate 3 is done.
 
 Gate 3, in one paragraph: `EpisodeResult.page_problems` was the only field of the episode
 result that nothing read. Console errors and failed requests were collected by the

@@ -103,7 +103,9 @@ Escritos aquí porque un límite documentado es una decisión y uno tácito es u
 
 - Un run es un episodio. Un run de varias horas todavía no es posible; el soak de release
   ejercita la propiedad de debajo sobre un flujo continuo de runs.
-- Explorar exige un endpoint de modelo configurado aunque no lo llame nunca.
+- ~~Explorar exige un endpoint de modelo configurado aunque no lo llame nunca.~~
+  Arreglado el 2026-08-21: un barrido no necesita GPU, y el smoke de gate 4 lo demuestra
+  recorriendo tres sitios públicos sin un solo endpoint configurado.
 - Un disparo de schedule termina en cuanto el run existe, así que una regresión más lenta
   que su propio intervalo se apilará.
 - No hay collector de métricas; las señales se consultan desde PostgreSQL

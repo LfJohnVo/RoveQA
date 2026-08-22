@@ -50,8 +50,11 @@ class Container:
     """Realtime fan-out. Absent means clients fall back to durable REST catch-up."""
 
     episodes: EpisodeRunner | None = None
-    """Absent when no model endpoint is configured; the worker then says so honestly
-    instead of pretending to run an agent."""
+    """Absent on a process that is not a worker — the API never plans or drives a browser.
+
+    Present on a worker whether or not a model is configured, because an exploring run
+    calls no model at all. Absence used to mean "no model endpoint", which made a site
+    sweep need a GPU in order not to use one."""
 
     redis: Redis | None = None
     """Owned connection to Redis, closed with the container."""
@@ -124,28 +127,28 @@ def with_agent_runtime(container: Container, settings: Settings) -> Container:
         build_episode_runner,
         build_model_router,
     )
-    from agentic_qa.domain.inference.tasks import ModelCapability
 
     router = build_model_router(settings)
-    if router is None:
-        return container
     if container.redis is None:
         raise RuntimeError("the agent runtime needs Redis to bound model concurrency")
 
     http = httpx.AsyncClient()
-    # Each capability wires what it can serve, independently. A worker configured only
-    # for deep analysis gets no episode runner and says so, rather than accepting
-    # episodes it would fail at the first planning call.
-    runner = (
-        build_episode_runner(
-            settings,
-            router=router,
-            redis=container.redis,
-            http=http,
-            artifacts=container.artifacts,
-        )
-        if router.serves(ModelCapability.FAST)
-        else None
+    # Built whether or not a model is configured, because **an exploring run calls no
+    # model at all** — the frontier decides from what the page offers. Gating the runner
+    # on a fast endpoint meant a site sweep, whose whole point is zero inference, needed
+    # a GPU to do nothing with; a run against a blog came back `inconclusive` with the
+    # only explanation in a worker log line.
+    #
+    # A *planned* run on this worker now fails where it should: the first planning call
+    # raises `NoEndpointConfiguredError`, which the gateway turns into a decision with a
+    # failure, and the episode ends `blocked` with kind `model` and the reason attached.
+    # That is strictly better than executing no episode and reporting nothing.
+    runner = build_episode_runner(
+        settings,
+        router=router,
+        redis=container.redis,
+        http=http,
+        artifacts=container.artifacts,
     )
     return replace(
         container,
