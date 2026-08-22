@@ -55,8 +55,37 @@ nobody controlled.
 
 ## 3. Where to start, concretely
 
-**All four gates hold.** What is left is slices, not gates — see below for the two the
-smoke made concrete.
+**All four gates hold, and every slice of Phase 16 is closed.**
+
+### The archetype smoke (2026-08-22, `scripts/smoke-archetypes.sh`)
+
+Four public sites chosen to disagree with each other, read-only, **with no model endpoint
+configured at all** — a traversal decides from what the page offers, so zero inference is
+structural here rather than a number that came out at zero.
+
+| archetype | origin | consent | verdict | pages | seconds |
+| --- | --- | --- | --- | --- | --- |
+| minimal | `https://example.com` | leave | **passed** | 1/1 | 6 |
+| institutional | `https://www.iana.org` | leave | **passed** | 11/11 | 18 |
+| government, consent banner | `https://www.gov.uk` | reject | **passed** | 10/10 | 13 |
+| machine-facing | `https://httpbin.org` | leave | **passed** | 2/2 | 7 |
+
+24 pages in 44 seconds. It found three defects nothing else could:
+
+1. **`consent: reject` and `destructive_actions: false` contradicted each other** — the
+   pair a careful operator picks for somebody else's site. The consent click is
+   side-effecting, read-only refused it, a refusal ends the episode, and gov.uk mapped
+   **zero** pages. `BrowserAction.answers_consent` makes the permission narrow and named;
+   0 pages became 10.
+2. **Three graph-state types could not be rebuilt from a checkpoint** — `CriterionSource`,
+   `ActionRecord`, `EvidenceRef`. Strict msgpack does not raise, it returns a plain
+   `dict`, so a resumed episode would lose its action trace and evidence refs silently.
+   The round-trip test could not catch it because its "everything in state" object had
+   stopped being everything; the new test walks `GraphState`'s annotations.
+3. **Every healthy run showed a red alert** — a passing run has no failure context, the
+   server says 404, and the UI called it an error.
+
+What is left is slices, not gates — see below for the two the smoke made concrete.
 
 ### What gate 4 found
 

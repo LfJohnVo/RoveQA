@@ -335,8 +335,13 @@ services:
       - "8000"
     volumes:
       - ./backend/tests:/app/tests
-    ports:
-      - "8090:8000"
+    # No host port. The worker reaches this over the compose network at
+    # `http://target-app:8000`, and nothing else needs it — the mapping existed only so a
+    # person could peek, and it cost far more than that. When compose recreated the
+    # container the old one still held the binding, the new one failed with "port is
+    # already allocated", and it stayed in `Created` — so the baseline reported "could
+    # not start target-app" about a service whose only problem was a port nobody used.
+    # To look at the fixture: `docker compose --profile baseline run --rm --service-ports`.
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/')\""]
       interval: 5s

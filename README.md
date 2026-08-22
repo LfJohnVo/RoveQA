@@ -48,17 +48,29 @@ con el FailureBundle materializado y verificado al final.
 
 ## Qué hace
 
-- **Verifica historias de usuario** contra cualquier URL —una aplicación, una landing, un
-  blog— con un navegador de verdad, y
-  mantiene separado lo observado de lo que un modelo opinó. Sólo una comprobación
-  determinista puede acusar al producto; una hipótesis de modelo viaja etiquetada y al
-  lado, nunca dentro.
+- **Tres formas de preguntar**, y se combinan:
+  - **con historia** — verifica criterios de aceptación contra la aplicación;
+  - **sin historia** — recorre el sitio y comprueba cada página que alcanza, que es la
+    pregunta real de una landing o un blog: *¿cargan todas las páginas alcanzables?*;
+  - **las dos a la vez** — un recorrido que además acredita los criterios de la historia
+    allí donde se los encuentra, sin planner dirigiendo y sin una sola llamada al modelo
+    para la parte de caminar.
+- **Separa lo observado de lo que un modelo opinó.** Sólo una comprobación determinista
+  puede acusar al producto; una hipótesis de modelo viaja etiquetada y al lado, nunca
+  dentro. Un error de consola se reporta y **nunca** cambia un veredicto.
 - **Sobrevive a lo que se caiga.** Worker, Chromium, Redis, vLLM, FalkorDB y PostgreSQL
   tienen fila propia en [RECOVERY_MATRIX.md](docs/status/RECOVERY_MATRIX.md), cada una con
   el test que la demuestra. Verificado con 91 runs consecutivos bajo reinicios: ninguno se
   perdió.
 - **Explora** una aplicación sola, acotada, y **sin gastar una llamada al modelo**; compara
-  el mapa con la exploración anterior sin marcar cada cambio de DOM como novedad.
+  el mapa con la exploración anterior sin marcar cada cambio de DOM como novedad. Medido
+  contra cuatro arquetipos públicos —una página mínima, un sitio institucional, un
+  servicio de gobierno tras un banner de consentimiento, y un servicio para máquinas— con
+  el worker sin endpoint de modelo configurado, que es lo que hace estructural el «cero
+  inferencia».
+- **No decide por ti sobre cookies.** Un banner es lo primero que un agente encuentra en la
+  web pública, y responderlo es un acto legal en nombre de alguien. Por defecto no lo toca;
+  `consent: reject` toma la opción que menos concede ([ADR 0018](docs/adr/0018-consent-overlays.md)).
 - **Agrupa fallos** antes de pedir explicaciones: veinte runs contra el mismo muro son un
   problema, no veinte.
 - **Aprende** de runs verificados. La memoria durable vive en PostgreSQL; el grafo es una
@@ -81,7 +93,7 @@ límite documentado es una decisión y uno tácito es una sorpresa.
 
 | | Para quién | Empezar por |
 | --- | --- | --- |
-| **Interfaz web** | Escribir historias, lanzar runs, mirar la evidencia | http://localhost:5173 |
+| **Interfaz web** | Escribir historias, lanzar runs, ver el reporte y el mapa del sitio | http://localhost:5173 |
 | **CLI `roveqa`** | CI, scripts, uso diario desde la terminal | [Guía](docs/GUIDE.md#la-cli) |
 | **Agente de código** | Que Claude verifique su propio trabajo | `roveqa agent install claude` |
 
