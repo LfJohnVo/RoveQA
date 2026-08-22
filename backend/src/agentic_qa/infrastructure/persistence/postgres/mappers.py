@@ -5,6 +5,7 @@ leak into the domain.
 """
 
 from agentic_qa.application.ports.knowledge import GraphSyncRecord, GraphSyncState
+from agentic_qa.domain.browser.consent import ConsentPolicy
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.knowledge.experience import (
     CandidateKind,
@@ -145,6 +146,7 @@ def policy_to_domain(model: RunPolicyModel) -> RunPolicy:
         max_actions=model.max_actions,
         max_model_calls=model.max_model_calls,
         destructive_actions=model.destructive_actions,
+        consent=ConsentPolicy(model.consent),
         allow_file_uploads=model.allow_file_uploads,
         upload_path_allowlist=tuple(model.upload_path_allowlist),
         allow_downloads=model.allow_downloads,
@@ -160,6 +162,7 @@ def policy_to_model(policy: RunPolicy) -> RunPolicyModel:
         allowed_origins=list(policy.allowed_origins),
         upload_path_allowlist=list(policy.upload_path_allowlist),
         destructive_actions=policy.destructive_actions,
+        consent=policy.consent.value,
         allow_file_uploads=policy.allow_file_uploads,
         allow_downloads=policy.allow_downloads,
         synthetic_data_allowed=policy.synthetic_data_allowed,

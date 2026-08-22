@@ -66,6 +66,7 @@ async def post_run_policy(
             max_actions=payload.max_actions,
             max_model_calls=payload.max_model_calls,
             destructive_actions=payload.destructive_actions,
+            consent=payload.consent,
             allow_file_uploads=payload.allow_file_uploads,
             upload_path_allowlist=tuple(payload.upload_path_allowlist),
             allow_downloads=payload.allow_downloads,

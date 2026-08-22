@@ -12,6 +12,7 @@ editing one in place would rewrite the rules of runs already finished.
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from agentic_qa.domain.browser.consent import ConsentPolicy
 from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.validation import require_identifier, require_text
 
@@ -43,6 +44,13 @@ class RunPolicy:
     max_actions: int
     max_model_calls: int
     destructive_actions: bool = False
+    consent: ConsentPolicy = ConsentPolicy.LEAVE
+    """Whether this run may answer a cookie banner, and how.
+
+    `leave` by default, which costs runs against a banner-gated site and is the correct
+    trade: accepting cookies is a legal act performed on somebody's behalf, and a run that
+    did it quietly is a thing nobody finds out about until somebody else does (ADR 0018).
+    """
     allow_file_uploads: bool = False
     upload_path_allowlist: tuple[str, ...] = field(default=())
     allow_downloads: bool = False

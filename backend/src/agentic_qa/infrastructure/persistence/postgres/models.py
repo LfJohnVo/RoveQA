@@ -82,6 +82,9 @@ class RunPolicyModel(Base):
     """Immutable once written: a finished run's rules must not change underneath it."""
 
     __tablename__ = "run_policies"
+    __table_args__ = (
+        CheckConstraint("consent IN ('leave', 'reject', 'accept')", name="ck_run_policies_consent"),
+    )
 
     policy_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
     project_id: Mapped[str] = mapped_column(
@@ -93,6 +96,8 @@ class RunPolicyModel(Base):
     allowed_origins: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     upload_path_allowlist: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     destructive_actions: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    consent: Mapped[str] = mapped_column(String(20), nullable=False, default="leave")
+    """Whether a run under this policy may answer a cookie banner (ADR 0018)."""
     allow_file_uploads: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     allow_downloads: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     synthetic_data_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

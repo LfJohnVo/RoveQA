@@ -41,8 +41,15 @@ from agentic_qa.domain.agent.state import (
     StepRecord,
 )
 from agentic_qa.domain.browser.actions import (
+    ActionTarget,
     BrowserAction,
     BrowserActionType,
+    IdempotencyStrategy,
+)
+from agentic_qa.domain.browser.consent import (
+    ConsentPolicy,
+    consent_choice,
+    looks_like_consent,
 )
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.browser.policy_guard import evaluate_action
@@ -147,6 +154,12 @@ class GraphState(TypedDict, total=False):
     frontier that came back without its `offered` set could walk a two-page cycle
     forever, having survived the crash and lost the guarantee."""
 
+    consent_answered: bool
+    """Whether this episode already answered a consent overlay.
+
+    Once and only once. A banner that reappears is a site refusing the answer, and
+    pressing again would be a second consent signal nobody gave."""
+
     exploration_depth: int
     """Depth of the affordance most recently taken, so the page it leads to is recorded
     at the right distance from the entry point."""
@@ -211,6 +224,61 @@ def build_agent_graph(
             if expected in visible:
                 found[criterion_id] = f"step {step} at {url}"
         return found
+
+    def _consent_refusal(state: GraphState, action: BrowserAction) -> str | None:
+        """Why this run may not press this control, when the control answers a banner.
+
+        Both facts are needed and only the graph has both: the domain guard decides on an
+        action alone — which is what lets it be tested without a browser — and it cannot
+        know the page is a consent overlay.
+
+        Deliberately narrow. It refuses a press on a control whose label answers consent,
+        on a page that is asking about consent, under a policy that said not to. A button
+        called "Accept" on a checkout is not this, and must not be caught by it.
+        """
+        if policy is None or policy.consent is not ConsentPolicy.LEAVE:
+            return None
+        if action.type is not BrowserActionType.CLICK:
+            return None
+
+        page = state.get("last_page")
+        if page is None or not looks_like_consent(page.visible_text):
+            return None
+
+        named = tuple(a for a in page.affordances if a.name == action.target.name)
+        if not named or consent_choice(named, ConsentPolicy.ACCEPT) is None:
+            return None
+
+        return (
+            f"this run may not answer a consent overlay: pressing {action.target.name!r} "
+            "would record a consent decision nobody made. Set the policy's consent field "
+            "to reject or accept if that is intended."
+        )
+
+    def _consent_action(state: GraphState, page: PageState) -> BrowserAction | None:
+        """The one control a consent overlay offers that this run may press, if any.
+
+        Once per episode. A banner that reappears after being answered is a site refusing
+        the answer, and pressing again would be an agent arguing with it — which is both
+        futile and a second consent signal nobody gave.
+        """
+        if policy is None or state.get("consent_answered", False):
+            return None
+        if not looks_like_consent(page.visible_text):
+            return None
+
+        choice = consent_choice(page.affordances, policy.consent)
+        if choice is None:
+            return None
+
+        return BrowserAction(
+            type=BrowserActionType.CLICK,
+            intent=f"answer the consent overlay: {choice.name}",
+            target=ActionTarget(role=choice.role, name=choice.name),
+            side_effect=True,
+            idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+            verification_strategy="observe whether the overlay is gone",
+        )
 
     def _page_checks(
         already: dict[str, CriterionResult] | None, page: PageState
@@ -476,6 +544,20 @@ def build_agent_graph(
 
         page = await browser.describe_page()
         agent.last_observation = page.url or "about:blank"
+
+        overlay = _consent_action(state, page)
+        if overlay is not None:
+            # Through `act`, like everything else: counted, policy-checked, and published
+            # as an event. An agent that quietly clicked things while observing would be
+            # one whose trace does not explain what it did to somebody else's site.
+            logger.info("run %s answering a consent overlay: %s", agent.run_id, overlay.intent)
+            return {
+                "agent": agent,
+                "pending_action": overlay,
+                "consent_answered": True,
+                "last_page": page,
+                "safe_point": None,
+            }
         # An exploring episode observes too, and a criterion satisfied on a page the crawl
         # passed through is as real as one satisfied on the page it stopped at.
         seen = _sightings(state.get("criteria_seen"), page.visible_text, page.url, agent.step_index)
@@ -503,6 +585,7 @@ def build_agent_graph(
                 "pending_action": None,
                 "criteria_seen": seen,
                 "page_checks": checks,
+                "last_page": page,
                 "exploration": frontier.snapshot(),
                 "exploration_report": frontier.report(reason),
                 "safe_point": None,
@@ -518,6 +601,12 @@ def build_agent_graph(
             "pending_action": exploration_action(entry.affordance),
             "criteria_seen": seen,
             "page_checks": checks,
+            # Carried so `act` can refuse a click the consent policy forbids. Only the
+            # observe node set this, so an exploring run left the guard blind — and a run
+            # under `leave` pressed "Accept additional cookies" on gov.uk. Found by
+            # running it, not by the unit tests, which asserted the pieces and never the
+            # composition.
+            "last_page": page,
             "exploration": frontier.snapshot(),
             "exploration_depth": entry.depth,
             "safe_point": None,
@@ -532,6 +621,21 @@ def build_agent_graph(
                 # would throw it away one node before Recover reads it.
                 return {}
             return {"last_outcome_succeeded": True, "last_detail": "", "last_denied": False}
+        refusal = _consent_refusal(state, action)
+        if refusal is not None:
+            # Enforced here rather than in the explore node, because `act` is the one
+            # place every action passes through. A planner is free to propose a click on
+            # "Accept all cookies" like any other button, and without this the consent
+            # policy would govern the crawl and be advice everywhere else.
+            logger.warning("run %s refused a consent click: %s", state["agent"].run_id, refusal)
+            return {
+                "actions_taken": state.get("actions_taken", 0) + 1,
+                "last_outcome_succeeded": False,
+                "last_detail": refusal,
+                "last_denied": True,
+                "last_action_type": action.type,
+            }
+
         # Counted before the attempt, not after it succeeds: an action the page refused
         # still cost the run a turn, and a budget that only counted successes would let
         # a failing loop run forever.

@@ -53,6 +53,10 @@ class RecordingBrowserGateway:
     url: str = "http://target.test/"
     captures: int = 0
     affordances: list[Affordance] = field(default_factory=list)
+    body_text: str = ""
+    """What the page says. Needed by anything that reads the page rather than its
+    controls — a criterion's literal, or whether this is a consent banner."""
+
     described: int = 0
 
     async def execute(self, action: BrowserAction) -> ActionOutcome:
@@ -76,7 +80,9 @@ class RecordingBrowserGateway:
         test that is not about exploration.
         """
         self.described += 1
-        return PageState(url=self.url, affordances=tuple(self.affordances))
+        return PageState(
+            url=self.url, affordances=tuple(self.affordances), body_text=self.body_text
+        )
 
     async def aclose(self) -> None:
         return None

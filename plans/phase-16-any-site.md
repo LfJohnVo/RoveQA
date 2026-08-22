@@ -189,10 +189,26 @@ de la policy, nunca comportamiento tácito.
 2. Cierre acotado, bajo la decisión de policy, registrado como acción visible en el log.
 
 **Gates**
-- Un sitio con banner deja ver el contenido detrás.
-- El cierre aparece en el log: nunca una acción invisible.
-- Con la policy que lo prohíbe, el run no lo cierra y lo dice.
-- La opción elegida por defecto es la que menos concede.
+- Un sitio con banner deja ver el contenido detrás. ✅ gov.uk con `consent: reject`
+- El cierre aparece en el log: nunca una acción invisible. ✅ `run.action.taken` índice 2,
+  «answer the consent overlay: Reject additional cookies»
+- Con la policy que lo prohíbe, el run no lo cierra y lo dice. ✅ 0 clics de aceptación, y
+  el log dice el motivo y el remedio
+- La opción elegida por defecto es la que menos concede. ✅ eligió *Reject* estando
+  *Accept* antes en el DOM
+
+**Cerrada.** ADR 0018, con dos correcciones que costaron su medición:
+
+1. **La primera versión del ADR afirmaba una detección estructural que no existe.** Decía
+   que `dialog` y `alertdialog` son roles interactivos cuyos botones cargan su contenedor.
+   No lo son — la observación aplana el diálogo y sus botones quedan como cualquier otro.
+   El reconocimiento es **por etiqueta**, y eso es una heurística con límites reales que el
+   ADR ahora enumera en vez de esconder.
+2. **El default no se cumplía.** `leave` gobernaba el crawl y era consejo en todo lo demás:
+   el guard lee `last_page` y sólo el nodo `observe` lo ponía, así que un run explorando lo
+   dejaba ciego — y pulsó «Accept additional cookies» en gov.uk bajo la policy que dice no
+   tocar nada. Los tests unitarios afirmaban que cada pieza era cierta y ninguno la
+   composición. Lo encontró correrlo contra el sitio real.
 
 ### Slice 5 — El run cuenta lo que hizo *(R5)*
 

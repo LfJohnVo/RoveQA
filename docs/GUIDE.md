@@ -86,6 +86,31 @@ cuyos datos no te importen.
 **Presupuestos** — acciones, llamadas al modelo, segundos. Un run que agota uno se detiene
 y reporta `blocked`. Nunca reporta un problema del producto que no terminó de mirar.
 
+### El banner de cookies
+
+Un quinto ajuste que sólo existe por API todavía: `consent`, con tres valores.
+
+| valor | qué hace |
+| --- | --- |
+| `leave` (por defecto) | No lo toca. Si el sitio tapa el contenido con el banner, el run falla ahí y lo dice. |
+| `reject` | Toma la opción **menos concesiva** que el banner ofrezca. Recomendado. |
+| `accept` | Toma la que acepta. Nunca por defecto, nunca inferido. |
+
+El default cuesta runs a propósito. Aceptar cookies es un acto legal hecho **en nombre de
+alguien**, y "Accept all" es casi siempre el botón más fácil de encontrar — más grande, más
+contraste, primero en el DOM. Cualquier heurística que optimice «pasar el banner» aterriza
+en la opción que más concede, por diseño del sitio.
+
+Un run que falla porque había un banner es un fallo visible con un remedio obvio. Uno que
+aceptó rastreo calladamente en un sitio que no es tuyo es algo de lo que nadie se entera
+hasta que se entera otro. Contra tu propio staging, pon `accept` y olvídate; el default
+protege el caso en que el objetivo es de otra persona, que es para lo que existe Phase 16.
+
+Detalle honesto: el reconocimiento es **por etiqueta**, no estructural. Un banner cuyos
+botones digan "Sure" y "Maybe later" no se reconoce, y el run no adivina — lo reporta sin
+tocar. [ADR 0018](adr/0018-consent-overlays.md) explica por qué y qué costaría hacerlo
+estructural.
+
 <details>
 <summary>Lo mismo por API, si prefieres scriptearlo</summary>
 

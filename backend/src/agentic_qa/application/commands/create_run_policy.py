@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from agentic_qa.application.errors import NotFoundError
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
+from agentic_qa.domain.browser.consent import ConsentPolicy
 from agentic_qa.domain.projects.run_policy import RunPolicy
 
 
@@ -21,6 +22,7 @@ class CreateRunPolicyCommand:
     max_actions: int
     max_model_calls: int
     destructive_actions: bool = False
+    consent: ConsentPolicy = ConsentPolicy.LEAVE
     allow_file_uploads: bool = False
     upload_path_allowlist: tuple[str, ...] = field(default=())
     allow_downloads: bool = False
@@ -42,6 +44,7 @@ async def create_run_policy(uow: UnitOfWork, command: CreateRunPolicyCommand) ->
         max_actions=command.max_actions,
         max_model_calls=command.max_model_calls,
         destructive_actions=command.destructive_actions,
+        consent=command.consent,
         allow_file_uploads=command.allow_file_uploads,
         upload_path_allowlist=command.upload_path_allowlist,
         allow_downloads=command.allow_downloads,
