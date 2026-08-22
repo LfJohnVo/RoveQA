@@ -23,6 +23,7 @@ import type {
   NewProjectInput,
 } from "@application/ports/gateways";
 import type { MemoryStatus } from "@domain/knowledge/memory";
+import type { ExplorationMap } from "@domain/runs/exploration";
 import type { Project } from "@domain/projects/project";
 import type { UserStory } from "@domain/qa/story";
 import type { RunReport } from "@domain/runs/findings";
@@ -34,6 +35,7 @@ import {
   toMemoryStatus,
   toProject,
   toProjects,
+  toExplorationMap,
   toRun,
   toRunEventPage,
   toRunReport,
@@ -198,10 +200,11 @@ export class HttpRunGateway implements RunGateway {
   }
 
   async start(input: StartRunInput): Promise<Run> {
-    const body: Record<string, string> = { project_id: input.projectId };
+    const body: Record<string, string | boolean> = { project_id: input.projectId };
     if (input.planId !== undefined) body.plan_id = input.planId;
     if (input.planVersion !== undefined) body.plan_version = input.planVersion;
     if (input.environmentId !== undefined) body.environment_id = input.environmentId;
+    if (input.explore === true) body.explore = true;
 
     return toRun(
       await this.client.request("POST", "/api/v1/runs", {
@@ -209,6 +212,23 @@ export class HttpRunGateway implements RunGateway {
         idempotencyKey: input.idempotencyKey,
       }),
     );
+  }
+
+  async exploration(runId: string): Promise<ExplorationMap | null> {
+    try {
+      return toExplorationMap(
+        await this.client.request(
+          "GET",
+          `/api/v1/runs/${encodeURIComponent(runId)}/exploration`,
+        ),
+      );
+    } catch (error) {
+      // A run that never explored has no map, and the server says so with a 404. That is
+      // a fact about the run, not a failure to read it — surfacing it as an error would
+      // put a red banner on every planned run's page.
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async pause(runId: string): Promise<void> {

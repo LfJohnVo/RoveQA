@@ -256,6 +256,7 @@ describe("findings keep observations and hypotheses apart", () => {
 
   const base: Finding = {
     criterionId: "ac-checkout",
+    source: "plan",
     stepId: "step-1",
     outcome: "not_met",
     failureKind: "product",
@@ -364,5 +365,62 @@ describe("what the browser saw is not what the run concluded", () => {
 
     await screen.findByText("passed");
     expect(screen.queryByRole("table", { name: "What the browser saw" })).toBeNull();
+  });
+});
+
+describe("a traversal shows what it mapped", () => {
+  it("draws the states it reached", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.explorationValue = {
+      runId: "run-1",
+      states: [
+        { signature: "s1", route: "/", url: "https://app.test/", title: "Home", affordances: [] },
+        {
+          signature: "s2",
+          route: "/about",
+          url: "https://app.test/about",
+          title: "About",
+          affordances: ["link:home"],
+        },
+      ],
+      stopReason: "frontier_exhausted",
+      complete: true,
+      statesDiscovered: 2,
+      actionsTaken: 2,
+      declined: 0,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    const map = await screen.findByRole("img", { name: /Map of 2 states/ });
+    expect(within(map).getByText("/about")).toBeInTheDocument();
+  });
+
+  it("says when the map has holes rather than letting it read as complete", async () => {
+    // A map that stopped on a budget and one that ran out of places to go look identical.
+    // Only the second supports "this page is gone" next time.
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.explorationValue = {
+      runId: "run-1",
+      states: [
+        { signature: "s1", route: "/", url: "https://app.test/", title: "Home", affordances: [] },
+      ],
+      stopReason: "max_actions",
+      complete: false,
+      statesDiscovered: 1,
+      actionsTaken: 6,
+      declined: 3,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    expect(await screen.findByText(/what it reached rather than everything/)).toBeInTheDocument();
+    expect(screen.getByText(/3 controls left alone/)).toBeInTheDocument();
+  });
+
+  it("shows nothing at all for a run that never explored", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    await screen.findByText("passed");
+    expect(screen.queryByRole("img", { name: /Map of/ })).toBeNull();
   });
 });

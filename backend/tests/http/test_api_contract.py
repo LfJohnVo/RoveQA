@@ -43,6 +43,17 @@ async def client(workflows: RecordingWorkflowGateway) -> AsyncIterator[httpx.Asy
         yield client
 
 
+async def create_run(client: httpx.AsyncClient, project_id: str) -> str:
+    response = await client.post(
+        "/api/v1/runs",
+        json={"project_id": project_id},
+        headers={"Idempotency-Key": f"report-{project_id}"},
+    )
+    assert response.status_code == 201, response.text
+    run_id: str = response.json()["run_id"]
+    return run_id
+
+
 async def create_project(client: httpx.AsyncClient, name: str = "Checkout") -> str:
     """Create a project with a default run policy: a run cannot start without one."""
     response = await client.post("/api/v1/projects", json={"name": name})
@@ -471,3 +482,37 @@ async def test_the_same_key_cannot_switch_a_run_between_modes(
 
     assert first.status_code == 201
     assert second.status_code == 409
+
+
+class TestOneReportInTwoRenderings:
+    """The same answer as a contract and as prose, negotiated rather than given two URLs.
+
+    `render_markdown` existed for two phases as an exported function nothing called: the
+    report was machine-readable and nobody could read it. Two paths would have been two
+    things to keep in step; one path with an `Accept` header is one report.
+    """
+
+    async def test_the_default_is_the_versioned_document(self, client: httpx.AsyncClient) -> None:
+        project_id = await create_project(client)
+        run_id = await create_run(client, project_id)
+
+        response = await client.get(f"/api/v1/runs/{run_id}/report")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/json")
+        assert response.json()["schema_version"] == "roveqa.run-report.v1"
+
+    async def test_asking_for_markdown_gets_prose(self, client: httpx.AsyncClient) -> None:
+        project_id = await create_project(client)
+        run_id = await create_run(client, project_id)
+
+        response = await client.get(
+            f"/api/v1/runs/{run_id}/report", headers={"Accept": "text/markdown"}
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/markdown")
+        assert response.text.startswith(f"# Run {run_id}")
+        # The section that keeps a hypothesis from reading as a finding is in the prose
+        # too, not only in the JSON keys.
+        assert "## Observed" in response.text

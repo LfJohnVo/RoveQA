@@ -102,6 +102,31 @@ export class ApiClient {
    * running it through JSON parsing would corrupt it. No retries: a partial download
    * is discarded by the caller, which re-materializes the whole bundle.
    */
+  /**
+   * A response that is deliberately not JSON.
+   *
+   * `request` refuses a non-JSON body, and that refusal is the contract: a 2xx that is
+   * not JSON is not a success an agent can act on. A human-readable report is the one
+   * case where text *is* the answer, so it gets its own door rather than a hole in that
+   * one. Bounded the same way, because a report is still a response from a server.
+   */
+  async requestText(path: string, accept: string): Promise<string> {
+    const url = `${this.options.baseUrl.replace(/\/+$/, "")}${path}`;
+    const response = await this.fetchImpl(url, {
+      method: "GET",
+      headers: { Accept: accept, "X-Request-Id": this.options.requestId, ...this.authHeader() },
+      signal: AbortSignal.timeout(this.options.timeoutMs),
+    });
+
+    if (!response.ok) throw await toCliError(response, url);
+
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+      throw new CliError("RESOURCE_UNAVAILABLE", `response exceeds ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    return text;
+  }
+
   async requestBytes(path: string): Promise<Buffer> {
     const url = `${this.options.baseUrl.replace(/\/+$/, "")}${path}`;
     let response: Response;

@@ -14,6 +14,7 @@ import { z } from "zod";
 
 import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { Artifact, Finding, RunReport } from "@domain/runs/findings";
+import type { ExplorationMap } from "@domain/runs/exploration";
 import type { Project } from "@domain/projects/project";
 import type { UserStory } from "@domain/qa/story";
 import { RUN_STATUSES, VERDICTS, type Run } from "@domain/runs/run";
@@ -140,6 +141,10 @@ export function toMemoryStatus(value: unknown): MemoryStatus {
 
 const findingSchema = z.object({
   criterion_id: z.string().min(1),
+  // Defaulted, so a server that predates the sweep is still a server this client reads.
+  // Every criterion such a server produced came from a plan, which is what the default
+  // says.
+  source: z.enum(["plan", "sweep"]).default("plan"),
   step_id: z.string().nullish(),
   outcome: z.enum(["met", "not_met", "unverified"]),
   failure_kind: z.enum(["product", "plan", "environment", "policy"]).nullish(),
@@ -183,6 +188,7 @@ function toFinding(value: unknown): Finding {
   const raw = parse(findingSchema, value, "finding");
   return {
     criterionId: raw.criterion_id,
+    source: raw.source,
     stepId: raw.step_id ?? null,
     outcome: raw.outcome,
     failureKind: raw.failure_kind ?? null,
@@ -207,6 +213,45 @@ function toArtifact(value: unknown): Artifact {
 
 /** The report and the failure context are two endpoints and one screen. Merged here so
  * the ViewModel deals in one shape rather than in two transport documents. */
+const exploredStateSchema = z.object({
+  signature: z.string().min(1),
+  route: z.string().min(1),
+  url: z.string().min(1),
+  title: z.string().default(""),
+  affordances: z.array(z.string()).default([]),
+});
+
+const explorationSchema = z.object({
+  run_id: z.string().min(1),
+  stop_reason: z.string().default(""),
+  complete: z.boolean().default(false),
+  states_discovered: z.number().int().nonnegative().default(0),
+  actions_taken: z.number().int().nonnegative().default(0),
+  declined: z.number().int().nonnegative().default(0),
+  states: z.array(exploredStateSchema).default([]),
+});
+
+export function toExplorationMap(value: unknown): ExplorationMap {
+  const raw = parse(explorationSchema, value, "exploration");
+  return {
+    runId: raw.run_id,
+    // `complete` is the difference between "this is the whole application" and "this is
+    // as far as the budget went", and only the second can be read as a map with holes.
+    stopReason: raw.stop_reason === "" ? null : raw.stop_reason,
+    complete: raw.complete,
+    statesDiscovered: raw.states_discovered,
+    actionsTaken: raw.actions_taken,
+    declined: raw.declined,
+    states: raw.states.map((state) => ({
+      signature: state.signature,
+      route: state.route,
+      url: state.url,
+      title: state.title,
+      affordances: state.affordances,
+    })),
+  };
+}
+
 export function toRunReport(report: unknown, failureContext: unknown): RunReport {
   const parsedReport = parse(reportSchema, report, "run report");
   const parsedContext = parse(failureContextSchema, failureContext, "failure context");

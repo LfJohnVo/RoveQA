@@ -35,6 +35,11 @@ export function FindingsList({ findings }: { findings: readonly Finding[] }) {
             <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-200">
               {finding.criterionId}
             </span>
+            {/* Said on the row. A reader must never take "every run checks this page"
+                for "the story asked for this", and the two sit in one list. */}
+            <span className="text-xs text-gray-500 dark:text-gray-500">
+              {finding.source === "sweep" ? "page check" : "from the story"}
+            </span>
             <Badge tone={badgeFor(finding)} dataTone={toneFor(finding)}>
               {OUTCOME_LABEL[finding.outcome]}
             </Badge>

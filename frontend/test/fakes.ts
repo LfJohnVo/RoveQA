@@ -20,6 +20,7 @@ import type {
 } from "@application/ports/gateways";
 import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { UserStory } from "@domain/qa/story";
+import type { ExplorationMap } from "@domain/runs/exploration";
 import type { RunReport } from "@domain/runs/findings";
 import type { ConnectionState } from "@domain/runs/connection";
 import type { NewProjectInput } from "@application/ports/gateways";
@@ -128,6 +129,13 @@ export class FakeRunGateway implements RunGateway {
   }
 
   reportValue: RunReport | null = null;
+
+  explorationValue: ExplorationMap | null = null;
+
+  exploration(): Promise<ExplorationMap | null> {
+    // Null by default: most runs never explored, and that is not a failure to read one.
+    return Promise.resolve(this.explorationValue);
+  }
 
   start(input: StartRunInput): Promise<Run> {
     this.started.push(input);

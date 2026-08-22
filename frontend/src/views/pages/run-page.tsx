@@ -4,7 +4,9 @@ import { useRunReportViewModel } from "@viewmodels/runs/use-run-report-viewmodel
 import { ConnectionIndicator } from "@views/components/connection-indicator";
 import { FindingsList } from "@views/components/findings-list";
 import { VerdictBadge } from "@views/components/verdict-badge";
+import { useExplorationViewModel } from "@viewmodels/runs/use-exploration-viewmodel";
 import { useRunViewModel } from "@viewmodels/runs/use-run-viewmodel";
+import { StateMap } from "@views/components/state-map";
 import {
   Badge,
   Button,
@@ -31,6 +33,7 @@ export function RunPage() {
   // Asked for only once the run has concluded something. A report fetched while the
   // run is still exploring would be empty and refetched on every status change.
   const report = useRunReportViewModel(runId, run.isTerminal);
+  const exploration = useExplorationViewModel(runId, run.isTerminal);
 
   return (
     <section>
@@ -145,6 +148,32 @@ export function RunPage() {
               </TableCard>
             </>
           ) : null}
+        </>
+      ) : null}
+
+      {exploration.map !== null ? (
+        <>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <SectionTitle>What it mapped</SectionTitle>
+            <span className="mb-4 text-xs text-gray-500 dark:text-gray-500">
+              {exploration.map.statesDiscovered} states · {exploration.map.actionsTaken} actions
+              {exploration.map.declined > 0
+                ? ` · ${exploration.map.declined} controls left alone`
+                : ""}
+            </span>
+          </div>
+
+          {exploration.map.complete ? null : (
+            // The difference between "this is the application" and "this is as far as it
+            // got". A map with holes read as a complete one is how a page that vanished
+            // gets reported as removed.
+            <Notice tone="warning">
+              The crawl stopped on <code>{exploration.map.stopReason ?? "a budget"}</code>, so
+              this is what it reached rather than everything there is.
+            </Notice>
+          )}
+
+          <StateMap states={exploration.map.states} />
         </>
       ) : null}
 

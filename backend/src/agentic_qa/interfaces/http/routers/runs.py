@@ -5,9 +5,10 @@ the commit point live in the use case (ADR 0010), and status is only ever writte
 the workflow's activities — never here.
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Header, Query, Response, status
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.errors import NotFoundError
@@ -17,7 +18,11 @@ from agentic_qa.application.ports.events import (
 )
 from agentic_qa.application.queries.failure_context import load_failure_context, to_manifest
 from agentic_qa.application.queries.list_run_events import list_run_events
-from agentic_qa.application.queries.run_report import build_run_report, to_document
+from agentic_qa.application.queries.run_report import (
+    build_run_report,
+    render_markdown,
+    to_document,
+)
 from agentic_qa.interfaces.http.dependencies import (
     EventPublisherDep,
     IdempotencyKeyDep,
@@ -146,12 +151,22 @@ async def cancel_run(
 
 
 @router.get("/{run_id}/report")
-async def read_run_report(run_id: str, uow: UnitOfWorkDep) -> dict[str, Any]:
-    """The run's report, built from durable rows rather than from a model transcript."""
+async def read_run_report(
+    run_id: str, uow: UnitOfWorkDep, accept: Annotated[str, Header()] = "application/json"
+) -> Response:
+    """The run's report, built from durable rows rather than from a model transcript.
+
+    Two renderings of one answer, negotiated rather than given two URLs: they are the same
+    report and a second path would be a second thing to keep in step. The JSON document is
+    the versioned contract; the markdown is for a person, and it existed as an unreachable
+    function for two phases — written, exported, and called by nothing.
+    """
     report = await build_run_report(
         uow.runs, uow.plans, uow.criterion_results, uow.observed_failures, run_id=run_id
     )
-    return to_document(report)
+    if "text/markdown" in accept:
+        return PlainTextResponse(render_markdown(report), media_type="text/markdown")
+    return JSONResponse(to_document(report))
 
 
 @router.get("/{run_id}/failure-context")

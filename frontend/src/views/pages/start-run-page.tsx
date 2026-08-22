@@ -7,7 +7,7 @@ import { z } from "zod";
 import { prepareRun } from "@application/usecases/start-run";
 import { useGateways } from "@viewmodels/gateways-context";
 import { Button, Card, Field, Lede, Notice, PageTitle } from "@views/components/ui";
-import { inputClass } from "@views/components/form-classes";
+import { checkboxClass, inputClass } from "@views/components/form-classes";
 
 /**
  * Starting a run.
@@ -23,6 +23,7 @@ const schema = z.object({
   planId: z.string().trim().optional(),
   planVersion: z.string().trim().optional(),
   environmentId: z.string().trim().optional(),
+  explore: z.boolean(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -36,7 +37,12 @@ export function StartRunPage() {
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm<FormValues>({ resolver: zodResolver(schema) });
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    // Off unless asked. A default of `true` would make every run a crawl, which is
+    // a different question from the one most people came to ask.
+    defaultValues: { explore: false },
+  });
 
   const start = useMutation({
     mutationFn: (values: FormValues) => {
@@ -49,6 +55,7 @@ export function StartRunPage() {
         ...(values.environmentId !== undefined && values.environmentId !== ""
           ? { environmentId: values.environmentId }
           : {}),
+        ...(values.explore === true ? { explore: true } : {}),
       });
       return attempt.run();
     },
@@ -61,12 +68,9 @@ export function StartRunPage() {
     <section>
       <PageTitle>Start a run</PageTitle>
       <Lede>
-        Leave the plan empty for an exploratory run. A run with no plan verifies nothing, so
-        it reports{" "}
-        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-xs dark:bg-gray-700">
-          inconclusive
-        </code>{" "}
-        rather than a pass.
+        A run can follow a story, walk the site, or do both. Every run checks each page it
+        reaches — that it answered, and what it answered — so a traversal with no story
+        still comes back with a verdict rather than a shrug.
       </Lede>
 
       <Card className="mb-8">
@@ -88,6 +92,18 @@ export function StartRunPage() {
               placeholder="optional"
             />
           </Field>
+
+          <div className="mt-4">
+            <label className="flex items-center text-sm text-gray-700 dark:text-gray-400">
+              <input id="explore" type="checkbox" className={checkboxClass()} {...register("explore")} />
+              <span className="ml-2">Walk the site as well</span>
+            </label>
+            <span className="mt-1 block text-xs text-gray-600 dark:text-gray-400">
+              Follows the links each page offers, deciding from the page rather than from a
+              model — so a traversal costs no inference at all. Combine it with a plan and
+              the story's criteria are credited wherever the crawl meets them.
+            </span>
+          </div>
 
           <Field label="Environment" htmlFor="environmentId">
             <input

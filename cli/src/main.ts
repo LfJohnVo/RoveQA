@@ -134,6 +134,7 @@ const COMMANDS: ReadonlyArray<{ name: string; summary: string }> = [
   { name: "run wait", summary: "wait for a terminal verdict; detaching never cancels" },
   { name: "run cancel", summary: "ask the run to stop at its next safe point" },
   { name: "run rerun", summary: "run the same plan version again" },
+  { name: "run report", summary: "the run's report: JSON to parse, markdown to read" },
   { name: "run failure", summary: "materialise a FailureBundle for a failed run" },
   { name: "run artifact", summary: "download one artifact by id" },
   { name: "run diff", summary: "compare two runs criterion by criterion" },
@@ -199,6 +200,8 @@ async function dispatch(
       return await runWait(rest, values, requestId, writer);
     case "run cancel":
       return await runCancel(rest, values, requestId);
+    case "run report":
+      return await runReport(rest, values, requestId);
     case "run failure":
       return await runFailure(rest, values, requestId, writer);
     case "run rerun":
@@ -350,6 +353,29 @@ async function runGet(rest: string[], values: Values, requestId: string): Promis
   const { client } = connect(values, requestId);
   const state = await getRun(client, runId);
   return { data: state, text: renderRun(state), exitCode: verdictExit(state) };
+}
+
+async function runReport(
+  rest: string[],
+  values: Values,
+  requestId: string,
+): Promise<CommandResult> {
+  const runId = requireRunId(rest);
+  const { client } = connect(values, requestId);
+  const path = `/api/v1/runs/${encodeURIComponent(runId)}/report`;
+
+  // The document is always fetched, because it is what `data` means and it is the
+  // versioned contract. The markdown is asked for only when somebody is going to read
+  // it — one extra GET on the human path, in exchange for the rendering having exactly
+  // one source. A second renderer here would be free to drift from the server's, and a
+  // report that disagrees with itself is worse than one that is slow to fetch.
+  const document = (await client.request({ method: "GET", path })).body;
+  const wantsProse = asString(values.output) !== "json";
+  const text = wantsProse
+    ? await client.requestText(path, "text/markdown")
+    : "report fetched\n";
+
+  return { data: document, text };
 }
 
 async function runWait(

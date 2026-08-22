@@ -13,6 +13,7 @@
 
 import type { Project } from "@domain/projects/project";
 import type { ConnectionState } from "@domain/runs/connection";
+import type { ExplorationMap } from "@domain/runs/exploration";
 import type { Run } from "@domain/runs/run";
 import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { AcceptanceCriterion, UserStory } from "@domain/qa/story";
@@ -63,7 +64,17 @@ export interface StartRunInput {
   planId?: string;
   planVersion?: string;
   environmentId?: string;
+  /**
+   * Walk the site instead of following a plan step by step.
+   *
+   * Not exclusive with a plan: a run may carry a story, a traversal, or both, and the
+   * third shape is the useful one — a crawl that also credits the story's criteria as it
+   * walks past them (ADR 0017). Named `explore` rather than `mode` for that reason: a
+   * mode would be one of three, and this is one of two independent things a run does.
+   */
+  explore?: boolean;
 }
+
 
 export interface RunGateway {
   get(runId: string): Promise<Run>;
@@ -83,6 +94,10 @@ export interface RunGateway {
   report(runId: string): Promise<RunReport>;
 
   start(input: StartRunInput): Promise<Run>;
+
+  /** What a traversal mapped. Absent for a run that never explored, which is a
+   *  fact about the run rather than a failure to read it. */
+  exploration(runId: string): Promise<ExplorationMap | null>;
   pause(runId: string): Promise<void>;
   resume(runId: string): Promise<void>;
   cancel(runId: string): Promise<void>;

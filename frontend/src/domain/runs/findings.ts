@@ -12,8 +12,12 @@ export type CriterionOutcome = "met" | "not_met" | "unverified";
 
 export type FailureKind = "product" | "plan" | "environment" | "policy";
 
+/** Who asked for this criterion: the run's plan, or the sweep every run performs. */
+export type FindingSource = "plan" | "sweep";
+
 export interface Finding {
   criterionId: string;
+  source: FindingSource;
   stepId: string | null;
   outcome: CriterionOutcome;
   failureKind: FailureKind | null;
