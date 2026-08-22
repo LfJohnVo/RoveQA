@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from agentic_qa.application.ports.episodes import ActionRecord
 from agentic_qa.domain.agent.state import (
     AgentState,
     EpisodeSummary,
@@ -29,6 +30,7 @@ from agentic_qa.domain.browser.actions import (
     BrowserActionType,
     IdempotencyStrategy,
 )
+from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.exploration.frontier import (
     ExplorationBudget,
     ExplorationReport,
@@ -40,6 +42,7 @@ from agentic_qa.domain.exploration.state import Affordance, PageState
 from agentic_qa.domain.qa.verification import (
     CriterionOutcome,
     CriterionResult,
+    CriterionSource,
     FailureKind,
 )
 
@@ -68,6 +71,17 @@ CHECKPOINTED_TYPES = (
     CriterionResult,
     CriterionOutcome,
     FailureKind,
+    # The run's own account of itself. Both were in graph state and neither was
+    # registered, and the failure mode is the bad one: strict msgpack does not raise, it
+    # hands back a plain `dict`. A resumed episode lost its action trace and its evidence
+    # refs with no error anywhere — a run that forgot what it did.
+    ActionRecord,
+    EvidenceRef,
+    # Added with the page-check layer (ADR 0017). `CriterionResult` gained a `source`,
+    # so a checkpoint carrying one now carries this enum too — and a worker that died
+    # mid-crawl could not resume without it. Caught by reading the allowlist against the
+    # new field rather than by a run failing at three in the morning.
+    CriterionSource,
     # Exploration state (Phase 12). A frontier that could not be rebuilt from a
     # checkpoint would restart its crawl from nothing after a worker died.
     FrontierSnapshot,

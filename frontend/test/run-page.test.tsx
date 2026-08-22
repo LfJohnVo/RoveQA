@@ -424,3 +424,23 @@ describe("a traversal shows what it mapped", () => {
     expect(screen.queryByRole("img", { name: /Map of/ })).toBeNull();
   });
 });
+
+describe("a healthy run does not look broken", () => {
+  it("does not raise an alert because there is no failure to bundle", async () => {
+    // A run that passed has no failure context, and the server says so with a 404. That
+    // put a red alert on every healthy run's page: the screen crying wolf about the
+    // absence of a problem. Seen on a real report before anyone reported it.
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.reportValue = {
+      runId: "run-1",
+      findings: [],
+      observed: [],
+      artifacts: [],
+      evidenceSetId: null,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    await screen.findByText("passed");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});

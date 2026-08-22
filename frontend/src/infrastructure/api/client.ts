@@ -194,7 +194,17 @@ export class HttpRunGateway implements RunGateway {
     // evidence list for a frame.
     const [report, failureContext] = await Promise.all([
       this.client.request("GET", `/api/v1/runs/${id}/report`),
-      this.client.request("GET", `/api/v1/runs/${id}/failure-context`),
+      // A run that passed has no failure to bundle, and the server says so with a 404.
+      // Treating that as an error put a red alert on every healthy run's page — the
+      // screen crying wolf about the absence of a problem. Absence is the answer here.
+      this.client
+        .request("GET", `/api/v1/runs/${id}/failure-context`)
+        .catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 404) {
+            return { run_id: runId, evidence_set_id: null, artifacts: [] };
+          }
+          throw error;
+        }),
     ]);
     return toRunReport(report, failureContext);
   }

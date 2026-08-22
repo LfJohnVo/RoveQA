@@ -15,6 +15,7 @@ from agentic_qa.domain.browser.actions import (
     BrowserAction,
     BrowserActionType,
 )
+from agentic_qa.domain.browser.consent import ConsentPolicy
 from agentic_qa.domain.projects.run_policy import RunPolicy
 
 
@@ -48,6 +49,14 @@ def evaluate_action(action: BrowserAction, policy: RunPolicy) -> PolicyDecision:
                 PolicyViolation.ORIGIN_NOT_ALLOWED,
                 f"navigation to {url} is outside the allowed origins",
             )
+
+    if action.answers_consent and policy.consent is not ConsentPolicy.LEAVE:
+        # Permitted by the consent decision itself, not by `destructive_actions`. The two
+        # are different permissions and the natural combination for somebody else's site
+        # is read-only *plus* "please dismiss the banner" — which used to contradict
+        # itself: the click was refused, a refusal ends the episode, and a crawl of
+        # gov.uk mapped zero pages. Measured, not imagined.
+        return PolicyDecision.permit()
 
     if action.type not in READ_ONLY_ACTIONS and not policy.destructive_actions:
         # Deny-by-default, decided by the action *type* rather than by the model's own

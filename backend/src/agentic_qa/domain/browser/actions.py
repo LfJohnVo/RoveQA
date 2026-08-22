@@ -83,6 +83,20 @@ class BrowserAction:
     expected_postconditions: tuple[str, ...] = field(default=())
     verification_strategy: str | None = None
 
+    answers_consent: bool = False
+    """This click answers a consent overlay, and the policy explicitly permitted it.
+
+    A narrow, named permission rather than a loophole. A consent click genuinely changes
+    state — it sets a cookie — so it stays `side_effect=True` and this does not pretend
+    otherwise. What it says is that `consent: reject` *is* the operator's permission for
+    this one thing: requiring `destructive_actions` on top would mean "to dismiss a cookie
+    banner you must also allow the agent to press Delete account", which is both absurd
+    and less safe than the alternative.
+
+    Unreachable from model output. `BrowserDecision.to_domain_action` never sets it, so a
+    planner cannot talk its way into this the way it can raise `side_effect` (ADR 0018).
+    """
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "intent", require_text(self.intent, field="intent"))
 

@@ -278,6 +278,7 @@ def build_agent_graph(
             side_effect=True,
             idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
             verification_strategy="observe whether the overlay is gone",
+            answers_consent=True,
         )
 
     def _page_checks(

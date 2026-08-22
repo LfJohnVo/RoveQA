@@ -19,6 +19,7 @@ from agentic_qa.domain.browser.consent import (
     consent_choice,
     looks_like_consent,
 )
+from agentic_qa.domain.browser.policy_guard import evaluate_action
 from agentic_qa.domain.exploration.state import Affordance, PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
 
@@ -229,3 +230,89 @@ class TestTheGuardActuallyFiresInAGraph:
 
         answered = [i for i in browser.executed if i.startswith("answer the consent overlay")]
         assert answered == ["answer the consent overlay: Reject additional cookies"]
+
+
+class TestReadOnlyAndRejectAreNotContradictory:
+    """The natural combination for somebody else's site, and it used to kill the run.
+
+    `consent: reject` with `destructive_actions: false` is what a careful operator picks
+    for a public site: look but do not touch, except please dismiss the banner. A consent
+    click is genuinely side-effecting, the read-only policy refused it, and a refusal ends
+    the episode — so a crawl of gov.uk under exactly that pair mapped **zero** pages.
+    Found by running four archetypes, not by reading the code.
+    """
+
+    def consent_click(self) -> BrowserAction:
+        return BrowserAction(
+            type=BrowserActionType.CLICK,
+            intent="answer the consent overlay: Reject additional cookies",
+            target=ActionTarget(role="button", name="Reject additional cookies"),
+            side_effect=True,
+            idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+            verification_strategy="observe whether the overlay is gone",
+            answers_consent=True,
+        )
+
+    def read_only(self, consent: ConsentPolicy) -> RunPolicy:
+        return RunPolicy(
+            policy_id="pol",
+            project_id="proj",
+            allowed_origins=("https://app.test",),
+            max_duration_seconds=600,
+            max_actions=20,
+            max_model_calls=0,
+            destructive_actions=False,
+            consent=consent,
+        )
+
+    def test_a_read_only_run_may_still_dismiss_the_banner(self) -> None:
+        decision = evaluate_action(self.consent_click(), self.read_only(ConsentPolicy.REJECT))
+
+        assert decision.allowed, decision.detail
+
+    def test_leave_still_refuses_it(self) -> None:
+        # The permission comes from the consent decision. Without one there is none.
+        decision = evaluate_action(self.consent_click(), self.read_only(ConsentPolicy.LEAVE))
+
+        assert not decision.allowed
+
+    def test_the_permission_does_not_widen_to_other_clicks(self) -> None:
+        # A narrow, named permission. "You may dismiss the banner" must never read as
+        # "you may press Delete account".
+        ordinary = BrowserAction(
+            type=BrowserActionType.CLICK,
+            intent="press Delete account",
+            target=ActionTarget(role="button", name="Delete account"),
+            side_effect=True,
+            idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+            verification_strategy="observe the page",
+        )
+
+        decision = evaluate_action(ordinary, self.read_only(ConsentPolicy.REJECT))
+
+        assert not decision.allowed
+
+    def test_a_planner_cannot_claim_the_permission(self) -> None:
+        # `answers_consent` is unreachable from model output: the decision schema has no
+        # such field and `to_domain_action` never sets it. A planner can raise
+        # `side_effect`; it cannot grant itself this.
+        from agentic_qa.infrastructure.inference.schemas import BrowserDecision
+
+        assert "answers_consent" not in BrowserDecision.model_fields
+
+        # Built from a dict rather than keyword arguments: without the pydantic mypy
+        # plugin the type checker cannot see a model's fields, and enabling it project-
+        # wide for one test is a bigger change than this test is worth.
+        decision = BrowserDecision.model_validate(
+            {
+                "action_type": "click",
+                "intent": "press Accept all",
+                "target": {"role": "button", "name": "Accept all cookies"},
+                "side_effect": True,
+            }
+        )
+        built = decision.to_domain_action()
+
+        assert built is not None
+        assert built.answers_consent is False
+        assert not evaluate_action(built, self.read_only(ConsentPolicy.REJECT)).allowed
