@@ -93,6 +93,10 @@ export function toRun(value: unknown): Run {
   };
 }
 
+export function toRuns(value: unknown): Run[] {
+  return parse(z.array(z.unknown()), value, "run list").map(toRun);
+}
+
 export function toRunEvent(value: unknown): RunEvent {
   const raw = parse(runEventSchema, value, "run event");
   return {

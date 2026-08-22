@@ -121,3 +121,41 @@ class TestRunRepository:
         await repositories.runs.add(Run(run_id="r-1", project_id="p-1"))
         with pytest.raises(AlreadyExistsError):
             await repositories.runs.add(Run(run_id="r-1", project_id="p-1"))
+
+    async def test_listing_a_project_returns_its_own_runs_newest_first(
+        self, repositories: Repositories
+    ) -> None:
+        """Newest first because that is the order a person looks.
+
+        The run you want is almost always the one that just finished, and a list that
+        opens on the oldest makes the newest the hardest thing to reach.
+
+        What this proves is the *total* order, not the timestamp: `now()` is fixed for a
+        transaction, so three runs added here share one `created_at` and `run_id DESC`
+        decides. That tiebreak is the half worth pinning anyway — in real use each run
+        arrives in its own transaction and `created_at` separates them, while two runs
+        created in the same millisecond are exactly the case that would otherwise come
+        back in whatever order the query plan chose.
+        """
+        await seed_project(repositories)
+        await seed_project(repositories, project_id="p-2")
+        for index in range(3):
+            await repositories.runs.add(Run(run_id=f"r-{index}", project_id="p-1"))
+        await repositories.runs.add(Run(run_id="other", project_id="p-2"))
+
+        listed = await repositories.runs.list_for_project("p-1", limit=50)
+
+        assert [run.run_id for run in listed] == ["r-2", "r-1", "r-0"]
+
+    async def test_the_listing_respects_its_limit(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+        for index in range(5):
+            await repositories.runs.add(Run(run_id=f"r-{index}", project_id="p-1"))
+
+        listed = await repositories.runs.list_for_project("p-1", limit=2)
+
+        assert len(listed) == 2
+
+    async def test_a_project_with_no_runs_lists_nothing(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+        assert await repositories.runs.list_for_project("p-1", limit=50) == []

@@ -37,6 +37,7 @@ import {
   toProjects,
   toExplorationMap,
   toRun,
+  toRuns,
   toRunEventPage,
   toRunReport,
   toStories,
@@ -175,6 +176,15 @@ export class HttpRunGateway implements RunGateway {
 
   async get(runId: string): Promise<Run> {
     return toRun(await this.client.request("GET", `/api/v1/runs/${encodeURIComponent(runId)}`));
+  }
+
+  async listForProject(projectId: string, limit: number): Promise<Run[]> {
+    return toRuns(
+      await this.client.request(
+        "GET",
+        `/api/v1/projects/${encodeURIComponent(projectId)}/runs?limit=${limit}`,
+      ),
+    );
   }
 
   async events(runId: string, after: number): Promise<RunEvent[]> {

@@ -68,6 +68,20 @@ async def queue_run(factory: UnitOfWorkFactory, client: Client, task_queue: str)
     return result.run.run_id
 
 
+async def settle(client: Client, run_id: str) -> str:
+    """Wait for the workflow itself to finish, not only for the row to say it did.
+
+    Two reasons, and the second is the one that bit. The weaker assertion is that a
+    status was written; the real claim of a durability test is that the workflow
+    completed. And a test that stops at the row exits its `worker_for` block while a
+    workflow task is still pending — with the queue then unpolled forever, the execution
+    stays `Running` in Temporal for good. Every CI run left three of those behind.
+    """
+    handle = client.get_workflow_handle(workflow_id_for(run_id))
+    result: str = await asyncio.wait_for(handle.result(), timeout=RESULT_TIMEOUT)
+    return result
+
+
 def worker_for(client: Client, factory: UnitOfWorkFactory, task_queue: str) -> Worker:
     # Activities only need the unit of work; the engine belongs to the test fixture.
     return build_worker(client, RunActivities(Container(unit_of_work=factory)), task_queue)
@@ -105,6 +119,7 @@ async def test_a_queued_run_waits_for_a_worker_instead_of_being_lost(
 
     async with worker_for(temporal_client, postgres_unit_of_work_factory, task_queue):
         await wait_for_status(postgres_unit_of_work_factory, run_id, RunStatus.COMPLETED)
+        await settle(temporal_client, run_id)
 
 
 async def test_run_continues_after_the_worker_is_replaced(
@@ -132,6 +147,7 @@ async def test_run_continues_after_the_worker_is_replaced(
     async with worker_for(temporal_client, postgres_unit_of_work_factory, task_queue):
         await gateway.request_resume(run_id)
         await wait_for_status(postgres_unit_of_work_factory, run_id, RunStatus.COMPLETED)
+        await settle(temporal_client, run_id)
 
 
 async def test_cancellation_is_explicit_and_terminal(
@@ -146,6 +162,7 @@ async def test_cancellation_is_explicit_and_terminal(
         await wait_for_status(postgres_unit_of_work_factory, run_id, RunStatus.PAUSED)
         await gateway.request_cancel(run_id)
         await wait_for_status(postgres_unit_of_work_factory, run_id, RunStatus.CANCELLED)
+        assert await settle(temporal_client, run_id) == "cancelled"
 
     async with postgres_unit_of_work_factory() as uow:
         run = await uow.runs.get(run_id)
@@ -168,3 +185,4 @@ async def test_starting_the_same_run_twice_does_not_duplicate_the_workflow(
 
     async with worker_for(temporal_client, postgres_unit_of_work_factory, task_queue):
         await wait_for_status(postgres_unit_of_work_factory, run_id, RunStatus.COMPLETED)
+        await settle(temporal_client, run_id)

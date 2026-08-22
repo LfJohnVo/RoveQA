@@ -1,8 +1,24 @@
 import { Link, useParams } from "react-router";
 
+import type { Run } from "@domain/runs/run";
+import { useProjectRunsViewModel } from "@viewmodels/runs/use-project-runs-viewmodel";
 import { useProjectViewModel } from "@viewmodels/projects/use-projects-viewmodel";
 import { MemoryIcon, RunIcon, StoriesIcon } from "@views/components/icons";
-import { Card, Lede, Notice, PageTitle } from "@views/components/ui";
+import { VerdictBadge } from "@views/components/verdict-badge";
+import {
+  Badge,
+  Card,
+  Lede,
+  Notice,
+  PageTitle,
+  SectionTitle,
+  TableBody,
+  TableCard,
+  TableHead,
+  Td,
+  Th,
+  Tr,
+} from "@views/components/ui";
 
 export function ProjectPage() {
   const { projectId = "" } = useParams();
@@ -112,6 +128,81 @@ export function ProjectPage() {
           <span className="font-mono">{project.defaultRunPolicyId}</span>
         </p>
       )}
+
+      <RunHistory projectId={project.projectId} />
     </section>
+  );
+}
+
+/**
+ * Every run of this project, newest first.
+ *
+ * The way into a report the console did not start. Until this existed a run was
+ * reachable only while its page stayed open, which made the whole interface a viewer of
+ * work you had to launch somewhere else and then not navigate away from.
+ */
+function RunHistory({ projectId }: { projectId: string }) {
+  const { runs, isLoading, error } = useProjectRunsViewModel(projectId);
+
+  return (
+    <section className="mt-8">
+      <SectionTitle>Runs</SectionTitle>
+
+      {isLoading ? <Notice>Loading runs…</Notice> : null}
+      {error !== null ? <Notice tone="error">{error}</Notice> : null}
+
+      {!isLoading && error === null && runs.length === 0 ? (
+        <Notice>No runs yet. Start one above and its report will appear here.</Notice>
+      ) : null}
+
+      {runs.length > 0 ? (
+        <TableCard label="Runs">
+          <TableHead>
+            <Th>Run</Th>
+            <Th>Status</Th>
+            <Th>Verdict</Th>
+            <Th>Plan</Th>
+          </TableHead>
+          <TableBody>
+            {runs.map((run) => (
+              <Tr key={run.runId}>
+                <Td>
+                  <Link
+                    className="font-mono text-xs font-semibold text-purple-600 hover:underline dark:text-purple-400"
+                    to={`/runs/${run.runId}`}
+                  >
+                    {run.runId}
+                  </Link>
+                </Td>
+                <Td className="text-xs text-gray-600 dark:text-gray-400">{run.status}</Td>
+                <Td>
+                  {run.verdict === null ? (
+                    // Not a verdict of "unknown": a run still going has not concluded
+                    // anything, and a badge would report the absence of an answer as one.
+                    <span className="text-xs text-gray-500 dark:text-gray-500">—</span>
+                  ) : (
+                    <VerdictBadge verdict={run.verdict} />
+                  )}
+                </Td>
+                <Td>{planLabel(run)}</Td>
+              </Tr>
+            ))}
+          </TableBody>
+        </TableCard>
+      ) : null}
+    </section>
+  );
+}
+
+function planLabel(run: Run) {
+  if (run.planId === null) {
+    // A run with no plan explored. Said plainly rather than left blank, because blank
+    // reads as missing data about a run whose shape is deliberate (ADR 0017).
+    return <Badge tone="neutral">exploration</Badge>;
+  }
+  return (
+    <span className="font-mono text-xs text-gray-500 dark:text-gray-500">
+      {run.planId.slice(0, 8)} v{run.planVersion}
+    </span>
   );
 }

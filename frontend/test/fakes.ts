@@ -116,6 +116,15 @@ export class FakeRunGateway implements RunGateway {
     return Promise.resolve(this.durable.filter((event) => event.sequence > after));
   }
 
+  /** What a project's history holds. Empty by default, which is a new project. */
+  history: Run[] = [];
+
+  listForProject(projectId: string, limit: number): Promise<Run[]> {
+    return Promise.resolve(
+      this.history.filter((run) => run.projectId === projectId).slice(0, limit),
+    );
+  }
+
   report(runId: string): Promise<RunReport> {
     return Promise.resolve(
       this.reportValue ?? {

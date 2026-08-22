@@ -40,6 +40,29 @@ from agentic_qa.interfaces.http.schemas import (
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
+by_project = APIRouter(prefix="/api/v1/projects", tags=["runs"])
+"""One project's runs. A second router only because the path hangs off the project, and
+the runs of a project are a runs concern rather than a projects one."""
+
+DEFAULT_RUN_PAGE_SIZE = 50
+MAX_RUN_PAGE_SIZE = 200
+
+
+@by_project.get("/{project_id}/runs", response_model=list[RunResponse])
+async def list_project_runs(
+    project_id: str,
+    uow: UnitOfWorkDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_RUN_PAGE_SIZE)] = DEFAULT_RUN_PAGE_SIZE,
+) -> list[RunResponse]:
+    """One project's runs, newest first.
+
+    Until this existed a finished run was reachable only by its id, which meant the
+    console could show a run it had just started and nothing else: every run from an
+    earlier session, a schedule or the CLI was invisible to it.
+    """
+    runs = await uow.runs.list_for_project(project_id, limit=limit)
+    return [RunResponse.from_domain(run) for run in runs]
+
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
 async def create_run(

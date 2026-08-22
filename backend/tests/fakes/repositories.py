@@ -239,6 +239,17 @@ class InMemoryRunRepository:
             raise NotFoundError("run", run.run_id)
         self._store.runs[run.run_id] = replace(run)
 
+    async def list_for_project(self, project_id: str, *, limit: int) -> list[Run]:
+        """Insertion order reversed, which is this store's only notion of "newest".
+
+        Honest rather than convenient: nothing here records a time, so a test that needs
+        to assert on real ordering has to talk to PostgreSQL, where `created_at` exists.
+        """
+        matching = [
+            replace(run) for run in self._store.runs.values() if run.project_id == project_id
+        ]
+        return list(reversed(matching))[:limit]
+
 
 class InMemoryRunPolicyRepository:
     def __init__(self, store: InMemoryStore) -> None:

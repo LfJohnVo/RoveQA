@@ -625,6 +625,11 @@ class RunModel(Base):
             "(plan_id IS NULL) = (plan_version IS NULL)",
             name="ck_runs_plan_identity_complete",
         ),
+        # Serves the runs list: one project, newest first. Composite rather than an
+        # additional index because `project_id` leads it, so it answers the plain
+        # by-project lookups too — the single-column index it replaces would only have
+        # been a second copy of the same prefix.
+        Index("ix_runs_project_created", "project_id", desc("created_at"), desc("run_id")),
     )
 
     run_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
@@ -632,7 +637,6 @@ class RunModel(Base):
         String(IDENTIFIER_LENGTH),
         ForeignKey("projects.project_id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
     )
     run_policy_id: Mapped[str | None] = mapped_column(
         String(IDENTIFIER_LENGTH),

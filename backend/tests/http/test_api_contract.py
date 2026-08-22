@@ -406,6 +406,39 @@ async def test_the_story_listing_is_bounded(client: httpx.AsyncClient) -> None:
     assert response.status_code == 422
 
 
+async def test_a_projects_runs_can_be_listed(client: httpx.AsyncClient) -> None:
+    """Without this a finished run was reachable only by its id.
+
+    The console could show the run it had just started and nothing else — every run from
+    an earlier session, a schedule or the CLI was invisible to it.
+    """
+    project_id = await create_project(client)
+    other = await create_project(client, name="Somebody else")
+    first = await create_run(client, project_id)
+    second = await client.post(
+        "/api/v1/runs",
+        json={"project_id": project_id},
+        headers={"Idempotency-Key": f"second-{project_id}"},
+    )
+    assert second.status_code == 201, second.text
+    await create_run(client, other)
+
+    listed = await client.get(f"/api/v1/projects/{project_id}/runs")
+    assert listed.status_code == 200
+    ids = [run["run_id"] for run in listed.json()]
+
+    assert set(ids) == {first, second.json()["run_id"]}, "a project's runs, and only those"
+    assert listed.json()[0]["project_id"] == project_id
+
+
+async def test_the_run_listing_is_bounded(client: httpx.AsyncClient) -> None:
+    # A project accumulates runs for as long as it is tested, so the page size is a
+    # promise about response size rather than a suggestion.
+    project_id = await create_project(client)
+    response = await client.get(f"/api/v1/projects/{project_id}/runs?limit=500")
+    assert response.status_code == 422
+
+
 async def test_a_project_says_whether_it_can_run(client: httpx.AsyncClient) -> None:
     """`default_run_policy_id` is part of the project.
 

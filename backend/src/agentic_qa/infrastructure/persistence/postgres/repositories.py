@@ -275,6 +275,19 @@ class PostgresRunRepository:
         model.status = run.status
         model.verdict = run.verdict
 
+    async def list_for_project(self, project_id: str, *, limit: int) -> list[Run]:
+        statement = (
+            select(RunModel)
+            .where(RunModel.project_id == project_id)
+            # `run_id` breaks the tie so the order is total: two runs created in the same
+            # millisecond would otherwise come back in whatever order the plan chose, and
+            # a list that reshuffles itself between refreshes is one nobody can page.
+            .order_by(RunModel.created_at.desc(), RunModel.run_id.desc())
+            .limit(limit)
+        )
+        result = await self._session.scalars(statement)
+        return [run_to_domain(model) for model in result]
+
 
 class PostgresRunPolicyRepository:
     def __init__(self, session: AsyncSession) -> None:

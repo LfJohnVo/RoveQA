@@ -80,6 +80,15 @@ export interface RunGateway {
   get(runId: string): Promise<Run>;
 
   /**
+   * One project's runs, newest first.
+   *
+   * Without it the console could only show a run it had started itself, in this tab, in
+   * this session — every run from a schedule, the CLI or yesterday was unreachable
+   * even though its report was sitting in the database.
+   */
+  listForProject(projectId: string, limit: number): Promise<Run[]>;
+
+  /**
    * Durable events from `after` onward.
    *
    * The baseline a reload rebuilds from, and what a reconnect catches up with. It is
