@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from agentic_qa.application.ports.browser import ActionOutcome
 from agentic_qa.domain.agent.state import AgentState
-from agentic_qa.domain.browser.actions import BrowserAction
+from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
 from agentic_qa.domain.exploration.frontier import (
     ExplorationBudget,
     ExplorationReport,
@@ -18,7 +18,8 @@ from agentic_qa.domain.exploration.frontier import (
 )
 from agentic_qa.domain.exploration.state import Affordance, PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
-from agentic_qa.domain.qa.verification import FailureKind
+from agentic_qa.domain.qa.test_plan import PlanStep, PlanStepType
+from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionSource, FailureKind
 from agentic_qa.infrastructure.agent.langgraph.graph import build_agent_graph
 from tests.fakes.agent import ScriptedModelGateway
 
@@ -61,6 +62,19 @@ class SiteBrowser:
     unclickable: set[str] = field(default_factory=set)
 
     async def execute(self, action: BrowserAction) -> ActionOutcome:
+        # A text assertion is a question about the page, not a move through the site, and
+        # answering it with a blanket `succeeded=True` is how a fake reports every
+        # criterion met. It did: the first version of the story-and-sweep test below
+        # passed against a site whose pages said nothing at all.
+        if action.type is BrowserActionType.ASSERT_TEXT:
+            expected = action.value or ""
+            here = self.pages.get(self.current, page(self.current))
+            return ActionOutcome(
+                succeeded=expected in here.visible_text,
+                current_url=f"https://app.test{self.current}",
+                detail="" if expected in here.visible_text else "text not found",
+            )
+
         # Exploration navigates when the page said where a link goes, and clicks only
         # when it did not — so this fake reads both.
         name = _path_of(action.target.url) if action.target.url else action.target.name
@@ -305,3 +319,100 @@ class TestAnExplorationFindsItsOwnWayToTheApplication:
         # No seed navigation: the first thing it did was take a link off the page it was
         # already on.
         assert browser.clicked == ["alpha"]
+
+
+class TestAStoryAndASweepInOneRun:
+    """A run may carry a story, a traversal, or both — and "both" was never designed in.
+
+    It falls out of two decisions that were made separately: exploring walks the site
+    from what each page offers, and ADR 0013 evaluates every criterion's hint against
+    *every* observation rather than once at the end. Put together, a crawl credits a
+    criterion the moment some page satisfies it, without a planner ever steering there.
+
+    Tested rather than assumed, because nothing in the code says it: the run-creation
+    docstring still claims exploring happens "instead of following a plan".
+    """
+
+    async def test_a_crawl_verifies_a_story_it_walks_past(self) -> None:
+        browser = SiteBrowser(
+            pages={
+                "/": page("/", "alpha", "beta"),
+                "/alpha": page("/alpha"),
+                "/beta": page("/beta"),
+            },
+            current="/about:blank",
+        )
+        # The literal lives on a page the frontier reaches on its own; no planner is
+        # involved and the model is never called.
+        browser.pages["/beta"] = PageState(
+            url="https://app.test/beta",
+            affordances=(),
+            body_text="Order confirmed",
+        )
+
+        model = ScriptedModelGateway(script=[])
+        graph = build_agent_graph(
+            browser=browser,
+            model=model,
+            exploration_budget=GENEROUS,
+            policy=crawlable_policy(),
+            assertions=(
+                PlanStep(
+                    step_id="assert-confirmed",
+                    type=PlanStepType.ASSERTION,
+                    description="the confirmation appears",
+                    criterion_id="ac-confirmed",
+                ),
+            ),
+            hints={"ac-confirmed": "Order confirmed"},
+        )
+
+        result = await graph.ainvoke(
+            {"agent": AgentState(run_id="run-both", goal="explore the application")}
+        )
+
+        # Both kinds come back now: the story's criterion and one universal page check
+        # per route the crawl walked (ADR 0017). Filtering by source is the supported way
+        # to ask for one of them — see tests/qa/test_run_shapes.py for the sweep half.
+        results = result["criterion_results"]
+        story = [r for r in results if r.source is CriterionSource.PLAN]
+
+        assert len(story) == 1
+        assert story[0].criterion_id == "ac-confirmed"
+        assert story[0].outcome is CriterionOutcome.MET
+        # The whole point: a story was answered and the model was never asked.
+        assert story[0].model_derived is False
+        assert model.calls == 0
+
+    async def test_a_crawl_that_never_meets_the_story_does_not_claim_it_did(self) -> None:
+        browser = SiteBrowser(
+            pages={"/": page("/", "alpha"), "/alpha": page("/alpha")},
+            current="/about:blank",
+        )
+
+        model = ScriptedModelGateway(script=[])
+        graph = build_agent_graph(
+            browser=browser,
+            model=model,
+            exploration_budget=GENEROUS,
+            policy=crawlable_policy(),
+            assertions=(
+                PlanStep(
+                    step_id="assert-confirmed",
+                    type=PlanStepType.ASSERTION,
+                    description="the confirmation appears",
+                    criterion_id="ac-confirmed",
+                ),
+            ),
+            hints={"ac-confirmed": "Order confirmed"},
+        )
+
+        result = await graph.ainvoke(
+            {"agent": AgentState(run_id="run-both", goal="explore the application")}
+        )
+
+        story = [r for r in result["criterion_results"] if r.source is CriterionSource.PLAN]
+
+        assert len(story) == 1
+        assert story[0].outcome is not CriterionOutcome.MET
+        assert model.calls == 0

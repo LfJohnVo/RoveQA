@@ -72,9 +72,14 @@ sweep() {  # $1 = origin
   echo "  stopped  $(psql "select coalesce(stop_reason,'-') from exploration_runs where run_id='$run'")"
   echo "  actions  $(psql "select count(*) from run_events where run_id='$run' and type='run.action.taken'")"
   echo "  observed $(psql "select count(*) from observed_failures where run_id='$run'")"
+  echo "  checks   $(psql "select count(*) from criterion_results where run_id='$run' and source='sweep'")"
+  echo "  answered $(psql "select count(*) from criterion_results where run_id='$run' and source='sweep' and outcome='met'")"
 
   psql "select '  · ' || route || '  ' || coalesce(title,'(no title)')
         from explored_states where run_id='$run' order by id limit 10"
+  psql "select '  ✗ ' || criterion_id || '  ' || observation
+        from criterion_results where run_id='$run' and source='sweep' and outcome <> 'met'
+        order by id limit 5"
   psql "select '  ! ' || kind || '  ' || left(detail, 90)
         from observed_failures where run_id='$run' order by id limit 5"
 }

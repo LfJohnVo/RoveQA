@@ -45,7 +45,7 @@ from agentic_qa.domain.knowledge.redaction import redact_secrets
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.observations import ObservedFailure, ObservedFailureKind
 from agentic_qa.domain.qa.test_plan import TestPlan
-from agentic_qa.domain.qa.verification import derive_verdict
+from agentic_qa.domain.qa.verification import CriterionSource, derive_verdict
 from agentic_qa.domain.runs.recovery import (
     BrowserRecoveryData,
     RecoveryPoint,
@@ -429,17 +429,31 @@ class RunActivities:
         the workflow must stay free of I/O, and a verdict computed from data it never
         saw could not be re-derived when someone questions the report.
         """
-        if plan is None:
+        if not result.criterion_results:
+            # Nothing was checked at all — no story, and no page reached. There is no
+            # honest verdict to derive and `derive_verdict` would refuse anyway.
             return None
 
         async with self._container.unit_of_work() as uow:
             await uow.criterion_results.record(params.run_id, result.criterion_results)
             await uow.commit()
 
-        return derive_verdict(
-            result.criterion_results,
-            expected=[step.criterion_id for step in plan.assertions if step.criterion_id],
-        ).value
+        # A run without a story used to stop above, so a sweep that mapped nine pages and
+        # found a console error came back `inconclusive` — "nobody knows" from a run that
+        # knew nine things. The universal page checks are criteria too, and expecting them
+        # is what gives such a run a real verdict (ADR 0017).
+        expected = (
+            [step.criterion_id for step in plan.assertions if step.criterion_id] if plan else []
+        )
+        expected += [
+            check.criterion_id
+            for check in result.criterion_results
+            if check.source is CriterionSource.SWEEP
+        ]
+        if not expected:
+            return None
+
+        return derive_verdict(result.criterion_results, expected=expected).value
 
     async def _record_observed_failures(self, params: EpisodeParams, result: EpisodeResult) -> None:
         """Persist what the browser saw go wrong.

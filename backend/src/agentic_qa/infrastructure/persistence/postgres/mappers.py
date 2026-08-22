@@ -29,7 +29,12 @@ from agentic_qa.domain.qa.test_plan import (
     TestPlan,
 )
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion, UserStory
-from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionResult, FailureKind
+from agentic_qa.domain.qa.verification import (
+    CriterionOutcome,
+    CriterionResult,
+    CriterionSource,
+    FailureKind,
+)
 from agentic_qa.domain.runs.run import Run
 from agentic_qa.infrastructure.persistence.postgres.models import (
     AcceptanceCriterionModel,
@@ -285,6 +290,7 @@ def criterion_result_to_domain(model: CriterionResultModel) -> CriterionResult:
         model_derived=model.model_derived,
         evidence_refs=tuple(model.evidence_refs),
         step_id=model.step_id,
+        source=CriterionSource(model.source),
         model_invocation_id=model.model_invocation_id,
         model_name=model.model_name,
         prompt_version=model.prompt_version,
@@ -297,6 +303,7 @@ def criterion_result_to_model(run_id: str, result: CriterionResult) -> Criterion
         criterion_id=result.criterion_id,
         step_id=result.step_id,
         outcome=result.outcome.value,
+        source=result.source.value,
         failure_kind=result.failure_kind.value if result.failure_kind else None,
         observation=result.observation,
         model_derived=result.model_derived,

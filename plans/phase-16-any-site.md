@@ -153,12 +153,29 @@ como declinados con su URL, y comprobarlos queda como decisión del ADR — alca
 eso es política, no implementación.
 
 **Gates**
-- Un barrido de un sitio de varias páginas reporta una fila por estado alcanzable.
-- Una página con un 500 plantado aparece señalada.
-- Un JS roto plantado aparece señalado.
+- Un barrido de un sitio de varias páginas reporta una fila por estado alcanzable. ✅
+- Una página con un 500 plantado aparece señalada. ✅
+- Un JS roto plantado aparece señalado. ✅ (slice 1 + `observed_failures`)
 - Un sitio con cien páginas equivalentes no produce cien hallazgos iguales: la normalización de
-  rutas que la exploración ya hace debe sostenerlo, y el test lo fija.
-- Cero llamadas al modelo en un barrido. Medido, no supuesto.
+  rutas que la exploración ya hace debe sostenerlo, y el test lo fija. ✅
+- Cero llamadas al modelo en un barrido. Medido, no supuesto. ✅ — y mejor que medido:
+  el smoke de gate 4 corre **sin endpoint de modelo configurado**.
+
+**Cerrada, con una decisión que el plan no anticipaba.** El barrido **no es un modo**: es
+una capa. Todo run aplica los mismos chequeos universales a toda página que observa, tenga
+historia o no. Un tercer modo al lado de «historia» y «recorrido» habría significado tres
+reglas de veredicto y una combinación que nadie prueba; una capa compone porque no hay nada
+que componer. ADR 0017.
+
+Consecuencia útil que no estaba en el plan: un run **con** historia ahora también reporta la
+salud de las páginas por las que pasó. Una historia de checkout que atraviesa un 500 de
+camino es un run que debería decirlo, y hasta ahora el 500 era invisible salvo que un
+criterio lo nombrara.
+
+Y «ambas a la vez» **ya funcionaba** y nadie lo sabía: sale de exploración + ADR 0013
+(verificación continua). Lo que faltaba era probarlo — y el primer intento pasó por la razón
+equivocada, porque el doble de navegador contestaba `succeeded=True` a un `assert_text` que
+no implementaba. Todo criterio salía cumplido contra páginas que no decían nada.
 
 ### Slice 4 — Overlays de consentimiento
 

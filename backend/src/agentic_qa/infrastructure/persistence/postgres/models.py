@@ -375,6 +375,7 @@ class CriterionResultModel(Base):
         CheckConstraint(
             "outcome IN ('met', 'not_met', 'unverified')", name="ck_criterion_results_outcome"
         ),
+        CheckConstraint("source IN ('plan', 'sweep')", name="ck_criterion_results_source"),
         CheckConstraint(
             "(outcome = 'not_met') = (failure_kind IS NOT NULL)",
             name="ck_criterion_results_failure_kind",
@@ -390,6 +391,12 @@ class CriterionResultModel(Base):
     criterion_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), nullable=False)
     step_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="plan")
+    """Who asked for this check: the run's plan, or the universal page sweep.
+
+    A column rather than an id prefix, because a reader must never confuse "the story
+    asked for this" with "every run checks this on every page" (ADR 0017)."""
+
     failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     observation: Mapped[str] = mapped_column(Text, nullable=False)
     model_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

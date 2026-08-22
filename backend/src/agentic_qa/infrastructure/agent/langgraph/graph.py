@@ -58,8 +58,10 @@ from agentic_qa.domain.exploration.frontier import (
 from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.domain.knowledge.memory_context import MemoryItem
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.page_checks import check_page, is_checkable
 from agentic_qa.domain.qa.test_plan import PlanStep
 from agentic_qa.domain.qa.verification import (
+    CriterionOutcome,
     CriterionResult,
     FailureKind,
     failure_kind_for_action,
@@ -98,6 +100,14 @@ class GraphState(TypedDict, total=False):
     Separate from `agent.recent_steps`, which is a *window* the planner reads and is
     deliberately small. This one is the whole run: an operator diagnosing a stuck run needs
     the step that went wrong, not the last twelve.
+    """
+
+    page_checks: dict[str, CriterionResult]
+    """One universal check per route this run observed, keyed by criterion id.
+
+    Keyed rather than appended so a route visited twice is one finding, and so the worse
+    answer wins: a page that answered 500 once and 200 later is a page that answered 500
+    (ADR 0017).
     """
 
     criteria_seen: dict[str, str]
@@ -202,6 +212,36 @@ def build_agent_graph(
                 found[criterion_id] = f"step {step} at {url}"
         return found
 
+    def _page_checks(
+        already: dict[str, CriterionResult] | None, page: PageState
+    ) -> dict[str, CriterionResult]:
+        """The universal checks for this page, folded into what earlier pages produced.
+
+        `exploring` answers the question `check_page` cannot: a crawl only ever takes
+        affordances the site published, so a 404 there is the site's own broken link. A
+        planned run can reach a url a model invented, where the same status accuses
+        nobody (ADR 0015).
+
+        A route already checked keeps the worse answer. Two visits to a page that failed
+        once and worked once is not a healthy page, and last-write-wins would decide it
+        by the order the crawl happened to take.
+        """
+        checks = dict(already or {})
+        if not is_checkable(page):
+            return checks
+        result = check_page(page, reached_from_published_link=exploring)
+        existing = checks.get(result.criterion_id)
+        if existing is None or _severity(result) > _severity(existing):
+            checks[result.criterion_id] = result
+        return checks
+
+    def _severity(result: CriterionResult) -> int:
+        if result.outcome is CriterionOutcome.NOT_MET:
+            return 2
+        if result.outcome is CriterionOutcome.UNVERIFIED:
+            return 1
+        return 0
+
     def _allowed_alternative(state: GraphState, action: BrowserAction) -> BrowserAction | None:
         """The action this policy *does* allow for the element the refused one named.
 
@@ -303,6 +343,7 @@ def build_agent_graph(
             "criteria_seen": _sightings(
                 state.get("criteria_seen"), page.visible_text, page.url, agent.step_index
             ),
+            "page_checks": _page_checks(state.get("page_checks"), page),
         }
 
     async def plan(state: GraphState) -> GraphState:
@@ -438,6 +479,7 @@ def build_agent_graph(
         # An exploring episode observes too, and a criterion satisfied on a page the crawl
         # passed through is as real as one satisfied on the page it stopped at.
         seen = _sightings(state.get("criteria_seen"), page.visible_text, page.url, agent.step_index)
+        checks = _page_checks(state.get("page_checks"), page)
         discovered = frontier.record(page, depth=state.get("exploration_depth", 0))
         if discovered:
             logger.info(
@@ -460,6 +502,7 @@ def build_agent_graph(
                 "agent": agent,
                 "pending_action": None,
                 "criteria_seen": seen,
+                "page_checks": checks,
                 "exploration": frontier.snapshot(),
                 "exploration_report": frontier.report(reason),
                 "safe_point": None,
@@ -474,6 +517,7 @@ def build_agent_graph(
             "agent": agent,
             "pending_action": exploration_action(entry.affordance),
             "criteria_seen": seen,
+            "page_checks": checks,
             "exploration": frontier.snapshot(),
             "exploration_depth": entry.depth,
             "safe_point": None,
@@ -683,8 +727,17 @@ def build_agent_graph(
         shot = await capture("screenshot")
         evidence = (shot,) if shot is not None else ()
 
+        # Sorted so a report reads the same way twice; dict order is insertion order and
+        # a crawl's insertion order is whatever the frontier happened to do.
+        swept = tuple(
+            state.get("page_checks", {})[key] for key in sorted(state.get("page_checks", {}))
+        )
+
         if not assertions:
-            return {"criterion_results": (), "evidence": evidence}
+            # The whole point of ADR 0017: a run with no story used to return nothing
+            # here, so `derive_verdict` was never reached and every sweep — however much
+            # it had learned — came back `inconclusive`.
+            return {"criterion_results": swept, "evidence": evidence}
 
         results = await verify_plan_criteria(
             assertions,
@@ -697,11 +750,14 @@ def build_agent_graph(
         )
         if shot is not None:
             # Every criterion was judged against this one page state, so this is
-            # honestly the evidence for all of them.
+            # honestly the evidence for all of them. The sweep results are excluded: each
+            # one is about a page the run left long ago, and attaching a screenshot of
+            # the last page to a finding about the third would be evidence for the wrong
+            # claim.
             results = tuple(
                 replace(result, evidence_refs=(shot.artifact_id,)) for result in results
             )
-        return {"criterion_results": results, "evidence": evidence}
+        return {"criterion_results": results + swept, "evidence": evidence}
 
     async def close_episode(state: GraphState) -> GraphState:
         agent = state["agent"]

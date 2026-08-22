@@ -105,6 +105,9 @@ def to_document(report: RunReport) -> dict[str, Any]:
         "criteria": [
             {
                 "criterion_id": result.criterion_id,
+                # `plan` or `sweep`. A consumer that wants only what the story asked for
+                # filters on this rather than on the id's shape.
+                "source": result.source.value,
                 "step_id": result.step_id,
                 "outcome": result.outcome.value,
                 "failure_kind": result.failure_kind.value if result.failure_kind else None,
