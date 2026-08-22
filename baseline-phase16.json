@@ -1,0 +1,335 @@
+{
+  "model": "present",
+  "target": "http://target-app:8000",
+  "repeats": 3,
+  "by_shape": {
+    "after-a-form": {
+      "runs": 3,
+      "timed_out": 0,
+      "verdicts": {
+        "passed": 3
+      },
+      "criteria_met": 6,
+      "criteria_total": 6,
+      "story_criteria": 3,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "median_seconds": 11
+    },
+    "multi-page": {
+      "runs": 3,
+      "timed_out": 0,
+      "verdicts": {
+        "passed": 3
+      },
+      "criteria_met": 12,
+      "criteria_total": 12,
+      "story_criteria": 6,
+      "sweep_criteria": 6,
+      "failure_kinds": [],
+      "median_seconds": 10
+    },
+    "one-page": {
+      "runs": 3,
+      "timed_out": 0,
+      "verdicts": {
+        "passed": 3
+      },
+      "criteria_met": 9,
+      "criteria_total": 9,
+      "story_criteria": 6,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "median_seconds": 6
+    },
+    "story-and-sweep": {
+      "runs": 3,
+      "timed_out": 0,
+      "verdicts": {
+        "passed": 3
+      },
+      "criteria_met": 15,
+      "criteria_total": 15,
+      "story_criteria": 6,
+      "sweep_criteria": 9,
+      "failure_kinds": [],
+      "median_seconds": 6
+    },
+    "sweep-only": {
+      "runs": 3,
+      "timed_out": 0,
+      "verdicts": {
+        "passed": 3
+      },
+      "criteria_met": 9,
+      "criteria_total": 9,
+      "story_criteria": 0,
+      "sweep_criteria": 9,
+      "failure_kinds": [],
+      "median_seconds": 5
+    },
+    "unreachable": {
+      "runs": 3,
+      "timed_out": 0,
+      "verdicts": {
+        "blocked": 3
+      },
+      "criteria_met": 4,
+      "criteria_total": 7,
+      "story_criteria": 3,
+      "sweep_criteria": 4,
+      "failure_kinds": [
+        "environment"
+      ],
+      "median_seconds": 6
+    }
+  },
+  "headline": {
+    "reachable_passed": 15,
+    "reachable_runs": 15,
+    "unreachable_never_failed": true,
+    "timed_out": 0
+  },
+  "runs": [
+    {
+      "shape": "one-page",
+      "attempt": 1,
+      "run_id": "2099c045-f8a6-426e-b14a-500a61159ea3",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 3,
+      "criteria_met": 3,
+      "story_criteria": 2,
+      "sweep_criteria": 1,
+      "failure_kinds": [],
+      "seconds": 5
+    },
+    {
+      "shape": "one-page",
+      "attempt": 2,
+      "run_id": "3cad42c5-b3f6-466b-bc1e-d36c66e9f6f7",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 3,
+      "criteria_met": 3,
+      "story_criteria": 2,
+      "sweep_criteria": 1,
+      "failure_kinds": [],
+      "seconds": 6
+    },
+    {
+      "shape": "one-page",
+      "attempt": 3,
+      "run_id": "12e625f1-d5df-49e7-a051-31302f963dca",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 3,
+      "criteria_met": 3,
+      "story_criteria": 2,
+      "sweep_criteria": 1,
+      "failure_kinds": [],
+      "seconds": 6
+    },
+    {
+      "shape": "multi-page",
+      "attempt": 1,
+      "run_id": "441d9b96-05f4-4c62-9877-ccbac56bde7f",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 4,
+      "criteria_met": 4,
+      "story_criteria": 2,
+      "sweep_criteria": 2,
+      "failure_kinds": [],
+      "seconds": 11
+    },
+    {
+      "shape": "multi-page",
+      "attempt": 2,
+      "run_id": "7f0fe94d-27c6-467a-9aaa-5bef9ee4e446",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 4,
+      "criteria_met": 4,
+      "story_criteria": 2,
+      "sweep_criteria": 2,
+      "failure_kinds": [],
+      "seconds": 10
+    },
+    {
+      "shape": "multi-page",
+      "attempt": 3,
+      "run_id": "979ca08c-80d8-4524-aa7f-87699c84e6b7",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 4,
+      "criteria_met": 4,
+      "story_criteria": 2,
+      "sweep_criteria": 2,
+      "failure_kinds": [],
+      "seconds": 10
+    },
+    {
+      "shape": "after-a-form",
+      "attempt": 1,
+      "run_id": "1176970f-f4df-4c36-b08f-fc80433e443b",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 2,
+      "criteria_met": 2,
+      "story_criteria": 1,
+      "sweep_criteria": 1,
+      "failure_kinds": [],
+      "seconds": 11
+    },
+    {
+      "shape": "after-a-form",
+      "attempt": 2,
+      "run_id": "6f27df65-1344-4a8b-9cab-b46a9e8f22f3",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 2,
+      "criteria_met": 2,
+      "story_criteria": 1,
+      "sweep_criteria": 1,
+      "failure_kinds": [],
+      "seconds": 11
+    },
+    {
+      "shape": "after-a-form",
+      "attempt": 3,
+      "run_id": "8c75dd00-0bf7-46ca-b1ea-ae7eb3042598",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 2,
+      "criteria_met": 2,
+      "story_criteria": 1,
+      "sweep_criteria": 1,
+      "failure_kinds": [],
+      "seconds": 11
+    },
+    {
+      "shape": "unreachable",
+      "attempt": 1,
+      "run_id": "b2e80b6d-8b28-458e-aa60-8cbcd90456e8",
+      "status": "completed",
+      "verdict": "blocked",
+      "criteria_total": 3,
+      "criteria_met": 2,
+      "story_criteria": 1,
+      "sweep_criteria": 2,
+      "failure_kinds": [
+        "environment"
+      ],
+      "seconds": 10
+    },
+    {
+      "shape": "unreachable",
+      "attempt": 2,
+      "run_id": "24e8ee3c-86d4-4b2d-8413-436228a3b12c",
+      "status": "completed",
+      "verdict": "blocked",
+      "criteria_total": 2,
+      "criteria_met": 1,
+      "story_criteria": 1,
+      "sweep_criteria": 1,
+      "failure_kinds": [
+        "environment"
+      ],
+      "seconds": 6
+    },
+    {
+      "shape": "unreachable",
+      "attempt": 3,
+      "run_id": "6a5048bf-089e-48d3-8f1f-0f942b8644ba",
+      "status": "completed",
+      "verdict": "blocked",
+      "criteria_total": 2,
+      "criteria_met": 1,
+      "story_criteria": 1,
+      "sweep_criteria": 1,
+      "failure_kinds": [
+        "environment"
+      ],
+      "seconds": 6
+    },
+    {
+      "shape": "sweep-only",
+      "attempt": 1,
+      "run_id": "af966da6-e802-4211-89e9-dd91a1a9e804",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 3,
+      "criteria_met": 3,
+      "story_criteria": 0,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "seconds": 5
+    },
+    {
+      "shape": "sweep-only",
+      "attempt": 2,
+      "run_id": "4c6fc7f2-57d8-4598-a86a-f43bd9aaab94",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 3,
+      "criteria_met": 3,
+      "story_criteria": 0,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "seconds": 5
+    },
+    {
+      "shape": "sweep-only",
+      "attempt": 3,
+      "run_id": "ed29b596-5e5f-4432-b9ea-fdcc2c13c58a",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 3,
+      "criteria_met": 3,
+      "story_criteria": 0,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "seconds": 6
+    },
+    {
+      "shape": "story-and-sweep",
+      "attempt": 1,
+      "run_id": "972cff5f-dc6a-43c2-93af-9c55a5f71135",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 5,
+      "criteria_met": 5,
+      "story_criteria": 2,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "seconds": 6
+    },
+    {
+      "shape": "story-and-sweep",
+      "attempt": 2,
+      "run_id": "f648f0b1-c11a-4b0b-a8b1-4736918aaf72",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 5,
+      "criteria_met": 5,
+      "story_criteria": 2,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "seconds": 5
+    },
+    {
+      "shape": "story-and-sweep",
+      "attempt": 3,
+      "run_id": "c370b043-2be7-489b-afed-038c7e5274e3",
+      "status": "completed",
+      "verdict": "passed",
+      "criteria_total": 5,
+      "criteria_met": 5,
+      "story_criteria": 2,
+      "sweep_criteria": 3,
+      "failure_kinds": [],
+      "seconds": 6
+    }
+  ]
+}

@@ -41,6 +41,7 @@ from agentic_qa.domain.agent.state import (
     StepRecord,
 )
 from agentic_qa.domain.browser.actions import (
+    NEEDS_TARGET,
     ActionTarget,
     BrowserAction,
     BrowserActionType,
@@ -99,6 +100,15 @@ class GraphState(TypedDict, total=False):
     Kept so a refusal can name the alternative the page offers. The domain guard cannot
     do this -- it decides on the action alone, which is what makes it testable without a
     browser -- and the graph is the layer that has both.
+    """
+
+    failed_targets: tuple[str, ...]
+    """Locators the browser could not act on this episode, in the order they were tried.
+
+    Fed back to the planner. Kept in the graph state rather than derived from
+    `action_log` at planning time because the log is a record of what happened and this
+    is an input to what happens next; deriving one from the other would tie the planner's
+    context to the shape of the audit trail.
     """
 
     action_log: tuple[ActionRecord, ...]
@@ -357,6 +367,21 @@ def build_agent_graph(
             ),
         )
 
+    def _unreachable(state: GraphState, action: BrowserAction) -> tuple[str, ...]:
+        """Remember a locator the browser could not act on, so the planner is told once.
+
+        Only actions the domain requires a target for: `navigate` failing is usually a
+        slow or momentarily unhappy site, and warning a planner off a url it should
+        retry would trade one wasted step for a stuck run.
+        """
+        so_far = state.get("failed_targets", ())
+        if action.type not in NEEDS_TARGET or action.target.is_empty():
+            return so_far
+        described = action.target.describe()
+        # Ordered dedup: the same target failing twice is one warning, and the order the
+        # run tried them in is the order they are worth reading.
+        return so_far if described in so_far else (*so_far, described)
+
     exploring = exploration_budget is not None
     started = now()
     # The plan's criteria, in the shape the planner reads. Built once here because this
@@ -372,6 +397,31 @@ def build_agent_graph(
         for step in assertions
         if step.criterion_id
     )
+    settleable = {
+        criterion.criterion_id for criterion in planner_criteria if criterion.expected_text
+    }
+    """Criteria a substring can answer. The rest need a model to judge and cannot be
+    called met without asking it, so their presence is what makes a story unfinishable
+    without the planner saying so."""
+
+    all_settleable = bool(planner_criteria) and len(settleable) == len(planner_criteria)
+
+    def story_is_done(state: GraphState) -> bool:
+        """Every criterion this run is judged by has been seen, so there is nothing left.
+
+        Measured on `after-a-form`: the record was created and the confirmation asserted
+        at action 5, and the planner then asserted the same text twenty more times until
+        the action budget ran out — twenty model calls and twenty actions after the
+        answer was already in hand. `criteria_seen` knew; nothing acted on it.
+
+        Deliberately not applied while exploring. There the story is a layer over a
+        crawl (ADR 0017) and the crawl's own job — does every reachable page load — is
+        not finished just because the story's criteria turned up early.
+        """
+        if exploring or not all_settleable:
+            return False
+        return settleable <= set(state.get("criteria_seen") or {})
+
     # Asked before an affordance enters the frontier, not after it is attempted: a
     # denied action ends an episode by design, so a read-only exploration that queued
     # buttons would stop at the first one instead of mapping the application.
@@ -440,6 +490,10 @@ def build_agent_graph(
                 # The policy is what knows the application's address. Withholding it
                 # left the planner guessing at URLs the same policy then refused.
                 allowed_origins=policy.allowed_origins if policy is not None else (),
+                # What has already been tried and did not work. Measured: without
+                # it a planner spent three of its actions, and thirty seconds, on
+                # one field that was never there.
+                failed_targets=state.get("failed_targets", ()),
                 # What this run is judged by. Constant for the episode, like memory.
                 criteria=planner_criteria,
                 # Constant for the episode: it was resolved once, before the graph
@@ -698,6 +752,7 @@ def build_agent_graph(
                 "last_detail": str(unusable),
                 "last_action_type": action.type,
                 "last_denied": False,
+                "failed_targets": _unreachable(state, action),
                 "action_log": _logged(state, action, False, detail=str(unusable)),
             }
         return {
@@ -706,6 +761,11 @@ def build_agent_graph(
             "last_detail": outcome.detail,
             "last_action_type": action.type,
             "last_denied": False,
+            "failed_targets": (
+                state.get("failed_targets", ())
+                if outcome.succeeded
+                else _unreachable(state, action)
+            ),
             "action_log": _logged(
                 state,
                 action,
@@ -758,6 +818,11 @@ def build_agent_graph(
     async def checkpoint(state: GraphState) -> GraphState:
         """Mark a semantically safe moment. Persisting it is the activity's job."""
         agent = state["agent"]
+        if story_is_done(state):
+            # Decided here rather than in the router so the episode summary agrees with
+            # it: `close_episode` reads `goal_reached`, and a run that met every one of
+            # its criteria and then stopped would otherwise summarise itself as failed.
+            agent.goal_reached = True
         return {
             "agent": agent,
             "recovery_attempts": 0,

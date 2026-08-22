@@ -54,6 +54,19 @@ class PlanningRequest:
     *guess* a URL — which the same allowlist then refused. A planner starting on
     `about:blank` with no origin to aim at cannot take a first step at all."""
 
+    failed_targets: tuple[str, ...] = field(default=())
+    """Locators this episode already aimed at and the browser could not act on.
+
+    Measured on the `after-a-form` baseline shape: the planner filled the one field the
+    form actually has, invented a second one, then asked for that same non-existent
+    field three times — ten seconds of locator timeout each, most of that shape's 42s
+    median, to learn nothing. The failure was already in `recent_steps` as prose and
+    that did not stop the repetition, so it is stated here as a fact instead.
+
+    Navigation is deliberately not collected here: a target that never resolves will
+    never resolve, while a url that failed once may simply have been slow.
+    """
+
     criteria: tuple[PlanCriterion, ...] = field(default=())
     """What the run will be judged by.
 

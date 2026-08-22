@@ -66,6 +66,79 @@ Los artifacts guardan **referencias** en PostgreSQL y los bytes en el filesystem
 (docs/11), acotados por `MAX_ARTIFACT_BYTES` por artifact. Su crecimiento es con el
 trabajo —una captura por episodio— y es el que se espera.
 
+## Cuánto tarda un run entero, por forma
+
+Medido con `scripts/agent-baseline.sh`, 3 repeticiones de cada forma, modelo real
+(`Qwen/Qwen3-4B-Instruct-2507` en vLLM) contra la app de pruebas local. 18 runs, cero
+timeouts en las dos columnas. Los datos crudos de la corrida actual están en
+`baseline-phase16.json`.
+
+| Forma | Antes (2026-08-21) | Después (2026-08-22) | |
+| --- | --- | --- | --- |
+| `one-page` | 3 passed, 26 s | 3 passed, **6 s** | 4,3× |
+| `multi-page` | 3 passed, 26 s | 3 passed, **10 s** | 2,6× |
+| `after-a-form` | 1 passed / 2 blocked, 42 s | **3 passed**, **11 s** | 3,8× |
+| `unreachable` | 3 blocked, 32 s | 3 blocked, **6 s** | 5,3× |
+| `sweep-only` | 3 passed, 5 s | 3 passed, 5 s | — |
+| `story-and-sweep` | 3 passed, 5 s | 3 passed, 6 s | — |
+
+`reachable_passed` pasó de 13/15 a **15/15**; `unreachable_never_failed: true` y
+`timed_out: 0` en ambas. Ningún criterio se perdió: las formas alcanzables verifican
+6/6, 12/12, 9/9, 15/15 y 9/9.
+
+Las dos filas que no cambiaron son las que ya no usaban el modelo. Ahí está la lectura
+de fondo: **lo que costaba tiempo era inferencia desperdiciada**, y las dos correcciones
+son la misma corrección — el proceso ya sabía algo y no se lo decía a quien decidía.
+
+### Lo que el planner pedía dos veces
+
+El log de acciones de un run bloqueado de `after-a-form`:
+
+```
+1 | navigate | go to records page                      | ok=true
+2 | fill     | set reference value                     | ok=true
+3 | fill     | set the name of the record to 'Probe'   | ok=false | Locator.fill: Timeout 10000ms exceeded.
+4 | fill     | set the name of the record to 'Probe'   | ok=false | Locator.fill: Timeout 10000ms exceeded.
+5 | fill     | set the name of the record to 'Probe'   | ok=false | Locator.fill: Timeout 10000ms exceeded.
+```
+
+Rellenó el campo que el formulario sí tiene, inventó un segundo campo y lo pidió tres
+veces idénticas: treinta segundos de timeout de locator para no aprender nada. El fallo
+ya estaba en `recent_steps` como prosa y la prosa no lo detuvo, así que el locator vuelve
+al prompt como un hecho — `PlanningRequest.failed_targets`, sección
+`<targets_that_did_not_work>`, `planner.v7`. La navegación queda fuera a propósito: un
+locator que no resuelve no va a resolver, pero una url que falló una vez pudo ir lenta.
+
+### Lo que el planner pedía veinte veces
+
+Corregido lo anterior, la forma pasó a 3/3 passed y el log mostró el desperdicio mayor:
+
+```
+1 | navigate     | go to records page   | ok=true
+2 | fill         | set reference value  | ok=true
+3 | fill         | set name             | ok=true
+4 | click        | submit_record        | ok=true
+5 | assert_text  | ac-created           | ok=true      <- respondido aquí
+6..25 | assert_text | (el mismo literal, veinte veces más)
+```
+
+Veinte llamadas al modelo y veinte acciones después de tener la respuesta, hasta agotar
+el presupuesto de acciones. El run reportaba `passed`, así que nada estaba mal: sólo
+lento, que es el desperdicio que sobrevive a un suite verde. `criteria_seen` lo sabía
+desde el paso 0 y nadie actuaba sobre ello.
+
+Ahora el episodio termina cuando cada criterio que un substring puede responder ha sido
+visto (`story_is_done`). Dos límites deliberados:
+
+- **Un criterio sin literal no cuenta.** Lo juzga un modelo, y parar antes de preguntarle
+  sería declarar cumplido algo que nadie comprobó.
+- **No aplica mientras se explora.** Ahí la historia es una capa sobre un barrido (ADR
+  0017), y el trabajo del barrido —¿cargan todas las páginas alcanzables?— no termina
+  porque los criterios de la historia aparezcan temprano.
+
+Lo que cuenta como cumplido no cambió: un avistamiento en cualquier página del run ya
+acreditaba el criterio antes de esto. Lo único que cambió es cuándo se deja de buscar.
+
 ## Lo que sigue sin medirse
 
 1. **Latencia de un checkpoint bajo carga.** Se conoce su tamaño, no cuánto tarda en

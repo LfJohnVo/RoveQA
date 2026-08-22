@@ -57,10 +57,21 @@ class RecordingBrowserGateway:
     """What the page says. Needed by anything that reads the page rather than its
     controls — a criterion's literal, or whether this is a consent banner."""
 
+    absent_names: set[str] = field(default_factory=set)
+    """Accessible names this page does not have. Unlike `fail_intents`, aiming at one
+    fails every time — which is the case that matters, because an element that is not
+    there does not appear on the second ask either."""
+
     described: int = 0
 
     async def execute(self, action: BrowserAction) -> ActionOutcome:
         self.executed.append(action.intent)
+        if action.target.name in self.absent_names:
+            return ActionOutcome(
+                succeeded=False,
+                current_url=self.url,
+                detail=f"Locator.{action.type.value}: Timeout 10000ms exceeded.",
+            )
         if action.intent in self.fail_intents:
             self.fail_intents.discard(action.intent)  # fails once, then succeeds
             return ActionOutcome(succeeded=False, current_url=self.url, detail="element missing")

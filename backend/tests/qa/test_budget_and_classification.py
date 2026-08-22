@@ -15,7 +15,11 @@ from itertools import count
 from typing import Any
 
 from agentic_qa.application.ports.browser import ActionOutcome
-from agentic_qa.application.ports.models import PlannedAction, PlanningRequest
+from agentic_qa.application.ports.models import (
+    CriterionJudgement,
+    PlannedAction,
+    PlanningRequest,
+)
 from agentic_qa.application.services.guarded_browser import GuardedBrowserGateway
 from agentic_qa.domain.agent.state import AgentState
 from agentic_qa.domain.browser.actions import (
@@ -35,7 +39,11 @@ CRITERION = "ac-confirmed"
 
 
 def policy_for(
-    *, max_actions: int = 50, max_model_calls: int = 50, max_duration_seconds: int = 600
+    *,
+    max_actions: int = 50,
+    max_model_calls: int = 50,
+    max_duration_seconds: int = 600,
+    destructive: bool = False,
 ) -> RunPolicy:
     return RunPolicy(
         policy_id="pol-1",
@@ -44,7 +52,7 @@ def policy_for(
         max_duration_seconds=max_duration_seconds,
         max_actions=max_actions,
         max_model_calls=max_model_calls,
-        destructive_actions=False,
+        destructive_actions=destructive,
     )
 
 
@@ -350,7 +358,7 @@ class TestThePlannerIsToldWhatEachActionNeeds:
         # produced them, and this wording changes what the planner proposes.
         from agentic_qa.infrastructure.inference.prompts import PLANNING_PROMPT_VERSION
 
-        assert PLANNING_PROMPT_VERSION == "planner.v6"
+        assert PLANNING_PROMPT_VERSION == "planner.v7"
 
 
 class TestThePlannerIsShownThePage:
@@ -589,3 +597,222 @@ def test_the_prompt_says_a_link_with_a_url_can_be_navigated() -> None:
     from agentic_qa.infrastructure.inference.prompts import SYSTEM_PROMPT
 
     assert "Use the action the element" in SYSTEM_PROMPT
+
+
+class TestThePlannerIsToldWhatDidNotWork:
+    """Measured on the `after-a-form` baseline shape, at 3 repeats against the real model.
+
+    The action log said it plainly: the planner filled the one field the form has, then
+    invented a second one and asked for it three times in a row, ten seconds of locator
+    timeout each. That was most of the shape's 42s median spent learning nothing. The
+    failures were already in `recent_steps` as prose and prose did not stop it, so the
+    locator is now handed back as a fact.
+    """
+
+    async def test_a_target_that_failed_is_named_in_the_next_planning_request(self) -> None:
+        seen: list[PlanningRequest] = []
+
+        class Insistent:
+            """Asks for the same absent field until something stops it."""
+
+            async def next_action(self, request: PlanningRequest) -> PlannedAction:
+                seen.append(request)
+                if len(seen) > 3:
+                    return PlannedAction(action=None, rationale="giving up")
+                return PlannedAction(
+                    action=BrowserAction(
+                        type=BrowserActionType.FILL,
+                        intent="set the name of the record",
+                        target=ActionTarget(role="textbox", name="Ghost"),
+                        value="Probe",
+                        side_effect=True,
+                        idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+                        verification_strategy="the field holds the value",
+                    ),
+                    rationale="the form needs a name",
+                )
+
+            async def judge(self, request: Any) -> Any:
+                return CriterionJudgement(satisfied=None, reasoning="not the point here")
+
+        browser = RecordingBrowserGateway(absent_names={"Ghost"})
+        await run_episode(model=Insistent(), browser=browser, policy=policy_for(destructive=True))
+
+        assert seen[0].failed_targets == (), "nothing has failed before the first attempt"
+        assert seen[1].failed_targets == ("role='textbox' name='Ghost'",)
+
+    async def test_the_same_target_failing_twice_is_said_once(self) -> None:
+        # Otherwise a planner that ignores the warning grows the prompt with copies of
+        # it, which is the opposite of a bounded context.
+        seen: list[PlanningRequest] = []
+
+        class Stubborn:
+            async def next_action(self, request: PlanningRequest) -> PlannedAction:
+                seen.append(request)
+                if len(seen) > 3:
+                    return PlannedAction(action=None, rationale="giving up")
+                return PlannedAction(
+                    action=BrowserAction(
+                        type=BrowserActionType.CLICK,
+                        intent="press it again",
+                        target=ActionTarget(role="button", name="Ghost"),
+                        side_effect=True,
+                        idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+                        verification_strategy="the page changes",
+                    ),
+                    rationale="still trying",
+                )
+
+            async def judge(self, request: Any) -> Any:
+                return CriterionJudgement(satisfied=None, reasoning="not the point here")
+
+        await run_episode(
+            model=Stubborn(),
+            browser=RecordingBrowserGateway(absent_names={"Ghost"}),
+            policy=policy_for(destructive=True),
+        )
+
+        assert seen[-1].failed_targets == ("role='button' name='Ghost'",)
+
+    async def test_a_navigation_that_failed_is_not_held_against_the_url(self) -> None:
+        # A locator that does not resolve will not resolve later; a url that failed once
+        # may just have been slow. Warning a planner off retrying it would trade one
+        # wasted step for a run that cannot start.
+        seen: list[PlanningRequest] = []
+
+        class Navigator:
+            async def next_action(self, request: PlanningRequest) -> PlannedAction:
+                seen.append(request)
+                if len(seen) > 2:
+                    return PlannedAction(action=None, rationale="done")
+                return PlannedAction(
+                    action=BrowserAction(
+                        type=BrowserActionType.NAVIGATE,
+                        intent="open the records page",
+                        target=ActionTarget(url="http://target.test/records"),
+                    ),
+                    rationale="start here",
+                )
+
+            async def judge(self, request: Any) -> Any:
+                return CriterionJudgement(satisfied=None, reasoning="not the point here")
+
+        browser = RecordingBrowserGateway()
+        browser.fail_intents = {"open the records page"}
+        await run_episode(model=Navigator(), browser=browser, policy=policy_for())
+
+        assert all(request.failed_targets == () for request in seen)
+
+    def test_the_prompt_says_what_did_not_work(self) -> None:
+        from agentic_qa.infrastructure.inference.prompts import build_planning_prompt
+
+        prompt = build_planning_prompt(
+            PlanningRequest(
+                goal="create a record",
+                observation="a form with one field",
+                failed_targets=("role='textbox' name='Ghost'",),
+            )
+        )
+
+        assert "role='textbox' name='Ghost'" in prompt
+        assert "<targets_that_did_not_work>" in prompt
+
+    def test_the_warning_cannot_grow_without_bound(self) -> None:
+        from agentic_qa.infrastructure.inference.prompts import (
+            MAX_FAILED_TARGETS,
+            build_planning_prompt,
+        )
+
+        prompt = build_planning_prompt(
+            PlanningRequest(
+                goal="create a record",
+                observation="a form",
+                failed_targets=tuple(f"name='Ghost {n}'" for n in range(MAX_FAILED_TARGETS + 20)),
+            )
+        )
+
+        assert prompt.count("Ghost ") == MAX_FAILED_TARGETS
+
+
+class TestARunStopsWhenThereIsNothingLeftToCheck:
+    """Measured on `after-a-form` right after the absent-target fix landed.
+
+    The record was created and the confirmation asserted at action 5, and then the
+    planner asserted the same literal twenty more times until the action budget ran out.
+    Twenty model calls and twenty browser actions spent after the answer was in hand,
+    and the run still reported `passed` — so nothing was wrong, only slow, which is the
+    kind of waste that survives a green suite.
+    """
+
+    async def test_it_stops_once_every_criterion_has_been_seen(self) -> None:
+        class Tireless:
+            """Never says it is finished. Real planners often do not."""
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def next_action(self, request: PlanningRequest) -> PlannedAction:
+                self.calls += 1
+                return PlannedAction(
+                    action=BrowserAction(
+                        type=BrowserActionType.ASSERT_TEXT,
+                        intent="check the confirmation again",
+                        target=ActionTarget(text="Order confirmed"),
+                        value="Order confirmed",
+                    ),
+                    rationale="checking once more",
+                )
+
+            async def judge(self, request: Any) -> Any:  # pragma: no cover
+                raise AssertionError("a criterion already seen needs no model to judge")
+
+        planner = Tireless()
+        # The page says the literal, so the criterion is settled on the first observation.
+        browser = RecordingBrowserGateway(body_text="Order confirmed")
+        final = await run_episode(model=planner, browser=browser, policy=policy_for())
+
+        assert planner.calls <= 2, f"kept planning after the answer: {planner.calls} calls"
+        assert final["agent"].goal_reached, "met every criterion but summarised as failed"
+        # Stopping early must not cost the answer. Asserted on the plan criterion rather
+        # than the run verdict because the fake browser reports no HTTP status, so the
+        # sweep leg honestly comes back unverified — which is the fake's shape, not this
+        # behaviour's.
+        story = [r for r in final["criterion_results"] if r.criterion_id == CRITERION]
+        assert [r.outcome for r in story] == [CriterionOutcome.MET]
+
+    async def test_a_criterion_only_a_model_can_judge_does_not_end_the_run_early(
+        self,
+    ) -> None:
+        # Without a literal there is nothing a substring can settle, so stopping here
+        # would be claiming a criterion met that nobody checked.
+        class Finisher:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def next_action(self, request: PlanningRequest) -> PlannedAction:
+                self.calls += 1
+                if self.calls >= 3:
+                    return PlannedAction(action=None, rationale="done looking")
+                return PlannedAction(
+                    action=BrowserAction(
+                        type=BrowserActionType.EXTRACT,
+                        intent="read the page",
+                        target=ActionTarget(role="main"),
+                    ),
+                    rationale="looking",
+                )
+
+            async def judge(self, request: Any) -> Any:
+                return CriterionJudgement(satisfied=True, reasoning="it looks confirmed")
+
+        planner = Finisher()
+        graph = build_agent_graph(
+            browser=RecordingBrowserGateway(body_text="Order confirmed"),
+            model=planner,
+            assertions=(assertion(),),
+            hints={},  # no literal: this criterion is the model's to judge
+            policy=policy_for(),
+        )
+        await graph.ainvoke({"agent": AgentState(run_id="run-1", goal="place an order")})
+
+        assert planner.calls == 3, "stopped before the planner said it was done"

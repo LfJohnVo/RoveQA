@@ -71,6 +71,22 @@ class ActionTarget:
     def is_empty(self) -> bool:
         return not any((self.role, self.name, self.label, self.text, self.url))
 
+    def describe(self) -> str:
+        """The locator as one short phrase, for a log line or a planner to read back.
+
+        Not `repr`: what has to survive is which *attributes* were asked for, because
+        `role=textbox name='Reference'` and `role=textbox name='Name'` are two different
+        targets and a description that blurs them cannot warn anyone off either one.
+        """
+        named = (
+            ("role", self.role),
+            ("name", self.name),
+            ("label", self.label),
+            ("text", self.text),
+            ("url", self.url),
+        )
+        return " ".join(f"{key}={value!r}" for key, value in named if value) or "(no target)"
+
 
 @dataclass(frozen=True)
 class BrowserAction:
