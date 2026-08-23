@@ -321,6 +321,14 @@ class InMemoryEnvironmentRepository:
         stored = self._store.environments.get(environment_id)
         return replace(stored) if stored is not None else None
 
+    async def list_for_project(self, project_id: str) -> list[Environment]:
+        matching = [
+            replace(environment)
+            for environment in self._store.environments.values()
+            if environment.project_id == project_id
+        ]
+        return sorted(matching, key=lambda item: item.environment_id)
+
 
 class InMemoryRecoveryPointRepository:
     def __init__(self, store: InMemoryStore) -> None:

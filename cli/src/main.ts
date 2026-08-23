@@ -45,6 +45,13 @@ import {
   renderStatus,
   renderValidation,
 } from "./commands/memory.js";
+import {
+  listSessions,
+  readStorageState,
+  registerSession,
+  renderSessions,
+  revokeSession,
+} from "./commands/sessions.js";
 import { materialize, type BundleManifest } from "./bundle/materialize.js";
 import {
   diagnostic,
@@ -91,6 +98,9 @@ const OPTIONS = {
   count: { type: "string" as const },
   force: { type: "boolean" as const },
   name: { type: "string" as const },
+  label: { type: "string" as const },
+  "valid-until": { type: "string" as const },
+  "established-by": { type: "string" as const },
   help: { type: "boolean" as const },
 };
 
@@ -143,6 +153,9 @@ const COMMANDS: ReadonlyArray<{ name: string; summary: string }> = [
   { name: "memory validate", summary: "report disagreement without repairing it" },
   { name: "memory sync", summary: "drain the projection backlog" },
   { name: "memory rebuild", summary: "rebuild the projection from PostgreSQL" },
+  { name: "session register", summary: "lend an environment a session exported from a browser" },
+  { name: "session list", summary: "sessions on record for an environment (never their contents)" },
+  { name: "session revoke", summary: "destroy a session's key; a restore cannot bring it back" },
   { name: "agent install", summary: "install the verification skill for a coding agent" },
 ];
 
@@ -228,6 +241,12 @@ async function dispatch(
       return await memoryRebuildCommand(values, requestId);
     case "memory sync":
       return await memorySyncCommand(values, requestId);
+    case "session register":
+      return await sessionRegisterCommand(rest, values, requestId);
+    case "session list":
+      return await sessionListCommand(values, requestId);
+    case "session revoke":
+      return await sessionRevokeCommand(rest, values, requestId);
     default:
       throw usage(
         `unknown command: ${[group, action].filter(Boolean).join(" ")}`,
@@ -598,6 +617,78 @@ function memoryScope(values: Values): { projectId: string; environmentId: string
     throw usage("a project id is required", "Pass --project <id> or set ROVEQA_PROJECT_ID.");
   }
   return { projectId, environmentId: asString(values.environment) ?? "default" };
+}
+
+function environmentOf(values: Values): string {
+  const environmentId = asString(values.environment);
+  if (environmentId === null || environmentId === undefined || environmentId === "") {
+    throw usage(
+      "an environment id is required",
+      "Pass --environment <id>. Create one with POST /api/v1/projects/{id}/environments.",
+    );
+  }
+  return environmentId;
+}
+
+async function sessionRegisterCommand(
+  rest: string[],
+  values: Values,
+  requestId: string,
+): Promise<CommandResult> {
+  const path = rest[0];
+  if (path === undefined) {
+    throw usage(
+      "a storage-state file is required",
+      "Export one from a logged-in browser, then: roveqa session register <file> " +
+        "--environment <id> --label admin",
+    );
+  }
+  const label = asString(values.label);
+  if (label === null || label === undefined || label === "") {
+    throw usage("a label is required", "Pass --label <name>, e.g. --label admin.");
+  }
+  const { client } = connect(values, requestId);
+  const session = await registerSession(client, {
+    environmentId: environmentOf(values),
+    label,
+    storageState: readStorageState(path),
+    ...(asString(values["valid-until"]) === undefined
+      ? {}
+      : { validUntil: asString(values["valid-until"]) as string }),
+    ...(asString(values["established-by"]) === undefined
+      ? {}
+      : { establishedBy: asString(values["established-by"]) as string }),
+  });
+  return {
+    data: session,
+    text: `Registered ${session.label} (${session.session_id}). Runs against this ` +
+      "environment now borrow it.",
+  };
+}
+
+async function sessionListCommand(values: Values, requestId: string): Promise<CommandResult> {
+  const { client } = connect(values, requestId);
+  const sessions = await listSessions(client, environmentOf(values));
+  return { data: sessions, text: renderSessions(sessions) };
+}
+
+async function sessionRevokeCommand(
+  rest: string[],
+  values: Values,
+  requestId: string,
+): Promise<CommandResult> {
+  const sessionId = rest[0];
+  if (sessionId === undefined) {
+    throw usage("a session id is required", "Find it with: roveqa session list --environment <id>");
+  }
+  const environmentId = environmentOf(values);
+  const { client } = connect(values, requestId);
+  await revokeSession(client, environmentId, sessionId);
+  return {
+    data: { session_id: sessionId, environment_id: environmentId, revoked: true },
+    text: `Revoked ${sessionId}. Its key is destroyed — restoring a backup will not ` +
+      "bring it back, and neither will restoring this one.",
+  };
 }
 
 async function memoryStatusCommand(values: Values, requestId: string): Promise<CommandResult> {

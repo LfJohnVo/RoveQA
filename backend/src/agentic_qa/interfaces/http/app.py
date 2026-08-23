@@ -23,6 +23,7 @@ from agentic_qa.interfaces.http.routers import (
     realtime,
     runs,
     schedules,
+    sessions,
     triage,
 )
 
@@ -69,6 +70,7 @@ def create_app(container: Container | None = None) -> FastAPI:
     app.include_router(plans.router)
     app.include_router(runs.router)
     app.include_router(runs.by_project)
+    app.include_router(sessions.router)
     app.include_router(realtime.router)
     app.include_router(triage.router)
     app.include_router(schedules.router)

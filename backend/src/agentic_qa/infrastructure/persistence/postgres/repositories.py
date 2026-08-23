@@ -404,6 +404,14 @@ class PostgresEnvironmentRepository:
         model = await self._session.get(EnvironmentModel, environment_id)
         return environment_to_domain(model) if model is not None else None
 
+    async def list_for_project(self, project_id: str) -> list[Environment]:
+        result = await self._session.scalars(
+            select(EnvironmentModel)
+            .where(EnvironmentModel.project_id == project_id)
+            .order_by(EnvironmentModel.environment_id)
+        )
+        return [environment_to_domain(model) for model in result]
+
 
 class PostgresRecoveryPointRepository:
     def __init__(self, session: AsyncSession) -> None:

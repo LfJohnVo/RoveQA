@@ -27,6 +27,7 @@ from agentic_qa.infrastructure.artifacts.filesystem.repository import (
     FilesystemArtifactRepository,
 )
 from agentic_qa.infrastructure.cache.redis.streams import RedisRunEventPublisher
+from agentic_qa.infrastructure.keyring.file_keyring import FileSecretKeyring
 from agentic_qa.infrastructure.knowledge.graphiti.factory import build_graph_projection
 from agentic_qa.infrastructure.persistence.postgres.engine import (
     create_engine,
@@ -108,6 +109,9 @@ def build_container(settings: Settings) -> Container:
         unit_of_work=lambda: PostgresUnitOfWork(session_factory),
         events=RedisRunEventPublisher(redis),
         artifacts=FilesystemArtifactRepository(Path(settings.artifact_root)),
+        # Present in both processes: the API registers and revokes sessions, the
+        # worker opens them. Neither can do the other's half.
+        keyring=FileSecretKeyring(Path(settings.keyring_root)),
         redis=redis,
         engine=engine,
         # Optional by design: `None` here means memory is served from PostgreSQL

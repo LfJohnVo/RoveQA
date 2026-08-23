@@ -4,6 +4,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
+from agentic_qa.application.commands.create_environment import (
+    CreateEnvironmentCommand,
+    create_environment,
+)
 from agentic_qa.application.commands.create_project import (
     CreateProjectCommand,
     create_project,
@@ -15,8 +19,10 @@ from agentic_qa.application.commands.create_run_policy import (
 from agentic_qa.application.queries.get_project import get_project
 from agentic_qa.interfaces.http.dependencies import UnitOfWorkDep
 from agentic_qa.interfaces.http.schemas import (
+    CreateEnvironmentRequest,
     CreateProjectRequest,
     CreateRunPolicyRequest,
+    EnvironmentResponse,
     ProjectResponse,
     RunPolicyResponse,
 )
@@ -46,6 +52,38 @@ async def list_projects(
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def read_project(project_id: str, uow: UnitOfWorkDep) -> ProjectResponse:
     return ProjectResponse.from_domain(await get_project(uow.projects, project_id))
+
+
+@router.post(
+    "/{project_id}/environments",
+    response_model=EnvironmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_environment(
+    project_id: str, payload: CreateEnvironmentRequest, uow: UnitOfWorkDep
+) -> EnvironmentResponse:
+    """Create a deployment of this project's application.
+
+    An environment is what a session hangs off, and until now one could only be made
+    from a test. That made the whole session feature unreachable through the API: you
+    could register a session for an environment that no endpoint could create.
+    """
+    environment = await create_environment(
+        uow,
+        CreateEnvironmentCommand(
+            project_id=project_id,
+            name=payload.name,
+            default_run_policy_id=payload.default_run_policy_id,
+        ),
+    )
+    return EnvironmentResponse.from_domain(environment)
+
+
+@router.get("/{project_id}/environments", response_model=list[EnvironmentResponse])
+async def list_environments(project_id: str, uow: UnitOfWorkDep) -> list[EnvironmentResponse]:
+    """Unbounded on purpose: a project has staging and production, not thousands."""
+    environments = await uow.environments.list_for_project(project_id)
+    return [EnvironmentResponse.from_domain(environment) for environment in environments]
 
 
 @router.post(
