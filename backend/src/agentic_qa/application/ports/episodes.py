@@ -8,7 +8,7 @@ LangGraph, and which checkpointer or browser it drives, is entirely behind here.
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from agentic_qa.application.ports.browser import PageProblems
+from agentic_qa.application.ports.browser import BrowserSetup, PageProblems
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.exploration.comparison import StateMap
 from agentic_qa.domain.exploration.frontier import ExplorationBudget, ExplorationReport
@@ -38,6 +38,16 @@ class EpisodeRequest:
     Retrieved by the activity rather than by the graph: reading durable state is I/O,
     and the graph stays free of it so a replay cannot depend on what the database
     happened to contain at replay time (ADR 0009)."""
+
+    setup: BrowserSetup = field(default_factory=BrowserSetup)
+    """The session and secrets this episode may use.
+
+    Safe here and nowhere upstream. `EpisodeRequest` is built inside the activity and
+    handed straight to the runner, so it never reaches Temporal's history — unlike
+    `RunEpisodeParams`, which is an activity argument and is written there verbatim. A
+    storage state in that one would be a session cookie in a durable store nobody
+    redacts (ADR 0019).
+    """
 
     exploration: ExplorationBudget | None = None
     """Present when this episode explores instead of following a plan.

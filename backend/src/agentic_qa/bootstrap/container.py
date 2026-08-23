@@ -18,6 +18,7 @@ from agentic_qa.application.ports.deep_analysis import DeepAnalyst
 from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.application.ports.graph import GraphMemoryPort
 from agentic_qa.application.ports.schedules import ScheduleGateway
+from agentic_qa.application.ports.sessions import SecretKeyring
 from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
@@ -55,6 +56,14 @@ class Container:
     Present on a worker whether or not a model is configured, because an exploring run
     calls no model at all. Absence used to mean "no model endpoint", which made a site
     sweep need a GPU in order not to use one."""
+
+    keyring: SecretKeyring | None = None
+    """Where the keys for stored sessions live, which is not the database.
+
+    Absent means no run can borrow a session — and that is a working configuration, not
+    a broken one: everything an anonymous browser can reach still works. A run that
+    *names* an environment with a session and finds no keyring is the case that must say
+    so rather than proceeding logged out (ADR 0019)."""
 
     redis: Redis | None = None
     """Owned connection to Redis, closed with the container."""

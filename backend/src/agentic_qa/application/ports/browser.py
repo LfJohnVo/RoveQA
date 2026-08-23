@@ -5,11 +5,43 @@ Application asks for typed actions and never touches Playwright. There is no
 boundary, not a convention the adapter is trusted to respect.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from agentic_qa.domain.browser.actions import BrowserAction
 from agentic_qa.domain.exploration.state import PageState
+
+
+@dataclass(frozen=True)
+class BrowserSetup:
+    """What a context needs before its first navigation (ADR 0019).
+
+    Process-local by construction. It is built inside the activity and handed straight
+    to the factory, so it never reaches Temporal's history, a LangGraph checkpoint, the
+    planner's prompt or the durable action log — the four places where anything durable
+    outlives the session that issued it.
+
+    Both fields are `repr=False` and the repr is written by hand. A frozen dataclass
+    prints its fields, and one `logger.debug("setup=%s", setup)` would put a password in
+    a log file forever. The count is what a reader actually needs: whether a session was
+    provisioned, and how many secrets were available.
+    """
+
+    storage_state_json: bytes | None = field(default=None, repr=False)
+    """A session somebody established, decrypted for the life of this episode.
+
+    Bytes rather than a parsed structure because the shape belongs to Playwright, and an
+    application port that knew it would be an application port that imports a browser.
+    """
+
+    secrets: Mapping[str, str] = field(default_factory=dict, repr=False)
+    """Secret name to value, resolved once. An action names one; only the adapter that
+    is about to type it ever looks it up."""
+
+    def __repr__(self) -> str:
+        provisioned = "yes" if self.storage_state_json else "no"
+        return f"BrowserSetup(session={provisioned}, secrets={len(self.secrets)})"
 
 
 class UnperformableActionError(Exception):

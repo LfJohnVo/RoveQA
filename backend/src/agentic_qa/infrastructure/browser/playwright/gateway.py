@@ -10,7 +10,9 @@ This class enforces nothing. Policy lives in `GuardedBrowserGateway`, and caller
 receive this adapter only through `open_browser_session`, which wraps it.
 """
 
+import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Literal, Self, cast
@@ -214,10 +216,15 @@ class PlaywrightBrowserGateway:
         page: Page,
         *,
         navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
+        secrets: Mapping[str, str] | None = None,
     ) -> None:
         self._context = context
         self._page = page
         self._navigation_timeout_ms = navigation_timeout_ms
+        self._secrets = dict(secrets or {})
+        """Copied, so a caller that clears its own mapping does not empty this one
+        mid-episode. Never logged and never returned: the only reader is
+        `_typed_value`."""
         # Observed passively, like the console errors beside it, rather than recorded in
         # `execute`. A click or a form submit navigates too, and a status remembered only
         # for navigations *we* performed would go stale -- reporting a 200 for a page that
@@ -343,6 +350,28 @@ class PlaywrightBrowserGateway:
                 detail=error.message.splitlines()[0] if error.message else "browser error",
             )
 
+    def _typed_value(self, action: BrowserAction) -> str:
+        """What actually goes into the field, resolving a named secret if there is one.
+
+        The last few lines before the keystroke, and deliberately the only place in the
+        process that turns a name into a value. Everything upstream — the planner, the
+        graph state, the checkpoint, the durable action log — carries the name, which is
+        why all of them can be printed whole (ADR 0019).
+
+        A name nobody registered raises rather than typing an empty string. Silently
+        filling a password field with "" produces a failed login and a report blaming the
+        product for rejecting a credential that was never sent.
+        """
+        if action.secret_ref is None:
+            return action.value or ""
+        name = action.secret_ref.value
+        try:
+            return self._secrets[name]
+        except KeyError:
+            raise UnperformableActionError(
+                f"no secret named {name!r} is available to this run"
+            ) from None
+
     async def _dispatch(self, action: BrowserAction) -> ActionOutcome:
         match action.type:
             case BrowserActionType.NAVIGATE:
@@ -365,11 +394,11 @@ class PlaywrightBrowserGateway:
                 await self._locate(action.target).click(timeout=DEFAULT_ACTION_TIMEOUT_MS)
             case BrowserActionType.FILL:
                 await self._locate(action.target).fill(
-                    action.value or "", timeout=DEFAULT_ACTION_TIMEOUT_MS
+                    self._typed_value(action), timeout=DEFAULT_ACTION_TIMEOUT_MS
                 )
             case BrowserActionType.SELECT:
                 await self._locate(action.target).select_option(
-                    action.value or "", timeout=DEFAULT_ACTION_TIMEOUT_MS
+                    self._typed_value(action), timeout=DEFAULT_ACTION_TIMEOUT_MS
                 )
             case BrowserActionType.CHECK:
                 await self._locate(action.target).check(timeout=DEFAULT_ACTION_TIMEOUT_MS)
@@ -491,13 +520,28 @@ class BrowserSession:
         await self.playwright.stop()
 
 
+def parse_storage_state(raw: bytes) -> StorageState:
+    """A stored session, back in the shape Playwright takes.
+
+    Kept here and nowhere else. The application port carries bytes precisely so that the
+    only module which knows this shape is the one that talks to the browser.
+    """
+    return cast(StorageState, json.loads(raw.decode("utf-8")))
+
+
 async def start_browser_session(
     *,
     headless: bool = True,
     storage_state: StorageState | None = None,
     navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
+    secrets: Mapping[str, str] | None = None,
 ) -> BrowserSession:
-    """Launch Chromium with an isolated context, optionally restoring auth state."""
+    """Launch Chromium with an isolated context, optionally restoring auth state.
+
+    Anonymous stays a first-class path rather than a degraded one: `storage_state=None`
+    is what a landing page, a documentation site or a shop with guest checkout needs, and
+    those are most of what this tests (ADR 0019).
+    """
     playwright = await async_playwright().start()
     browser = await playwright.chromium.launch(headless=headless)
     context = await browser.new_context(storage_state=storage_state)
@@ -506,7 +550,7 @@ async def start_browser_session(
         playwright=playwright,
         browser=browser,
         gateway=PlaywrightBrowserGateway(
-            context, page, navigation_timeout_ms=navigation_timeout_ms
+            context, page, navigation_timeout_ms=navigation_timeout_ms, secrets=secrets
         ),
         navigation_timeout_ms=navigation_timeout_ms,
     )

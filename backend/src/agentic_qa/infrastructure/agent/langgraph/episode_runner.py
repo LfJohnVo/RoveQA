@@ -19,6 +19,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import (
     BrowserGateway,
+    BrowserSetup,
 )
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
 from agentic_qa.application.ports.models import ModelGateway
@@ -30,7 +31,9 @@ from agentic_qa.infrastructure.agent.langgraph.graph import build_agent_graph
 
 logger = logging.getLogger(__name__)
 
-BrowserFactory = Callable[[], AbstractAsyncContextManager[BrowserGateway]]
+BrowserFactory = Callable[[BrowserSetup], AbstractAsyncContextManager[BrowserGateway]]
+"""Takes what the context needs before its first navigation. An anonymous run passes
+an empty `BrowserSetup`, which is a case rather than the only shape (ADR 0019)."""
 CheckpointerFactory = Callable[[], AbstractAsyncContextManager[BaseCheckpointSaver[str]]]
 
 
@@ -54,7 +57,10 @@ class LangGraphEpisodeRunner:
         self._artifacts = artifacts
 
     async def run_episode(self, request: EpisodeRequest) -> EpisodeResult:
-        async with self._checkpointer_factory() as checkpointer, self._browser_factory() as raw:
+        async with (
+            self._checkpointer_factory() as checkpointer,
+            self._browser_factory(request.setup) as raw,
+        ):
             guarded = GuardedBrowserGateway(raw, request.policy)
             graph = build_agent_graph(
                 browser=guarded,

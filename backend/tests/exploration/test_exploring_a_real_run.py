@@ -20,7 +20,7 @@ import psycopg
 import pytest
 from temporalio.testing import ActivityEnvironment
 
-from agentic_qa.application.ports.browser import BrowserGateway
+from agentic_qa.application.ports.browser import BrowserGateway, BrowserSetup
 from agentic_qa.application.queries.exploration_report import exploration_outcome
 from agentic_qa.bootstrap.container import Container
 from agentic_qa.domain.projects.project import Project
@@ -73,7 +73,7 @@ async def exploring_project(base_url: str) -> AsyncIterator[tuple[Container, str
         await uow.commit()
 
     @asynccontextmanager
-    async def browser_factory() -> AsyncIterator[BrowserGateway]:
+    async def browser_factory(_setup: BrowserSetup) -> AsyncIterator[BrowserGateway]:
         session = await start_browser_session(headless=True)
         try:
             # Handed over exactly as production hands it over: freshly opened, on

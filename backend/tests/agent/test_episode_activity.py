@@ -16,7 +16,7 @@ import psycopg
 import pytest
 from temporalio.testing import ActivityEnvironment
 
-from agentic_qa.application.ports.browser import BrowserGateway
+from agentic_qa.application.ports.browser import BrowserGateway, BrowserSetup
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.bootstrap.container import Container
 from agentic_qa.domain.browser.actions import ActionTarget, BrowserAction, BrowserActionType
@@ -79,7 +79,7 @@ async def prepared_container(
         return PostgresUnitOfWork(session_factory)
 
     @asynccontextmanager
-    async def browser_factory() -> AsyncIterator[BrowserGateway]:
+    async def browser_factory(_setup: BrowserSetup) -> AsyncIterator[BrowserGateway]:
         yield browser
 
     def checkpointer_factory() -> Any:

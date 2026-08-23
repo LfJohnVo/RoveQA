@@ -62,14 +62,8 @@ async def verify_criteria(
     seen = observed_earlier or {}
 
     if goal_failure is not None:
-        # A criterion this run *watched* come true is not an open question, even though
-        # the run then failed at something else. Reporting it as unreached threw away a
-        # deterministic observation the run had already made.
-        return tuple(
-            _observed(step, _criterion_of(step), seen[_criterion_of(step)])
-            if _criterion_of(step) in seen
-            else _unreached(step, goal_failure, goal_failure_kind)
-            for step in assertions
+        return criteria_never_reached(
+            assertions, reason=goal_failure, kind=goal_failure_kind, observed_earlier=seen
         )
 
     hints = hints or {}
@@ -89,6 +83,34 @@ async def verify_criteria(
         else:
             results.append(await _judge_semantically(step, criterion_id, browser, model))
     return tuple(results)
+
+
+def criteria_never_reached(
+    assertions: tuple[PlanStep, ...],
+    *,
+    reason: str,
+    kind: FailureKind | None = None,
+    observed_earlier: Mapping[str, str] | None = None,
+) -> tuple[CriterionResult, ...]:
+    """One result per assertion for a run that could not do its job.
+
+    Public and browser-free on purpose. The same answer is needed in two places: inside
+    the graph, when the agent gave up partway, and inside the activity, when a run could
+    not start at all — a session that expired, for instance, which is decided before any
+    browser exists. Writing it twice is how the two drift, and the way they drift is one
+    of them forgetting to credit what the run already saw.
+
+    A criterion the run *watched* come true is not an open question, even though the run
+    then failed at something else. Reporting it as unreached would throw away a
+    deterministic observation already made.
+    """
+    seen = observed_earlier or {}
+    return tuple(
+        _observed(step, _criterion_of(step), seen[_criterion_of(step)])
+        if _criterion_of(step) in seen
+        else _unreached(step, reason, kind)
+        for step in assertions
+    )
 
 
 def _observed(step: PlanStep, criterion_id: str, where: str) -> CriterionResult:

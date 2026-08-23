@@ -16,7 +16,7 @@ import httpx
 from redis.asyncio import Redis
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
-from agentic_qa.application.ports.browser import BrowserGateway
+from agentic_qa.application.ports.browser import BrowserGateway, BrowserSetup
 from agentic_qa.application.ports.deep_analysis import DeepAnalyst
 from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.bootstrap.settings import Settings
@@ -25,6 +25,7 @@ from agentic_qa.infrastructure.agent.langgraph.checkpointer import open_checkpoi
 from agentic_qa.infrastructure.agent.langgraph.episode_runner import LangGraphEpisodeRunner
 from agentic_qa.infrastructure.browser.playwright.gateway import (
     DEFAULT_NAVIGATION_TIMEOUT_MS,
+    parse_storage_state,
     start_browser_session,
 )
 from agentic_qa.infrastructure.cache.redis.semaphores import RedisResourceSemaphore
@@ -124,7 +125,7 @@ def build_episode_runner(
     )
 
     @asynccontextmanager
-    async def browser_factory() -> AsyncIterator[BrowserGateway]:
+    async def browser_factory(setup: BrowserSetup) -> AsyncIterator[BrowserGateway]:
         session = await start_browser_session(
             headless=settings.browser_headless,
             # `or` on purpose: an unset override means the adapter's own default, so the
@@ -132,6 +133,15 @@ def build_episode_runner(
             navigation_timeout_ms=(
                 settings.browser_navigation_timeout_ms or DEFAULT_NAVIGATION_TIMEOUT_MS
             ),
+            # Absent for most runs, and that is the ordinary path rather than a fallback:
+            # a landing page, a documentation site or a shop with guest checkout needs no
+            # session at all (ADR 0019).
+            storage_state=(
+                parse_storage_state(setup.storage_state_json)
+                if setup.storage_state_json is not None
+                else None
+            ),
+            secrets=setup.secrets,
         )
         try:
             yield session.gateway
