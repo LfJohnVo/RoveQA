@@ -23,6 +23,7 @@ from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.models import JudgementRequest, ModelGateway
 from agentic_qa.application.services.guarded_browser import ActionDeniedError
 from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
+from agentic_qa.domain.browser.authentication import looks_like_sign_in
 from agentic_qa.domain.qa.test_plan import PlanStep
 from agentic_qa.domain.qa.text_match import TextMatch, describe_match, find_text
 from agentic_qa.domain.qa.verification import (
@@ -167,6 +168,23 @@ async def _check_deterministically(
             criterion_id=criterion_id,
             outcome=CriterionOutcome.MET,
             observation=describe_match(hint, forgiving),
+            step_id=step.step_id,
+        )
+
+    if looks_like_sign_in(rendered):
+        # The page is asking to be signed into, so the literal is absent for a reason
+        # that is not the product's. Found by running the Phase 17 gate: the fixture's
+        # dashboard answers 200 with a login prompt, behaving exactly as designed, and
+        # the run came back `failed` — an accusation against a correct application
+        # (ADR 0019).
+        return CriterionResult(
+            criterion_id=criterion_id,
+            outcome=CriterionOutcome.NOT_MET,
+            observation=(
+                f"the page asked to be signed in to, so {hint!r} was never reachable; "
+                "this run had no usable session for it"
+            ),
+            failure_kind=FailureKind.SESSION,
             step_id=step.step_id,
         )
 
