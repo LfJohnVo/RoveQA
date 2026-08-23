@@ -8,7 +8,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
       POSTGRES_DB: ${POSTGRES_DB:-agentic_qa}
     ports:
-      - "5432:5432"
+      # Loopback, like every port here except the API's. A database reachable from
+      # the network is a bigger exposure than an unauthenticated API, and it was
+      # published on all interfaces for as long as this project has existed.
+      #
+      # `BIND_LOOPBACK` exists to be overridden knowingly — a developer on another
+      # machine, a debugging session — and never in a deployment (ADR 0021).
+      - "${BIND_LOOPBACK:-127.0.0.1}:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Creates the suite's own database on first init, so running the tests
@@ -23,7 +29,7 @@ services:
   redis:
     image: ${REDIS_IMAGE:-redis:7-alpine}
     ports:
-      - "6379:6379"
+      - "${BIND_LOOPBACK:-127.0.0.1}:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -39,7 +45,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-agentic}
       POSTGRES_PWD: ${POSTGRES_PASSWORD:-agentic}
     ports:
-      - "7233:7233"
+      - "${BIND_LOOPBACK:-127.0.0.1}:7233:7233"
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,14 +62,14 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:8233
     ports:
-      - "8233:8080"
+      - "${BIND_LOOPBACK:-127.0.0.1}:8233:8080"
     depends_on:
       - temporal
 
   falkordb:
     image: ${FALKORDB_IMAGE:-falkordb/falkordb:v4.20.3}
     ports:
-      - "6380:6379"
+      - "${BIND_LOOPBACK:-127.0.0.1}:6380:6379"
     volumes:
       - falkordb_data:/var/lib/falkordb/data
     healthcheck:
@@ -122,7 +128,10 @@ services:
       - artifact_data:/data/runs
       - session_keyring:/data/keyring
     ports:
-      - "8000:8000"
+      # The one port a proxy fronts, so its bind address is configuration: the proxy
+      # may be on this host (leave it) or on another (set it). It is still not TLS
+      # and still not open — the proxy terminates TLS and the API needs a token.
+      - "${ROVEQA_API_BIND:-127.0.0.1}:8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -275,7 +284,7 @@ services:
       - "-c"
       - "corepack enable pnpm && pnpm install --frozen-lockfile && pnpm dev --host 0.0.0.0"
     ports:
-      - "5173:5173"
+      - "${BIND_LOOPBACK:-127.0.0.1}:5173:5173"
     depends_on:
       api:
         condition: service_healthy
@@ -408,7 +417,7 @@ services:
     # 8100 on the host: 8000 already belongs to the API, and a port clash would only
     # show up when someone enables this profile.
     ports:
-      - "8100:8000"
+      - "${BIND_LOOPBACK:-127.0.0.1}:8100:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s
@@ -459,7 +468,7 @@ services:
       - ./data/models:/root/.cache/huggingface
     shm_size: "2gb"
     ports:
-      - "8101:8000"
+      - "${BIND_LOOPBACK:-127.0.0.1}:8101:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s
@@ -517,7 +526,7 @@ services:
       - ./data/models:/root/.cache/huggingface
     shm_size: "8gb"
     ports:
-      - "8102:8000"
+      - "${BIND_LOOPBACK:-127.0.0.1}:8102:8000"
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s
