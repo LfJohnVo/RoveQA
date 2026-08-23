@@ -2,11 +2,14 @@
 
 import logging
 from collections.abc import AsyncIterator, Iterator
+from uuid import uuid4
 
 import httpx
 import pytest
 
+from agentic_qa.application.commands.issue_token import IssueTokenCommand, issue_token
 from agentic_qa.bootstrap.container import Container
+from agentic_qa.domain.projects.project import Project
 from agentic_qa.interfaces.http.app import create_app
 from agentic_qa.interfaces.http.request_context import (
     REQUEST_ID_HEADER,
@@ -19,10 +22,37 @@ from tests.fakes.workflows import RecordingWorkflowGateway
 
 
 def asgi_client(container: Container, *, raise_app_exceptions: bool = True) -> httpx.AsyncClient:
+    """Drive the real app over ASGI, including its authentication.
+
+    The container is carried on the client so `create_project` can mint a token the way
+    an operator does — with the admin command, against the database, never over HTTP
+    (ADR 0020). Tests therefore go *through* the guard rather than around it, which is
+    the only way they keep proving it works.
+    """
     transport = httpx.ASGITransport(
         app=create_app(container), raise_app_exceptions=raise_app_exceptions
     )
-    return httpx.AsyncClient(transport=transport, base_url="http://api")
+    client = httpx.AsyncClient(transport=transport, base_url="http://api")
+    # A documented attribute rather than a richer fixture object: every existing test
+    # keeps its signature, and the alternative was editing forty call sites to thread a
+    # unit of work through.
+    client.roveqa_container = container  # type: ignore[attr-defined]
+    return client
+
+
+async def authorise_for(client: httpx.AsyncClient, project_id: str) -> str:
+    """Mint a token for the project and present it from now on.
+
+    Exactly what an operator does after creating a project: `admin token issue`, then the
+    value goes in the CI's secret. Here it goes in the client's header.
+    """
+    container: Container = client.roveqa_container  # type: ignore[attr-defined]
+    async with container.unit_of_work() as uow:
+        minted = await issue_token(
+            uow, IssueTokenCommand(project_id=project_id, label="tests", issued_by="the suite")
+        )
+    client.headers["Authorization"] = f"Bearer {minted.secret}"
+    return minted.secret
 
 
 @pytest.fixture
@@ -55,15 +85,59 @@ async def create_run(client: httpx.AsyncClient, project_id: str) -> str:
 
 
 async def create_project(client: httpx.AsyncClient, name: str = "Checkout") -> str:
-    """Create a project with a default run policy: a run cannot start without one."""
+    """Create a project, give it a token, and give it a default run policy.
+
+    Three steps because that is what it takes in reality. A project needs a policy before
+    a run can start, and it needs a token before anything can touch it — and the token
+    has to exist before the policy call, because that call is already guarded.
+
+    Creating the project itself is reachable with any valid token and grants nothing on
+    its own: using the new project still requires a token only the host can mint. Said
+    here because a reader of this helper is entitled to wonder.
+    """
+    await bootstrap_token(client)
     response = await client.post("/api/v1/projects", json={"name": name})
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     project_id: str = response.json()["project_id"]
+
+    await authorise_for(client, project_id)
     policy = await client.post(
         f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD
     )
-    assert policy.status_code == 201
+    assert policy.status_code == 201, policy.text
     return project_id
+
+
+async def create_bare_project(client: httpx.AsyncClient, name: str) -> str:
+    """A project and a token for it, and no run policy.
+
+    For tests that want to write their own policy. `create_project` is the same thing
+    with the default one, which most tests want and none of them should have to repeat.
+    """
+    await bootstrap_token(client)
+    response = await client.post("/api/v1/projects", json={"name": name})
+    assert response.status_code == 201, response.text
+    project_id: str = response.json()["project_id"]
+    await authorise_for(client, project_id)
+    return project_id
+
+
+async def bootstrap_token(client: httpx.AsyncClient) -> None:
+    """A token for *something*, so the create call is authenticated at all.
+
+    The chicken and egg of a per-project credential: creating the first project needs a
+    caller the deployment already knows, and there is no project yet to know them by. An
+    operator resolves it by creating the first project on the host; a test resolves it by
+    seeding one directly, which is the same act through a shorter path.
+    """
+    if "Authorization" in client.headers:
+        return
+    container: Container = client.roveqa_container  # type: ignore[attr-defined]
+    bootstrap_id = f"bootstrap-{uuid4()}"
+    async with container.unit_of_work() as uow:
+        await uow.projects.add(Project(project_id=bootstrap_id, name="bootstrap"))
+        await uow.commit()
+    await authorise_for(client, bootstrap_id)
 
 
 @pytest.fixture
@@ -99,7 +173,10 @@ class TestRequestId:
         assert response.headers[REQUEST_ID_HEADER] != "x" * 5000
 
     async def test_error_bodies_carry_the_request_id(self, client: httpx.AsyncClient) -> None:
+        await bootstrap_token(client)
         response = await client.get("/api/v1/runs/ghost", headers={REQUEST_ID_HEADER: "req-err"})
+        # An unknown *run* resolves to no project, so the guard lets it through and the
+        # handler answers. Unlike an unknown project, which the token cannot cover.
         assert response.status_code == 404
         assert response.json()["request_id"] == "req-err"
         assert response.headers[REQUEST_ID_HEADER] == "req-err"
@@ -157,6 +234,10 @@ class TestCreateRun:
         assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
     async def test_unknown_project_is_not_found(self, client: httpx.AsyncClient) -> None:
+        # The project is in the *body* here, not the path, so the guard has nothing to
+        # compare and the handler answers. Worth keeping as a 404 for exactly that
+        # reason: it is the one shape where an unknown project is still a lookup.
+        await bootstrap_token(client)
         response = await client.post(
             "/api/v1/runs",
             json={"project_id": "ghost"},
@@ -252,6 +333,7 @@ class TestRunLifecycleCommands:
     async def test_commands_on_an_unknown_run_are_not_found(
         self, client: httpx.AsyncClient, workflows: RecordingWorkflowGateway
     ) -> None:
+        await bootstrap_token(client)
         response = await client.post("/api/v1/runs/ghost/cancel")
         assert response.status_code == 404
         assert workflows.signals == []
@@ -305,22 +387,31 @@ class TestRunEvents:
         assert response.status_code == 422  # rejected, never silently unbounded
 
     async def test_events_of_an_unknown_run_are_not_found(self, client: httpx.AsyncClient) -> None:
+        await bootstrap_token(client)
         response = await client.get("/api/v1/runs/ghost/events")
         assert response.status_code == 404
 
 
 class TestProjects:
     async def test_blank_name_fails_validation(self, client: httpx.AsyncClient) -> None:
+        # Authenticated first, so this is validation answering and not the guard.
+        await bootstrap_token(client)
         response = await client.post("/api/v1/projects", json={"name": ""})
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
-    async def test_get_unknown_project(self, client: httpx.AsyncClient) -> None:
+    async def test_an_unknown_project_is_refused_without_saying_whether_it_exists(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        # `403`, not `404`, and the change is the point. A token covers one project; a
+        # path naming another is refused before any lookup, so a caller cannot probe for
+        # which project ids exist by reading the status code.
+        await bootstrap_token(client)
+
         response = await client.get("/api/v1/projects/ghost")
-        assert response.status_code == 404
-        body = response.json()
-        assert body["error"]["code"] == "NOT_FOUND"
-        assert "message" in body["error"]
+
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "FORBIDDEN"
 
     async def test_round_trip(self, client: httpx.AsyncClient) -> None:
         project_id = await create_project(client, "Checkout")
@@ -395,6 +486,7 @@ async def test_stories_can_be_listed_and_read_back(client: httpx.AsyncClient) ->
 
 
 async def test_reading_a_story_that_does_not_exist_is_a_404(client: httpx.AsyncClient) -> None:
+    await bootstrap_token(client)
     response = await client.get("/api/v1/stories/nope")
     assert response.status_code == 404
 
@@ -423,6 +515,9 @@ async def test_a_projects_runs_can_be_listed(client: httpx.AsyncClient) -> None:
     assert second.status_code == 201, second.text
     await create_run(client, other)
 
+    # `create_project` leaves the client holding the *last* project's token, which is
+    # what an operator would also have to switch. Back to the one under test.
+    await authorise_for(client, project_id)
     listed = await client.get(f"/api/v1/projects/{project_id}/runs")
     assert listed.status_code == 200
     ids = [run["run_id"] for run in listed.json()]
@@ -446,9 +541,11 @@ async def test_a_project_says_whether_it_can_run(client: httpx.AsyncClient) -> N
     cannot run. Without this field a client had no way to say so before someone tried,
     and the precondition surfaced as a validation error at the end of the flow.
     """
+    await bootstrap_token(client)
     created = await client.post("/api/v1/projects", json={"name": "Policyless"})
     project_id = created.json()["project_id"]
     assert created.json()["default_run_policy_id"] is None
+    await authorise_for(client, project_id)
 
     await client.post(f"/api/v1/projects/{project_id}/run-policies", json=DEFAULT_POLICY_PAYLOAD)
 
@@ -465,9 +562,7 @@ async def test_a_run_can_ask_to_explore(
     quietly turning that into a deterministic crawl would remove a capability nobody
     asked to lose.
     """
-    project_id = (await client.post("/api/v1/projects", json={"name": "Explore me"})).json()[
-        "project_id"
-    ]
+    project_id = await create_bare_project(client, "Explore me")
     await client.post(
         f"/api/v1/projects/{project_id}/run-policies",
         json={
@@ -494,9 +589,7 @@ async def test_the_same_key_cannot_switch_a_run_between_modes(
 ) -> None:
     # Exploring and planning are different requests. Replaying the first for the second
     # would hand back a run that does something else than what was asked for.
-    project_id = (await client.post("/api/v1/projects", json={"name": "Modes"})).json()[
-        "project_id"
-    ]
+    project_id = await create_bare_project(client, "Modes")
     await client.post(
         f"/api/v1/projects/{project_id}/run-policies",
         json={

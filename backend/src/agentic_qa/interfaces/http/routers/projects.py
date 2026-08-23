@@ -17,6 +17,7 @@ from agentic_qa.application.commands.create_run_policy import (
     create_run_policy,
 )
 from agentic_qa.application.queries.get_project import get_project
+from agentic_qa.interfaces.http.authorisation import AuthorisedDep
 from agentic_qa.interfaces.http.dependencies import UnitOfWorkDep
 from agentic_qa.interfaces.http.schemas import (
     CreateEnvironmentRequest,
@@ -42,11 +43,22 @@ async def post_project(payload: CreateProjectRequest, uow: UnitOfWorkDep) -> Pro
 @router.get("", response_model=list[ProjectResponse])
 async def list_projects(
     uow: UnitOfWorkDep,
+    token: AuthorisedDep,
     limit: Annotated[int, Query(ge=1, le=MAX_PROJECT_PAGE_SIZE)] = DEFAULT_PROJECT_PAGE_SIZE,
 ) -> list[ProjectResponse]:
-    """Bounded by construction: a page size is a promise about response size."""
+    """This token's projects. Bounded by construction, and filtered by who is asking.
+
+    The path names no project, so the generic scope check has nothing to compare against
+    — a listing across projects is exactly the shape that check cannot decide (ADR 0020).
+    Filtering here is what stops a token for one team's application from enumerating
+    every other application this deployment tests.
+    """
     projects = await uow.projects.list(limit=limit)
-    return [ProjectResponse.from_domain(project) for project in projects]
+    return [
+        ProjectResponse.from_domain(project)
+        for project in projects
+        if token.covers(project.project_id)
+    ]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

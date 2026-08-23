@@ -13,15 +13,27 @@ import pytest
 
 from agentic_qa.application.ports.graph import GRAPH_SCHEMA_VERSION
 from agentic_qa.bootstrap.container import Container
-from agentic_qa.interfaces.http.app import create_app
+from agentic_qa.domain.projects.project import Project
 from tests.fakes.graph import InMemoryGraphMemory, UnavailableGraph
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
+from tests.http.test_api_contract import asgi_client, authorise_for
 
 
 def app_client(container: Container) -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=create_app(container), raise_app_exceptions=True)
-    return httpx.AsyncClient(transport=transport, base_url="http://api")
+    """The shared helper, so the client carries its container and can mint a token."""
+    return asgi_client(container)
+
+
+async def authorised(container: Container) -> httpx.AsyncClient:
+    """A client holding a token for the project these tests operate on."""
+    client = app_client(container)
+    async with container.unit_of_work() as uow:
+        if await uow.projects.get(PROJECT) is None:
+            await uow.projects.add(Project(project_id=PROJECT, name="Checkout"))
+            await uow.commit()
+    await authorise_for(client, PROJECT)
+    return client
 
 
 @pytest.fixture
@@ -30,7 +42,7 @@ async def working_graph() -> AsyncIterator[httpx.AsyncClient]:
     container = Container(
         unit_of_work=lambda: InMemoryUnitOfWork(store), graph=InMemoryGraphMemory()
     )
-    async with app_client(container) as client:
+    async with await authorised(container) as client:
         yield client
 
 
@@ -38,7 +50,7 @@ async def working_graph() -> AsyncIterator[httpx.AsyncClient]:
 async def broken_graph() -> AsyncIterator[httpx.AsyncClient]:
     store = InMemoryStore()
     container = Container(unit_of_work=lambda: InMemoryUnitOfWork(store), graph=UnavailableGraph())
-    async with app_client(container) as client:
+    async with await authorised(container) as client:
         yield client
 
 
@@ -46,12 +58,13 @@ async def broken_graph() -> AsyncIterator[httpx.AsyncClient]:
 async def no_graph() -> AsyncIterator[httpx.AsyncClient]:
     store = InMemoryStore()
     container = Container(unit_of_work=lambda: InMemoryUnitOfWork(store))
-    async with app_client(container) as client:
+    async with await authorised(container) as client:
         yield client
 
 
 SCOPE = {"environment_id": "staging"}
-MEMORY = "/api/v1/projects/proj-1/memory"
+PROJECT = "proj-1"
+MEMORY = f"/api/v1/projects/{PROJECT}/memory"
 
 
 class TestStatus:

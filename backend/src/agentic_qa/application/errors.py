@@ -39,3 +39,21 @@ class IdempotencyConflictError(ApplicationError):
         super().__init__(f"idempotency key reused with a different request: {scope}/{key}")
         self.scope = scope
         self.key = key
+
+
+class AuthenticationRequiredError(ApplicationError):
+    """No credential, or one nobody issued.
+
+    An application concern rather than an HTTP one, which is why it lives beside the
+    others: the delivery layer maps it to `401` the same way it maps `NotFoundError` to
+    `404`, and a second adapter would map it to whatever it says (ADR 0020).
+    """
+
+
+class ForbiddenError(ApplicationError):
+    """A real credential that does not reach the resource.
+
+    Kept apart from the above deliberately: "you did not authenticate" and "you
+    authenticated as someone who may not do that" send a person to different places, and
+    a client that cannot tell them apart retries the wrong one.
+    """

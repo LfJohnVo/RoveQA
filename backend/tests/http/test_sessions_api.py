@@ -147,12 +147,13 @@ class TestTheSecretDoesNotComeBack:
     async def test_an_error_body_does_not_echo_the_request(self, client: httpx.AsyncClient) -> None:
         # A validation error that quoted the offending value would put the whole session
         # in a 422 body — the one response nobody thinks of as sensitive.
+        await make_environment(client)
         response = await client.post(
             "/api/v1/environments/env-that-does-not-exist/sessions",
             json={"label": "", "storage_state": STORAGE_STATE},
         )
 
-        assert response.status_code in (404, 422)
+        assert response.status_code in (403, 404, 422)
         assert SECRET_COOKIE not in response.text
 
 
@@ -160,6 +161,8 @@ class TestRegisteringAndRotating:
     async def test_a_session_for_an_unknown_environment_is_a_404(
         self, client: httpx.AsyncClient
     ) -> None:
+        # With a token in hand, so this is the handler answering and not the guard.
+        await make_environment(client)
         response = await client.post(
             "/api/v1/environments/nope/sessions",
             json={"label": "admin", "storage_state": STORAGE_STATE},
