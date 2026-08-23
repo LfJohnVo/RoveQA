@@ -6,7 +6,8 @@
 > cost real time. This file records what each phase closed; that one records where the
 > work stands.
 
-Última sesión: 2026-08-22 (Opus 5). **Phase 16 completada; 8/8 gates de fase.**
+Última sesión: 2026-08-23 (Opus 5). **Phase 17 completada; 7/7 gates. El plan de
+implementación está terminado: fases 00–17 DONE.**
 
 `bash scripts/ci-local.sh` → `ci-local: all green` (backend **1115**, CLI **160**,
 frontend **64**, migraciones sin drift incluido el downgrade de `a3f81c02d7b4`, build,
@@ -241,15 +242,15 @@ Falta: nada de la fase. Cerrada.
 
 # Phase Status
 
-- Phases 00 – 16: **DONE**.
-- Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar. Es la
-  siguiente, y no se empieza sin que se pida.
+- Phases 00 – 17: **DONE**. No queda fase por implementar.
+- Lo que sigue no es una fase sino una decisión de operación: ver
+  «¿Se puede liberar a producción?» en `CONTINUE_HERE.md`.
 - Phase 17 (`plans/phase-17-authenticated-runs.md`): planificada, sin empezar.
 
 # Last Stable State
 
 - Git branch `phase-16-slice-2` (sin push; nada se ha subido a ningún remoto).
-- `bash scripts/ci-local.sh` → **all green**: 1115 tests backend (skips sin GPU/deep), 160 CLI, 64 frontend, migraciones sin drift, build frontend, compose config.
+- `bash scripts/ci-local.sh` → **all green**: 1227 tests backend (5 skips sin GPU/deep), 172 CLI, 85 frontend, migraciones sin drift, build frontend, compose config.
 - Con la GPU arriba los skips corren: `VLLM_BASE_URL=http://vllm:8000 VLLM_MODEL=Qwen/Qwen3-4B-Instruct-2507`. Los skips son el test de modelo real de Phase 06, las dos mediciones de memoria de Phase 09 y los dos de deep analysis de Phase 11 (`DEEP_BASE_URL`/`DEEP_MODEL`).
 - Stack: postgres, redis, temporal, temporal-ui, falkordb, api, worker, **frontend** (Vite dev server en el 5173, proxy de `/api` y `/ws` al API). Schema en `8b3ac8f35fa4`.
 - El modelo es elegible por configuración: `VLLM_MODEL` más `VLLM_QUANTIZATION`, `VLLM_ENFORCE_EAGER` y `VLLM_EXTRA_ARGS` deciden si uno más grande entra en la tarjeta. `.env.example` lista qué modelos Qwen caben en 16GB. `vllm-embed` (perfil `memory-gpu`) sirve el modelo de embeddings, también elegible.

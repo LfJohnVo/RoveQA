@@ -4,7 +4,7 @@ Written for whoever picks this up next, on a different machine, with no memory o
 session that produced it. Read this before `HANDOFF.md`: that file records what each phase
 closed, this one records where the work actually stands and what to do next.
 
-Last touched: 2026-08-22. Branch: `phase-16-slice-2`. Nothing pushed to any remote.
+Last touched: 2026-08-23. Branch: `phase-16-slice-2`, pushed. Phases 00–17 are DONE — there is no next phase, only the release decision in section 3.
 
 ---
 
@@ -53,7 +53,68 @@ The console error from iana.org travelled the whole gate-3 chain — Playwright 
 `observed_failures` table → `GET /runs/{id}/report` — on its first outing against a site
 nobody controlled.
 
-## 3. Where to start, concretely
+## 3. Can this be released to production?
+
+**Yes for what it says it is, no for a network it does not own.** The distinction is one
+item, and everything else follows from it.
+
+### What is finished and measured
+
+Phases 00–17, every gate. `bash scripts/ci-local.sh` → all green: 1227 backend tests
+(5 skipped without a GPU), 172 CLI, 85 frontend, migrations clean from empty and back
+down. A 90-minute soak took 91 runs to terminal with none stuck under worker kills and a
+Redis flush. Backup and restore are drilled, including the case where a restore must
+*not* work: a revoked session stays revoked. Four public sites of different archetypes
+pass with zero model calls, and the six-shape baseline is 15/15 reachable, no timeouts.
+A planted secret survived none of 165 text columns, the report, the events, the state
+map or the logs.
+
+The verdict discipline holds: `failed` only ever comes from a deterministic check, and
+the last thing Phase 17 fixed was a login wall that had been producing one.
+
+### What stops it being exposed
+
+**There is no authentication on the API.** Not a bug — `docs/13-security.md` reserves
+`AUTH_REQUIRED`/`FORBIDDEN` and exit code 3 for it and says real auth needs an ADR — but
+it is the whole answer to this question. Anyone who can reach port 8000 can start runs
+against any allowlisted origin, read every report, and register or revoke sessions. The
+CLI sends a bearer token; nothing on the server reads it.
+
+Three things follow, and they are properties of the same decision rather than separate
+defects:
+
+- **No TLS anywhere.** Reports and, at registration, a session travel in clear.
+- **Every backing service is published on all interfaces**, not on loopback: PostgreSQL
+  `5432`, Redis `6379`, Temporal `7233`, FalkorDB `6380`, vLLM `8100`–`8102`. On a laptop
+  behind a firewall that is convenient. On a host with a routable address it is the
+  database, not the API, that is the exposure.
+- **The keyring is protected by the host and nothing else** (ADR 0019 says so where
+  somebody will read it). It defends a leaked database dump and defeats
+  restore-resurrection; it does not defend a compromised machine.
+
+### So, concretely
+
+- **Ship it** on a single trusted machine, or a private segment, operated by whoever
+  installed it. That is the product it was built as, and it is finished.
+- **Do not** put it on a shared network or the internet as it stands. The minimum before
+  that is an ADR and an implementation for API authentication, loopback-only bindings for
+  everything except the API, and TLS termination in front.
+
+### Known limits, none of them blocking
+
+- A session the site invalidates *mid-run* is only noticed when the page renders a
+  recognisable wall — a bare 403 or an SSO bounce is a gap, stated in
+  `domain/browser/authentication.py` rather than guessed at.
+- The "page has a first-level heading" check is unimplemented; the parser drops the
+  level (ADR 0017).
+- Model calls per verified criterion are not exposed by the public API, so the baseline
+  cannot report them.
+- `blocked` runs with kind `model` track the 4B planner's output quality, not a defect.
+- Running `ci-local.sh` while the live stack is exercising the same PostgreSQL instance
+  can deadlock the suite's truncating teardown. Seen once, clean on a re-run; it is the
+  test environment, not the product.
+
+## 4. Where the work stands
 
 **All four gates hold, and every slice of Phase 16 is closed.**
 
@@ -218,7 +279,7 @@ instead, which is what a real page looks like anyway.
 
 Then gate 4.
 
-## 4. Bring it up on a new machine
+## 5. Bring it up on a new machine
 
 ```bash
 docker compose up -d          # migrations run themselves now; see ADR 0011 slice notes
@@ -249,7 +310,7 @@ printing zeros that look like a result.
 and it did mislead this session: an `after-a-form` pass at n=1 looked like a fix working and
 vanished at n=3.
 
-## 5. Lessons that cost real time
+## 6. Lessons that cost real time
 
 These are not style notes. Each one was a defect that shipped or nearly did.
 
@@ -283,18 +344,18 @@ refuses a duplicate reference and the baseline reused one. The measurement had b
 contaminating that shape in every earlier number. Test data must be unique per run; a real
 QA run does not assume a clean database either.
 
-## 6. Branch and PR state
+## 7. Branch and PR state
 
 | Branch | Commit | State |
 | --- | --- | --- |
 | `main` | `0b2b7ae` | PRs #1 and #2 merged |
-| `phase-16-slice-2` | `9b01909` | **this branch** — four commits ahead of what was pushed; nothing new pushed |
+| `phase-16-slice-2` | `9b21a79` | **this branch**, pushed |
 
-`bash scripts/ci-local.sh` → `ci-local: all green` on `9b01909`.
+`bash scripts/ci-local.sh` → `ci-local: all green` on `9b21a79`.
 
 To open the PR, the body is ready at `docs/status/pr-phase-16-slice-2.md`.
 
-## 7. Blocked on tooling, not on decisions
+## 8. Blocked on tooling, not on decisions
 
 Three things this session could not do. None needs a design decision, all need something
 installed or granted.
@@ -315,7 +376,7 @@ had not yet pulled the merges. So the graph describes the architecture without a
 Phase 15 or 16 work. Regenerate it before trusting it for orientation, and commit that on
 its own: a refresh is ~360k lines and swamps any review it is mixed into.
 
-## 8. Reading order for a new session
+## 9. Reading order for a new session
 
 1. `CLAUDE.md` — the invariants. They are not negotiable and several are load-bearing.
 2. This file.
