@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { useNavigate, useParams } from "react-router";
 import { z } from "zod";
 
@@ -36,6 +36,7 @@ export function StartRunPage() {
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -43,6 +44,22 @@ export function StartRunPage() {
     // a different question from the one most people came to ask.
     defaultValues: { explore: false },
   });
+
+  // A run with neither a plan nor a crawl is the one combination ADR 0017 does not
+  // describe, and it is answerable only one way. Measured: the server accepts it with
+  // 201, the worker launches Chromium, and ten seconds later the report is
+  // `inconclusive` with zero criteria and no stated reason — a run that could never have
+  // concluded anything. The API stays permissive on purpose (a bare run is how the
+  // durability tests exercise the lifecycle), so the place to stop offering it is here.
+  // `useWatch` rather than `watch`: the latter returns a function the React Compiler
+  // cannot memoize safely, so it skips optimising the whole component. This subscribes
+  // to the two fields the button depends on and nothing else.
+  //
+  // `?? ""` matters. An untouched field arrives as `undefined`, not as the empty string,
+  // so comparing against `""` alone would miss the one state this exists for — a form
+  // nobody has typed in.
+  const [planId, explore] = useWatch({ control, name: ["planId", "explore"] });
+  const asksForNothing = (planId ?? "").trim() === "" && explore !== true;
 
   const start = useMutation({
     mutationFn: (values: FormValues) => {
@@ -125,9 +142,15 @@ export function StartRunPage() {
           ) : null}
 
           <div className="mt-6">
-            <Button type="submit" disabled={start.isPending}>
+            <Button type="submit" disabled={start.isPending || asksForNothing}>
               {start.isPending ? "Starting…" : "Start run"}
             </Button>
+            {asksForNothing ? (
+              <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                Name a plan, tick “Walk the site as well”, or both. A run asked for neither
+                has nothing to check and comes back inconclusive.
+              </p>
+            ) : null}
           </div>
         </form>
       </Card>
