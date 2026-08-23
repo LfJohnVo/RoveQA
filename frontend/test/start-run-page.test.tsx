@@ -27,6 +27,7 @@ import {
   FakeProjectGateway,
   FakeRunEventStream,
   FakeRunGateway,
+  FakeSessionGateway,
   FakeStoryGateway,
 } from "./fakes";
 
@@ -44,6 +45,7 @@ function renderStartRun() {
     events: new FakeRunEventStream(),
     memory: new FakeMemoryGateway(),
     stories: new FakeStoryGateway(),
+    sessions: new FakeSessionGateway(),
   };
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 

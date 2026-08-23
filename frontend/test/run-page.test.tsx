@@ -22,6 +22,7 @@ import {
   FakeProjectGateway,
   FakeRunEventStream,
   FakeRunGateway,
+  FakeSessionGateway,
   makeEvent,
   FakeStoryGateway,
   makeRun,
@@ -39,7 +40,14 @@ function renderRun(gateways: Gateways, runId = "run-1") {
 }
 
 function gatewaysWith(runs: FakeRunGateway, events: FakeRunEventStream): Gateways {
-  return { projects: new FakeProjectGateway(), runs, events, memory: new FakeMemoryGateway(), stories: new FakeStoryGateway() };
+  return {
+    projects: new FakeProjectGateway(),
+    runs,
+    events,
+    memory: new FakeMemoryGateway(),
+    stories: new FakeStoryGateway(),
+    sessions: new FakeSessionGateway(),
+  };
 }
 
 function timelineRows(): HTMLElement[] {
@@ -160,6 +168,7 @@ describe("projects", () => {
       events: new FakeRunEventStream(),
       memory: new FakeMemoryGateway(),
       stories: new FakeStoryGateway(),
+      sessions: new FakeSessionGateway(),
     };
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -182,6 +191,7 @@ describe("projects", () => {
       events: new FakeRunEventStream(),
       memory: new FakeMemoryGateway(),
       stories: new FakeStoryGateway(),
+      sessions: new FakeSessionGateway(),
     };
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 

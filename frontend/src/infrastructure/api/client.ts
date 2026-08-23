@@ -16,6 +16,7 @@ import type {
   MemoryGateway,
   ProjectGateway,
   RunGateway,
+  SessionGateway,
   StartRunInput,
   StoryGateway,
   DraftStory,
@@ -27,6 +28,7 @@ import type { ExplorationMap } from "@domain/runs/exploration";
 import type { Project } from "@domain/projects/project";
 import type { UserStory } from "@domain/qa/story";
 import type { RunReport } from "@domain/runs/findings";
+import type { Environment, EnvironmentSession } from "@domain/projects/session";
 import type { Run } from "@domain/runs/run";
 import type { RunEvent } from "@domain/runs/timeline";
 
@@ -36,8 +38,10 @@ import {
   toProject,
   toProjects,
   toExplorationMap,
+  toEnvironments,
   toRun,
   toRuns,
+  toSessions,
   toRunEventPage,
   toRunReport,
   toStories,
@@ -166,6 +170,44 @@ export class HttpProjectGateway implements ProjectGateway {
     return this.get(created.projectId);
   }
 }
+
+export class HttpSessionGateway implements SessionGateway {
+  private readonly client: ApiClient;
+
+  constructor(client: ApiClient) {
+    this.client = client;
+  }
+
+  async environments(projectId: string): Promise<Environment[]> {
+    return toEnvironments(
+      await this.client.request(
+        "GET",
+        `/api/v1/projects/${encodeURIComponent(projectId)}/environments`,
+      ),
+    );
+  }
+
+  async sessions(environmentId: string): Promise<EnvironmentSession[]> {
+    return toSessions(
+      await this.client.request(
+        "GET",
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/sessions`,
+      ),
+    );
+  }
+
+  async revoke(environmentId: string, sessionId: string): Promise<void> {
+    // A command, not a delete. The record stays as the audit trail and the key is what
+    // gets destroyed; `DELETE` would promise the row disappears, and the list refreshing
+    // with the session still on it would read as a failed call.
+    await this.client.request(
+      "POST",
+      `/api/v1/environments/${encodeURIComponent(environmentId)}/sessions/` +
+        `${encodeURIComponent(sessionId)}/revoke`,
+    );
+  }
+}
+
 
 export class HttpRunGateway implements RunGateway {
   private readonly client: ApiClient;

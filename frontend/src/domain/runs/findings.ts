@@ -10,7 +10,22 @@
 
 export type CriterionOutcome = "met" | "not_met" | "unverified";
 
-export type FailureKind = "product" | "plan" | "environment" | "policy";
+export const PRODUCT_DEFECT = "product";
+/**
+ * The only failure kind with meaning in this layer: the one that accuses the product.
+ *
+ * Everything else is a label the report shows and the UI does not branch on, which is
+ * why `FailureKind` is a plain string rather than a union. It used to be a union of four
+ * values, and the server had eight — `agent_budget`, `model` and `session` among them —
+ * so a blocked run's report failed to parse and the console reported "this run verified
+ * no acceptance criteria" about a run that had verified one and explained itself. The
+ * published contract had listed the extra kinds since Phase 13; only this copy had not.
+ *
+ * A union here buys nothing and costs that: the set is the server's to grow, and a
+ * client that must be edited every time it does will be out of date between the two
+ * edits, silently.
+ */
+export type FailureKind = string;
 
 /** Who asked for this criterion: the run's plan, or the sweep every run performs. */
 export type FindingSource = "plan" | "sweep";
@@ -38,7 +53,7 @@ export interface Finding {
  */
 export function defects(findings: readonly Finding[]): Finding[] {
   return findings.filter(
-    (finding) => finding.outcome === "not_met" && finding.failureKind === "product",
+    (finding) => finding.outcome === "not_met" && finding.failureKind === PRODUCT_DEFECT,
   );
 }
 

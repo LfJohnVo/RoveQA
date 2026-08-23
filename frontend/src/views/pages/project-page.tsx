@@ -2,11 +2,13 @@ import { Link, useParams } from "react-router";
 
 import type { Run } from "@domain/runs/run";
 import { useProjectRunsViewModel } from "@viewmodels/runs/use-project-runs-viewmodel";
+import { useSessionsViewModel } from "@viewmodels/projects/use-sessions-viewmodel";
 import { useProjectViewModel } from "@viewmodels/projects/use-projects-viewmodel";
 import { MemoryIcon, RunIcon, StoriesIcon } from "@views/components/icons";
 import { VerdictBadge } from "@views/components/verdict-badge";
 import {
   Badge,
+  Button,
   Card,
   Lede,
   Notice,
@@ -129,9 +131,107 @@ export function ProjectPage() {
         </p>
       )}
 
+      <Sessions projectId={project.projectId} />
       <RunHistory projectId={project.projectId} />
     </section>
   );
+}
+
+/**
+ * Which environments this project has, and what each would lend a run.
+ *
+ * Read and revoke only. Registering a session is `roveqa session register <file>` on
+ * purpose: a paste box would route a credential through browser memory, autofill and
+ * anything that screenshots the tab, and buy nothing (ADR 0019).
+ */
+function Sessions({ projectId }: { projectId: string }) {
+  const { environments, isLoading, error, revoke, isRevoking, revokeError } =
+    useSessionsViewModel(projectId);
+
+  if (isLoading) return null;
+  if (error !== null) {
+    return (
+      <section className="mt-8">
+        <SectionTitle>Sessions</SectionTitle>
+        <Notice tone="error">{error}</Notice>
+      </section>
+    );
+  }
+  if (environments.length === 0) {
+    // No environments is the ordinary shape for a project testing a public site, so it
+    // says what that means rather than showing an empty table that looks like a failure.
+    return (
+      <section className="mt-8">
+        <SectionTitle>Sessions</SectionTitle>
+        <Notice>
+          No environments yet. Runs go out anonymous, which is all a public site needs.
+        </Notice>
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-8">
+      <SectionTitle>Sessions</SectionTitle>
+      {revokeError !== null ? <Notice tone="error">{revokeError}</Notice> : null}
+      <TableCard label="Sessions">
+        <TableHead>
+          <Th>Environment</Th>
+          <Th>Session</Th>
+          <Th>Valid until</Th>
+          <Th>Established</Th>
+          <Th> </Th>
+        </TableHead>
+        <TableBody>
+          {environments.map(({ environment, current, expired }) => (
+            <Tr key={environment.environmentId}>
+              <Td>{environment.name}</Td>
+              <Td>
+                {current === null ? (
+                  <Badge tone="neutral">anonymous</Badge>
+                ) : (
+                  <span className="font-semibold">{current.label}</span>
+                )}
+              </Td>
+              <Td className="text-xs text-gray-600 dark:text-gray-400">
+                {current === null ? "—" : validity(current.validUntil, expired)}
+              </Td>
+              <Td className="text-xs text-gray-600 dark:text-gray-400">
+                {current === null ? "—" : current.establishedBy || "not recorded"}
+              </Td>
+              <Td>
+                {current === null ? null : (
+                  <Button
+                    variant="danger"
+                    type="button"
+                    disabled={isRevoking}
+                    onClick={() => revoke(environment.environmentId, current.sessionId)}
+                  >
+                    Revoke
+                  </Button>
+                )}
+              </Td>
+            </Tr>
+          ))}
+        </TableBody>
+      </TableCard>
+      <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+        Revoking destroys the key. The record stays as the audit trail, and restoring a
+        backup will not bring the session back. Register one with{" "}
+        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono dark:bg-gray-700">
+          roveqa session register
+        </code>
+        .
+      </p>
+    </section>
+  );
+}
+
+function validity(validUntil: string | null, expired: boolean) {
+  // "Nobody said" and "it is over" are different facts. Rendering the first as the
+  // second would show a working session in the colour of a broken one.
+  if (validUntil === null) return "no stated expiry";
+  return expired ? <span className="font-semibold text-red-600">expired</span> : validUntil;
 }
 
 /**

@@ -11,6 +11,7 @@
  * message naming the field.
  */
 
+import type { Environment, EnvironmentSession } from "@domain/projects/session";
 import type { Project } from "@domain/projects/project";
 import type { ConnectionState } from "@domain/runs/connection";
 import type { ExplorationMap } from "@domain/runs/exploration";
@@ -110,6 +111,20 @@ export interface RunGateway {
   pause(runId: string): Promise<void>;
   resume(runId: string): Promise<void>;
   cancel(runId: string): Promise<void>;
+}
+
+export interface SessionGateway {
+  /** The environments of a project. A handful, so unbounded. */
+  environments(projectId: string): Promise<Environment[]>;
+
+  /** Sessions on record for an environment, newest first — records only, never their
+   *  contents. There is no `get`: a stored session has no read path anywhere in the
+   *  system, and adding one here would need one behind it (ADR 0019). */
+  sessions(environmentId: string): Promise<EnvironmentSession[]>;
+
+  /** Destroy a session's key. The record stays as the audit trail; what makes the
+   *  session unusable is the absence of a key the database never held. */
+  revoke(environmentId: string, sessionId: string): Promise<void>;
 }
 
 export interface RunSubscription {

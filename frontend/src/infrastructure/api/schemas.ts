@@ -15,6 +15,7 @@ import { z } from "zod";
 import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { Artifact, Finding, RunReport } from "@domain/runs/findings";
 import type { ExplorationMap } from "@domain/runs/exploration";
+import type { Environment, EnvironmentSession } from "@domain/projects/session";
 import type { Project } from "@domain/projects/project";
 import type { UserStory } from "@domain/qa/story";
 import { RUN_STATUSES, VERDICTS, type Run } from "@domain/runs/run";
@@ -39,6 +40,27 @@ const projectSchema = z.object({
   project_id: z.string().min(1),
   name: z.string().min(1),
   default_run_policy_id: z.string().nullish(),
+});
+
+const environmentSchema = z.object({
+  environment_id: z.string().min(1),
+  project_id: z.string().min(1),
+  name: z.string().min(1),
+  default_run_policy_id: z.string().nullish(),
+});
+
+const sessionSchema = z.object({
+  session_id: z.string().min(1),
+  environment_id: z.string().min(1),
+  label: z.string().min(1),
+  established_at: z.string().min(1),
+  valid_until: z.string().nullish(),
+  established_by: z.string().nullish(),
+  // No `storage_state`. Zod ignores fields it was not told about rather than rejecting
+  // them — deliberately, because the API evolves additively — so this does not *refuse*
+  // one. What it does is never map it, which means no component can render what nobody
+  // put on the domain type. The endpoint that would have to return it is the thing that
+  // does not exist, and a backend test asserts that (ADR 0019).
 });
 
 const runSchema = z.object({
@@ -79,6 +101,36 @@ export function toProject(value: unknown): Project {
 
 export function toProjects(value: unknown): Project[] {
   return parse(z.array(z.unknown()), value, "project list").map(toProject);
+}
+
+export function toEnvironment(value: unknown): Environment {
+  const raw = parse(environmentSchema, value, "environment");
+  return {
+    environmentId: raw.environment_id,
+    projectId: raw.project_id,
+    name: raw.name,
+    defaultRunPolicyId: raw.default_run_policy_id ?? null,
+  };
+}
+
+export function toEnvironments(value: unknown): Environment[] {
+  return parse(z.array(z.unknown()), value, "environment list").map(toEnvironment);
+}
+
+export function toSession(value: unknown): EnvironmentSession {
+  const raw = parse(sessionSchema, value, "session");
+  return {
+    sessionId: raw.session_id,
+    environmentId: raw.environment_id,
+    label: raw.label,
+    establishedAt: raw.established_at,
+    validUntil: raw.valid_until ?? null,
+    establishedBy: raw.established_by ?? "",
+  };
+}
+
+export function toSessions(value: unknown): EnvironmentSession[] {
+  return parse(z.array(z.unknown()), value, "session list").map(toSession);
 }
 
 export function toRun(value: unknown): Run {
@@ -151,7 +203,11 @@ const findingSchema = z.object({
   source: z.enum(["plan", "sweep"]).default("plan"),
   step_id: z.string().nullish(),
   outcome: z.enum(["met", "not_met", "unverified"]),
-  failure_kind: z.enum(["product", "plan", "environment", "policy"]).nullish(),
+  // Any string. An unrecognised *status* must be an error — the UI reasons about
+  // transitions from it — but a failure kind is a label this layer displays and only
+  // compares against "product". Enumerating them here meant a report whose kind was
+  // `model` failed to parse, and the console said the run had verified nothing.
+  failure_kind: z.string().nullish(),
   deterministic_observation: z.string().nullish(),
   root_cause_hypothesis: z.string().nullish(),
   model_derived: z.boolean(),
