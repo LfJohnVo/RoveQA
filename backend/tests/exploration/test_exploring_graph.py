@@ -132,8 +132,7 @@ async def test_it_walks_a_small_site_and_stops_when_there_is_nowhere_left() -> N
 
 
 async def test_a_cycle_does_not_become_an_infinite_walk() -> None:
-    # Two pages linking to each other. Nothing about the budget saves this — what
-    # saves it is that an affordance is offered once.
+    # Two pages linking to each other. Nothing about the budget saves this.
     browser = SiteBrowser(pages={"/": page("/", "b"), "/b": page("/b", "")})
     browser.pages["/b"] = PageState(
         url="https://app.test/b",
@@ -143,8 +142,13 @@ async def test_a_cycle_does_not_become_an_infinite_walk() -> None:
     agent = await explore(browser)
 
     assert agent.goal_reached is True
-    # Each link taken exactly once, and then nowhere left to go. "" is the root.
-    assert sorted(browser.clicked) == ["", "b"]
+    # The back-link is never followed at all. Offering each affordance once was enough
+    # to guarantee termination and no more: the walk still paid an action to arrive
+    # somewhere it had already been. A link whose destination is a mapped page is now
+    # dropped instead, so the cycle costs one navigation rather than two — which on a
+    # real site, where every page carries the same navigation bar, is the difference
+    # between mapping it and spending the whole budget re-walking it.
+    assert sorted(browser.clicked) == ["b"]
 
 
 async def test_it_stops_on_the_action_budget_and_says_why() -> None:

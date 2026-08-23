@@ -19,7 +19,9 @@ domain that calls `now()` cannot be replayed and cannot be tested without waitin
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from urllib.parse import urlsplit
 
+from agentic_qa.domain.browser.urls import safe_url
 from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.exploration.state import Affordance, PageState
 from agentic_qa.domain.projects.run_policy import RunPolicy
@@ -138,6 +140,7 @@ class FrontierSnapshot:
     offered: tuple[tuple[str, str], ...] = field(default=())
     actions_taken: int = 0
     declined: int = 0
+    revisits_skipped: int = 0
 
 
 @dataclass(frozen=True)
@@ -155,6 +158,25 @@ class ExplorationReport:
     Absent on a report read back from storage: the budget is a property of the run's
     policy, which is already durable and already pinned onto the run, so a stored copy
     would be a second version free to disagree with the first."""
+    revisits_skipped: int = 0
+    """Links dropped because they pointed at a page this run had already mapped.
+
+    Measured against a real corporate site: 26 navigations produced 8 unique pages,
+    `/en/` was visited eight times and `about.html` seven, and the crawl stopped on
+    `max_actions` at depth 1 with 109 entries still queued. Every page shared one
+    navigation bar, so each of its links was queued once per page — the frontier filled
+    with destinations already known and the budget went on re-walking instead of
+    discovering. With them dropped the same site maps in 17 actions instead of 26, finds
+    16 pages instead of 8, and finishes complete instead of truncated.
+
+    Deliberately **not** persisted and not in the API response, which is the one part of
+    this worth arguing. The rule against silent caps is about lost coverage, and nothing
+    is lost here: every skipped link points at a page already in the map. What the number
+    explains is why a crawl was cheap, which is a question nobody asks — so it stays where
+    it earns its keep, pinning the behaviour in the tests, rather than buying a column, a
+    migration and a contract field to answer it.
+    """
+
     declined: int = 0
     """Affordances the run was not allowed to take.
 
@@ -200,6 +222,7 @@ class Frontier:
         infinite walk."""
 
         self._actions_taken = 0
+        self._revisits_skipped = 0
 
     @property
     def visited(self) -> tuple[PageState, ...]:
@@ -225,6 +248,19 @@ class Frontier:
     def declined(self) -> int:
         return self._declined
 
+    @property
+    def revisits_skipped(self) -> int:
+        return self._revisits_skipped
+
+    @property
+    def _visited_urls(self) -> set[str]:
+        """Pages already mapped, by address rather than by signature.
+
+        Derived instead of maintained: `_visited` is restored wholesale from a
+        snapshot, and a parallel set would be one more thing to remember to restore
+        — the exact omission that made `offered` load-bearing."""
+        return {state.url for state in self._visited.values() if state.url}
+
     def snapshot(self) -> FrontierSnapshot:
         return FrontierSnapshot(
             visited=tuple(self._visited.values()),
@@ -233,6 +269,7 @@ class Frontier:
             offered=tuple(sorted(self._offered)),
             actions_taken=self._actions_taken,
             declined=self._declined,
+            revisits_skipped=self._revisits_skipped,
         )
 
     @classmethod
@@ -258,6 +295,7 @@ class Frontier:
         frontier._offered = set(snapshot.offered)
         frontier._actions_taken = snapshot.actions_taken
         frontier._declined = snapshot.declined
+        frontier._revisits_skipped = snapshot.revisits_skipped
         return frontier
 
     def has_seen(self, state: PageState) -> bool:
@@ -302,12 +340,39 @@ class Frontier:
         self._pending.sort(key=lambda item: (item.depth, item.affordance.key))
 
     def take(self) -> FrontierEntry | None:
-        """Hand out the next thing to try, permanently removing it from the frontier."""
-        if not self._pending:
-            return None
-        entry = self._pending.pop(0)
-        self._actions_taken += 1
-        return entry
+        """Hand out the next thing worth trying, permanently removing it from the frontier.
+
+        Entries pointing at a page already mapped are dropped here rather than at enqueue
+        time, because this is the moment the most is known: a nav link queued from page
+        one is a discovery, and the same link queued from page eight is not. Deciding
+        early would have to guess.
+        """
+        while self._pending:
+            entry = self._pending.pop(0)
+            if self._leads_somewhere_known(entry.affordance):
+                self._revisits_skipped += 1
+                continue
+            self._actions_taken += 1
+            return entry
+        return None
+
+    def _leads_somewhere_known(self, affordance: Affordance) -> bool:
+        """Whether following this link would land on a page already recorded.
+
+        Only for links that say where they go. A button's destination is not knowable
+        without pressing it, so a button is always worth taking.
+
+        A url carrying a query is never treated as known. `/records?status=open` and
+        `/records` are different pages to act on, while a recorded state keeps only
+        scheme, host and path (`safe_url`, docs/13) — so the two cannot be told apart
+        once stored, and the safe reading of an ambiguity is to go and look.
+        """
+        destination = affordance.url
+        if not destination:
+            return False
+        if urlsplit(destination).query:
+            return False
+        return safe_url(destination) in self._visited_urls
 
     def depth_of(self, state: PageState) -> int:
         return self._depth.get(state.signature, 0)
@@ -332,6 +397,7 @@ class Frontier:
             frontier_remaining=len(self._pending),
             budget=self._budget,
             declined=self._declined,
+            revisits_skipped=self._revisits_skipped,
         )
 
 

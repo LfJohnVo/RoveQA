@@ -68,6 +68,7 @@ from agentic_qa.domain.knowledge.memory_context import MemoryItem
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.domain.qa.page_checks import check_page, is_checkable
 from agentic_qa.domain.qa.test_plan import PlanStep
+from agentic_qa.domain.qa.text_match import TextMatch, find_text
 from agentic_qa.domain.qa.verification import (
     CriterionOutcome,
     CriterionResult,
@@ -231,8 +232,13 @@ def build_agent_graph(
         for criterion_id, expected in (hints or {}).items():
             if criterion_id in found or not expected:
                 continue
-            if expected in visible:
-                found[criterion_id] = f"step {step} at {url}"
+            match = find_text(expected, visible)
+            if match is None:
+                continue
+            # How it matched travels with where, because a normalized match is a weaker
+            # claim than an exact one and the report must not present them as the same.
+            qualifier = "" if match is TextMatch.EXACT else " (ignoring case and line breaks)"
+            found[criterion_id] = f"step {step} at {url}{qualifier}"
         return found
 
     def _consent_refusal(state: GraphState, action: BrowserAction) -> str | None:
@@ -650,7 +656,24 @@ def build_agent_graph(
             }
 
         entry = frontier.take()
-        assert entry is not None  # `frontier_size == 0` is a stop reason
+        if entry is None:
+            # A non-empty frontier can still have nothing worth doing: every entry left
+            # points at a page already mapped, and `take` drops those rather than
+            # spending an action on them. That is the same outcome as an empty frontier
+            # — everything reachable was reached — so it is reported the same way.
+            agent.goal_reached = True
+            logger.info("run %s stopped exploring: frontier_exhausted", agent.run_id)
+            return {
+                "agent": agent,
+                "pending_action": None,
+                "criteria_seen": seen,
+                "page_checks": checks,
+                "last_page": page,
+                "exploration": frontier.snapshot(),
+                "exploration_report": frontier.report(StopReason.FRONTIER_EXHAUSTED),
+                "safe_point": None,
+                "failure_kind": None,
+            }
         return {
             "agent": agent,
             "pending_action": exploration_action(entry.affordance),

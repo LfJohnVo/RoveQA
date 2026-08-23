@@ -24,6 +24,7 @@ from agentic_qa.application.ports.models import JudgementRequest, ModelGateway
 from agentic_qa.application.services.guarded_browser import ActionDeniedError
 from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
 from agentic_qa.domain.qa.test_plan import PlanStep
+from agentic_qa.domain.qa.text_match import TextMatch, describe_match, find_text
 from agentic_qa.domain.qa.verification import (
     CriterionOutcome,
     CriterionResult,
@@ -128,9 +129,25 @@ async def _check_deterministically(
         return CriterionResult(
             criterion_id=criterion_id,
             outcome=CriterionOutcome.MET,
-            observation=f"the page contains {hint!r}",
+            observation=describe_match(hint, TextMatch.EXACT),
             step_id=step.step_id,
         )
+
+    # Playwright compares literally, and a heading styled `text-transform: uppercase`
+    # reports as uppercase however the markup was written. Before accusing the product —
+    # the only verdict that does — look at the text once more with the rendering
+    # discounted. Measured: a criterion asking for `Mission Control` against a page whose
+    # `<title>` contains exactly that (docs/qa/text_match).
+    rendered = await browser.describe_page()
+    forgiving = find_text(hint, rendered.visible_text)
+    if forgiving is not None:
+        return CriterionResult(
+            criterion_id=criterion_id,
+            outcome=CriterionOutcome.MET,
+            observation=describe_match(hint, forgiving),
+            step_id=step.step_id,
+        )
+
     return CriterionResult(
         criterion_id=criterion_id,
         outcome=CriterionOutcome.NOT_MET,
