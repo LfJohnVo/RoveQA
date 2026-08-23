@@ -26,6 +26,7 @@ from agentic_qa.domain.knowledge.experience import (
     KnowledgeExperienceCandidate,
 )
 from agentic_qa.domain.knowledge.feedback import MemoryFeedback
+from agentic_qa.domain.projects.api_token import ApiToken
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
@@ -48,6 +49,7 @@ class InMemoryStore:
     events: list[RunEvent] = field(default_factory=list)
     policies: dict[str, RunPolicy] = field(default_factory=dict)
     environments: dict[str, Environment] = field(default_factory=dict)
+    api_tokens: dict[str, ApiToken] = field(default_factory=dict)
     sessions: dict[str, tuple[EnvironmentSession, bytes]] = field(default_factory=dict)
     """Record and sealed bytes together, the way the table stores them. Rotating adds
     an entry rather than editing one, so the dict is an audit trail."""
@@ -88,6 +90,7 @@ class InMemoryStore:
             policies=dict(self.policies),
             environments=dict(self.environments),
             sessions=dict(self.sessions),
+            api_tokens=dict(self.api_tokens),
             recovery_points=list(self.recovery_points),
             plans=dict(self.plans),
             criterion_results={
@@ -121,6 +124,8 @@ class InMemoryStore:
         self.environments.update(snapshot.environments)
         self.sessions.clear()
         self.sessions.update(snapshot.sessions)
+        self.api_tokens.clear()
+        self.api_tokens.update(snapshot.api_tokens)
         self.recovery_points.clear()
         self.recovery_points.extend(snapshot.recovery_points)
         self.plans.clear()
@@ -257,6 +262,35 @@ class InMemoryRunRepository:
             replace(run) for run in self._store.runs.values() if run.project_id == project_id
         ]
         return list(reversed(matching))[:limit]
+
+
+class InMemoryApiTokenRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, token: ApiToken) -> None:
+        if token.token_id in self._store.api_tokens:
+            raise AlreadyExistsError("api_token", token.token_id)
+        if any(known.fingerprint == token.fingerprint for known in self._store.api_tokens.values()):
+            # The unique index, honoured here too. A fake that allowed a collision would
+            # let a test pass on behaviour PostgreSQL refuses.
+            raise AlreadyExistsError("api_token", token.token_id)
+        self._store.api_tokens[token.token_id] = token
+
+    async def find_by_fingerprint(self, fingerprint: str) -> ApiToken | None:
+        for token in self._store.api_tokens.values():
+            if token.fingerprint == fingerprint:
+                return token
+        return None
+
+    async def list_for_project(self, project_id: str) -> list[ApiToken]:
+        matching = [
+            token for token in self._store.api_tokens.values() if token.project_id == project_id
+        ]
+        return sorted(matching, key=lambda item: (item.issued_at, item.token_id), reverse=True)
+
+    async def revoke(self, token_id: str) -> bool:
+        return self._store.api_tokens.pop(token_id, None) is not None
 
 
 class InMemorySessionRepository:

@@ -10,12 +10,15 @@ from datetime import UTC, datetime
 import pytest
 
 from agentic_qa.application.errors import AlreadyExistsError
+from agentic_qa.domain.projects.api_token import fingerprint, issue
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.session import EnvironmentSession
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion, UserStory
 from agentic_qa.domain.runs.run import Run, RunStatus, Verdict
 from tests.conftest import Repositories
+
+ISSUED = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 def make_story(story_id: str, project_id: str) -> UserStory:
@@ -116,6 +119,97 @@ class TestStoryRepository:
 
         other = await repositories.stories.list_for_project("p-2", limit=10)
         assert [s.story_id for s in other] == ["s-9"]
+
+
+class TestApiTokenRepository:
+    """What a CI presents, stored the same way by both adapters (ADR 0020).
+
+    The behaviour that matters is the lookup: a request arrives with a string, and the
+    server has to find its row by the hash of that string or refuse. Everything else here
+    exists so a revocation cannot be confused with a typo.
+    """
+
+    async def test_a_token_is_found_by_the_hash_of_its_value(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_project(repositories)
+        minted = issue(token_id="tok-1", project_id="p-1", label="ci", now=ISSUED)
+        await repositories.api_tokens.add(minted.record)
+
+        found = await repositories.api_tokens.find_by_fingerprint(fingerprint(minted.secret))
+
+        assert found is not None
+        assert found.token_id == "tok-1"
+        assert found.covers("p-1")
+
+    async def test_a_value_nobody_issued_finds_nothing(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+
+        assert await repositories.api_tokens.find_by_fingerprint(fingerprint("roveqa_nope")) is None
+
+    async def test_the_value_is_nowhere_in_what_comes_back(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_project(repositories)
+        minted = issue(token_id="tok-1", project_id="p-1", label="ci", now=ISSUED)
+        await repositories.api_tokens.add(minted.record)
+
+        found = await repositories.api_tokens.find_by_fingerprint(fingerprint(minted.secret))
+
+        assert minted.secret not in repr(found)
+
+    async def test_two_tokens_for_one_project_are_independent(
+        self, repositories: Repositories
+    ) -> None:
+        # The property the whole design is for: one pipeline's token is revocable without
+        # touching another's.
+        await seed_project(repositories)
+        first = issue(token_id="tok-1", project_id="p-1", label="actions", now=ISSUED)
+        second = issue(token_id="tok-2", project_id="p-1", label="nightly", now=ISSUED)
+        await repositories.api_tokens.add(first.record)
+        await repositories.api_tokens.add(second.record)
+
+        assert await repositories.api_tokens.revoke("tok-1") is True
+
+        assert await repositories.api_tokens.find_by_fingerprint(fingerprint(first.secret)) is None
+        assert (
+            await repositories.api_tokens.find_by_fingerprint(fingerprint(second.secret))
+        ) is not None
+
+    async def test_revoking_something_that_is_not_there_says_so(
+        self, repositories: Repositories
+    ) -> None:
+        # So a caller can tell a revocation from a typo without a second query.
+        await seed_project(repositories)
+
+        assert await repositories.api_tokens.revoke("never-existed") is False
+
+    async def test_listing_shows_the_records_of_one_project(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_project(repositories)
+        await seed_project(repositories, project_id="p-2")
+        await repositories.api_tokens.add(
+            issue(token_id="mine", project_id="p-1", label="ci", now=ISSUED).record
+        )
+        await repositories.api_tokens.add(
+            issue(token_id="theirs", project_id="p-2", label="ci", now=ISSUED).record
+        )
+
+        listed = await repositories.api_tokens.list_for_project("p-1")
+
+        assert [token.token_id for token in listed] == ["mine"]
+
+    async def test_a_duplicate_id_is_rejected(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+        await repositories.api_tokens.add(
+            issue(token_id="tok-1", project_id="p-1", label="ci", now=ISSUED).record
+        )
+
+        with pytest.raises(AlreadyExistsError):
+            await repositories.api_tokens.add(
+                issue(token_id="tok-1", project_id="p-1", label="again", now=ISSUED).record
+            )
 
 
 class TestSessionRepository:

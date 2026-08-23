@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Self
 
 from tests.fakes.repositories import (
+    InMemoryApiTokenRepository,
     InMemoryArtifactIndex,
     InMemoryCriterionResultRepository,
     InMemoryEnvironmentRepository,
@@ -73,6 +74,10 @@ class InMemoryUnitOfWork:
     @property
     def sessions(self) -> InMemorySessionRepository:
         return InMemorySessionRepository(self._require_active())
+
+    @property
+    def api_tokens(self) -> InMemoryApiTokenRepository:
+        return InMemoryApiTokenRepository(self._require_active())
 
     @property
     def artifacts(self) -> InMemoryArtifactIndex:

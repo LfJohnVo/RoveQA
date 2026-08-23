@@ -30,7 +30,7 @@ from agentic_qa.application.ports.repositories import (
     StoryRepository,
 )
 from agentic_qa.application.ports.semaphores import ResourceSemaphore
-from agentic_qa.application.ports.sessions import SessionRepository
+from agentic_qa.application.ports.sessions import ApiTokenRepository, SessionRepository
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.domain.projects.run_policy import RunPolicy
 from agentic_qa.infrastructure.cache.redis.locks import RedisLockManager
@@ -41,6 +41,7 @@ from agentic_qa.infrastructure.persistence.postgres.engine import (
 )
 from agentic_qa.infrastructure.persistence.postgres.models import Base
 from agentic_qa.infrastructure.persistence.postgres.repositories import (
+    PostgresApiTokenRepository,
     PostgresEnvironmentRepository,
     PostgresProjectRepository,
     PostgresRunRepository,
@@ -50,6 +51,7 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
 from agentic_qa.infrastructure.persistence.postgres.unit_of_work import PostgresUnitOfWork
 from tests.fakes.locks import InMemoryLockManager
 from tests.fakes.repositories import (
+    InMemoryApiTokenRepository,
     InMemoryEnvironmentRepository,
     InMemoryProjectRepository,
     InMemoryRunRepository,
@@ -79,7 +81,7 @@ COMMITTED_TABLES = (
     "runs, run_events, recovery_points, idempotency_records, artifacts, "
     "criterion_results, knowledge_candidates, memory_feedback, graph_sync_state, "
     "failure_clusters, failure_cluster_members, cluster_hypotheses, "
-    "explored_states, exploration_runs"
+    "explored_states, exploration_runs, environment_sessions, api_tokens"
 )
 
 # The schema is created once per pytest process; engines stay per-test so every
@@ -145,6 +147,7 @@ class Repositories:
     stories: StoryRepository
     runs: RunRepository
     sessions: SessionRepository
+    api_tokens: ApiTokenRepository
     environments: EnvironmentRepository
 
 
@@ -155,6 +158,7 @@ def in_memory_repositories() -> Repositories:
         stories=InMemoryStoryRepository(store),
         runs=InMemoryRunRepository(store),
         sessions=InMemorySessionRepository(store),
+        api_tokens=InMemoryApiTokenRepository(store),
         environments=InMemoryEnvironmentRepository(store),
     )
 
@@ -208,6 +212,7 @@ async def repositories(request: pytest.FixtureRequest) -> AsyncIterator[Reposito
             stories=PostgresStoryRepository(session),
             runs=PostgresRunRepository(session),
             sessions=PostgresSessionRepository(session),
+            api_tokens=PostgresApiTokenRepository(session),
             environments=PostgresEnvironmentRepository(session),
         )
 

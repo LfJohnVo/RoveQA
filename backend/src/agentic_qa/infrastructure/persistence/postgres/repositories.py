@@ -29,6 +29,7 @@ from agentic_qa.domain.knowledge.experience import (
     KnowledgeExperienceCandidate,
 )
 from agentic_qa.domain.knowledge.feedback import MemoryFeedback
+from agentic_qa.domain.projects.api_token import ApiToken
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
@@ -68,6 +69,7 @@ from agentic_qa.infrastructure.persistence.postgres.mappers import (
     story_to_model,
 )
 from agentic_qa.infrastructure.persistence.postgres.models import (
+    ApiTokenModel,
     ArtifactModel,
     ClusterHypothesisModel,
     CriterionResultModel,
@@ -289,6 +291,80 @@ class PostgresRunRepository:
         )
         result = await self._session.scalars(statement)
         return [run_to_domain(model) for model in result]
+
+
+class PostgresApiTokenRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, token: ApiToken) -> None:
+        try:
+            async with self._session.begin_nested():
+                self._session.add(
+                    ApiTokenModel(
+                        token_id=token.token_id,
+                        project_id=token.project_id,
+                        label=token.label,
+                        fingerprint=token.fingerprint,
+                        issued_at=token.issued_at,
+                        issued_by=token.issued_by,
+                    )
+                )
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                raise AlreadyExistsError("api_token", token.token_id) from error
+            raise
+
+    async def find_by_fingerprint(self, fingerprint: str) -> ApiToken | None:
+        """The lookup every authenticated request makes.
+
+        By the unique index, so it is one probe rather than a scan — which matters here
+        more than anywhere else, because it happens on every call and an attacker gets to
+        choose how often.
+        """
+        result = await self._session.scalars(
+            select(ApiTokenModel).where(ApiTokenModel.fingerprint == fingerprint)
+        )
+        model = result.first()
+        return _token_to_domain(model) if model is not None else None
+
+    async def list_for_project(self, project_id: str) -> list[ApiToken]:
+        result = await self._session.scalars(
+            select(ApiTokenModel)
+            .where(ApiTokenModel.project_id == project_id)
+            .order_by(ApiTokenModel.issued_at.desc(), ApiTokenModel.token_id.desc())
+        )
+        return [_token_to_domain(model) for model in result]
+
+    async def revoke(self, token_id: str) -> bool:
+        """Delete the row. True when there was one.
+
+        Deleted rather than flagged, unlike a session. A session keeps its record because
+        the ciphertext survives in every backup and the row is the audit trail explaining
+        why it no longer opens; a token has nothing left behind it, so a row that stays
+        would be a listing entry that means nothing and a second state to reason about.
+        """
+        # `scalars(... returning(...))` rather than reading `rowcount`, which SQLAlchemy
+        # types as unavailable on a generic `Result` and which drivers are free to leave
+        # at -1. Asking the database which id it removed answers the same question and
+        # cannot be -1.
+        removed = await self._session.scalars(
+            delete(ApiTokenModel)
+            .where(ApiTokenModel.token_id == token_id)
+            .returning(ApiTokenModel.token_id)
+        )
+        return removed.first() is not None
+
+
+def _token_to_domain(model: ApiTokenModel) -> ApiToken:
+    return ApiToken(
+        token_id=model.token_id,
+        project_id=model.project_id,
+        label=model.label,
+        fingerprint=model.fingerprint,
+        issued_at=model.issued_at,
+        issued_by=model.issued_by,
+    )
 
 
 class PostgresSessionRepository:

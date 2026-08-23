@@ -14,6 +14,7 @@ it. Revoking is `forget`, and it means it.
 
 from typing import Protocol
 
+from agentic_qa.domain.projects.api_token import ApiToken
 from agentic_qa.domain.projects.session import EnvironmentSession
 
 
@@ -89,4 +90,29 @@ class SessionRepository(Protocol):
         Records only — a listing that carried the bytes would be a listing nobody could
         safely render.
         """
+        ...
+
+
+class ApiTokenRepository(Protocol):
+    """Tokens a CI job presents. Records and fingerprints; never a value (ADR 0020)."""
+
+    async def add(self, token: ApiToken) -> None:
+        """Persist a token record. Raises AlreadyExistsError when the id is taken."""
+        ...
+
+    async def find_by_fingerprint(self, fingerprint: str) -> ApiToken | None:
+        """The lookup every authenticated request makes, by unique index.
+
+        Takes the fingerprint rather than the secret: hashing belongs to the domain, and a
+        repository that took a secret would be a repository holding one.
+        """
+        ...
+
+    async def list_for_project(self, project_id: str) -> list[ApiToken]:
+        """Newest first. Records only — there is nothing else to return."""
+        ...
+
+    async def revoke(self, token_id: str) -> bool:
+        """Remove it. True when there was one, so a caller can tell a revocation from a
+        typo without a second query."""
         ...

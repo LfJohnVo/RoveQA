@@ -111,6 +111,33 @@ class RunPolicyModel(Base):
     )
 
 
+class ApiTokenModel(Base):
+    """A token a CI job presents, stored as a hash and never as itself (ADR 0020)."""
+
+    __tablename__ = "api_tokens"
+    __table_args__ = (
+        # Unique, and the lookup path: a request arrives, the server hashes what it was
+        # given and finds the row by that. Two rows sharing a fingerprint would mean the
+        # CSPRNG repeated itself, and the database says so rather than accepting it.
+        UniqueConstraint("fingerprint", name="uq_api_tokens_fingerprint"),
+        Index("ix_api_tokens_project", "project_id"),
+    )
+
+    token_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(String(NAME_LENGTH), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    """SHA-256, hex. Sixty-four characters exactly, so a value that is not one is a bug
+    rather than a token."""
+
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    issued_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+
 class EnvironmentSessionModel(Base):
     """A borrowed browser session: the record, and the sealed bytes (ADR 0019).
 
