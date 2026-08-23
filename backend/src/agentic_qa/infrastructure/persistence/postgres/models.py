@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -108,6 +109,45 @@ class RunPolicyModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class EnvironmentSessionModel(Base):
+    """A borrowed browser session: the record, and the sealed bytes (ADR 0019).
+
+    The ciphertext lives here and its key does not. That is the revocation design rather
+    than an implementation detail — there is deliberately no `revoked_at` column, because
+    a column restores from a backup and the whole gate is that a revocation must not.
+    """
+
+    __tablename__ = "environment_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "valid_until IS NULL OR valid_until > established_at",
+            name="ck_environment_sessions_validity_ordered",
+        ),
+        # The query a run makes: this environment's most recent session. Rotating adds a
+        # row rather than editing one, so "most recent" is the whole resolution rule.
+        Index(
+            "ix_environment_sessions_env_established",
+            "environment_id",
+            desc("established_at"),
+            desc("session_id"),
+        ),
+    )
+
+    session_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    environment_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("environments.environment_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(String(NAME_LENGTH), nullable=False)
+    established_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    established_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    sealed_state: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    """AES-GCM ciphertext. Unreadable without the key, which is not in this database and
+    not in any dump taken from it."""
 
 
 class EnvironmentModel(Base):

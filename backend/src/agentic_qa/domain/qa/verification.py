@@ -52,6 +52,13 @@ class FailureKind(StrEnum):
     MODEL = "model"
     """Inference was unavailable or produced nothing usable."""
 
+    SESSION = "session"
+    """The run needed an authenticated session and did not have a usable one.
+
+    Distinct from ENVIRONMENT on purpose: "the site is down" and "your session expired"
+    are read by different people and fixed in different places, and folding the second
+    into the first sends someone to check a server that is fine (ADR 0019)."""
+
     UNKNOWN = "unknown"
 
 
@@ -59,7 +66,13 @@ PRODUCT_DEFECT_KINDS = frozenset({FailureKind.PRODUCT})
 """Only these justify a `failed` verdict. Everything else is inconclusive or blocked."""
 
 BLOCKING_KINDS = frozenset(
-    {FailureKind.ENVIRONMENT, FailureKind.POLICY, FailureKind.AGENT_BUDGET, FailureKind.MODEL}
+    {
+        FailureKind.ENVIRONMENT,
+        FailureKind.POLICY,
+        FailureKind.AGENT_BUDGET,
+        FailureKind.MODEL,
+        FailureKind.SESSION,
+    }
 )
 """The run could not do its job. `blocked` says that honestly."""
 

@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import Select, delete, desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ from agentic_qa.domain.knowledge.feedback import MemoryFeedback
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.projects.session import EnvironmentSession
 from agentic_qa.domain.qa.observations import ObservedFailure, ObservedFailureKind
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
@@ -71,6 +72,7 @@ from agentic_qa.infrastructure.persistence.postgres.models import (
     ClusterHypothesisModel,
     CriterionResultModel,
     EnvironmentModel,
+    EnvironmentSessionModel,
     ExplorationRunModel,
     ExploredStateModel,
     FailureClusterMemberModel,
@@ -287,6 +289,80 @@ class PostgresRunRepository:
         )
         result = await self._session.scalars(statement)
         return [run_to_domain(model) for model in result]
+
+
+class PostgresSessionRepository:
+    """Records and ciphertext. The key belongs to the keyring and never comes near this."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, session: EnvironmentSession, sealed_state: bytes) -> None:
+        if await self.get(session.session_id) is not None:
+            raise AlreadyExistsError("environment_session", session.session_id)
+        try:
+            async with self._session.begin_nested():
+                self._session.add(
+                    EnvironmentSessionModel(
+                        session_id=session.session_id,
+                        environment_id=session.environment_id,
+                        label=session.label,
+                        established_at=session.established_at,
+                        valid_until=session.valid_until,
+                        established_by=session.established_by,
+                        sealed_state=sealed_state,
+                    )
+                )
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                raise AlreadyExistsError("environment_session", session.session_id) from error
+            raise
+
+    async def get(self, session_id: str) -> EnvironmentSession | None:
+        model = await self._session.get(EnvironmentSessionModel, session_id)
+        return _session_to_domain(model) if model is not None else None
+
+    async def current_for_environment(self, environment_id: str) -> EnvironmentSession | None:
+        result = await self._session.scalars(self._newest_first(environment_id).limit(1))
+        model = result.first()
+        return _session_to_domain(model) if model is not None else None
+
+    async def sealed_state(self, session_id: str) -> bytes | None:
+        # Selected on its own rather than through the entity: the bytes are wanted at
+        # exactly one call site, and loading them with every record read would put them
+        # in memory for every listing that never asked.
+        result = await self._session.scalars(
+            select(EnvironmentSessionModel.sealed_state).where(
+                EnvironmentSessionModel.session_id == session_id
+            )
+        )
+        return result.first()
+
+    async def list_for_environment(self, environment_id: str) -> list[EnvironmentSession]:
+        result = await self._session.scalars(self._newest_first(environment_id))
+        return [_session_to_domain(model) for model in result]
+
+    @staticmethod
+    def _newest_first(environment_id: str) -> Select[tuple[EnvironmentSessionModel]]:
+        return (
+            select(EnvironmentSessionModel)
+            .where(EnvironmentSessionModel.environment_id == environment_id)
+            .order_by(
+                EnvironmentSessionModel.established_at.desc(),
+                EnvironmentSessionModel.session_id.desc(),
+            )
+        )
+
+
+def _session_to_domain(model: EnvironmentSessionModel) -> EnvironmentSession:
+    return EnvironmentSession(
+        session_id=model.session_id,
+        environment_id=model.environment_id,
+        label=model.label,
+        established_at=model.established_at,
+        valid_until=model.valid_until,
+        established_by=model.established_by,
+    )
 
 
 class PostgresRunPolicyRepository:

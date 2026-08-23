@@ -30,6 +30,7 @@ from agentic_qa.application.ports.results import (
     CriterionResultRepository,
     ObservedFailureRepository,
 )
+from agentic_qa.application.ports.sessions import SessionRepository
 from agentic_qa.application.ports.triage import FailureClusterRepository
 
 
@@ -54,6 +55,9 @@ class UnitOfWork(Protocol):
 
     @property
     def environments(self) -> EnvironmentRepository: ...
+
+    @property
+    def sessions(self) -> SessionRepository: ...
 
     @property
     def recovery_points(self) -> RecoveryPointRepository: ...

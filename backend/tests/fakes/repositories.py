@@ -29,6 +29,7 @@ from agentic_qa.domain.knowledge.feedback import MemoryFeedback
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.projects.session import EnvironmentSession
 from agentic_qa.domain.qa.observations import ObservedFailure
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
@@ -47,6 +48,10 @@ class InMemoryStore:
     events: list[RunEvent] = field(default_factory=list)
     policies: dict[str, RunPolicy] = field(default_factory=dict)
     environments: dict[str, Environment] = field(default_factory=dict)
+    sessions: dict[str, tuple[EnvironmentSession, bytes]] = field(default_factory=dict)
+    """Record and sealed bytes together, the way the table stores them. Rotating adds
+    an entry rather than editing one, so the dict is an audit trail."""
+
     recovery_points: list[RecoveryPoint] = field(default_factory=list)
     plans: dict[tuple[str, str], TestPlan] = field(default_factory=dict)
     criterion_results: dict[str, dict[str, CriterionResult]] = field(default_factory=dict)
@@ -82,6 +87,7 @@ class InMemoryStore:
             events=list(self.events),
             policies=dict(self.policies),
             environments=dict(self.environments),
+            sessions=dict(self.sessions),
             recovery_points=list(self.recovery_points),
             plans=dict(self.plans),
             criterion_results={
@@ -113,6 +119,8 @@ class InMemoryStore:
         self.policies.update(snapshot.policies)
         self.environments.clear()
         self.environments.update(snapshot.environments)
+        self.sessions.clear()
+        self.sessions.update(snapshot.sessions)
         self.recovery_points.clear()
         self.recovery_points.extend(snapshot.recovery_points)
         self.plans.clear()
@@ -249,6 +257,41 @@ class InMemoryRunRepository:
             replace(run) for run in self._store.runs.values() if run.project_id == project_id
         ]
         return list(reversed(matching))[:limit]
+
+
+class InMemorySessionRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, session: EnvironmentSession, sealed_state: bytes) -> None:
+        if session.session_id in self._store.sessions:
+            raise AlreadyExistsError("environment_session", session.session_id)
+        self._store.sessions[session.session_id] = (session, sealed_state)
+
+    async def get(self, session_id: str) -> EnvironmentSession | None:
+        found = self._store.sessions.get(session_id)
+        return found[0] if found is not None else None
+
+    async def current_for_environment(self, environment_id: str) -> EnvironmentSession | None:
+        newest = self._newest_first(environment_id)
+        return newest[0] if newest else None
+
+    async def sealed_state(self, session_id: str) -> bytes | None:
+        found = self._store.sessions.get(session_id)
+        return found[1] if found is not None else None
+
+    async def list_for_environment(self, environment_id: str) -> list[EnvironmentSession]:
+        return self._newest_first(environment_id)
+
+    def _newest_first(self, environment_id: str) -> list[EnvironmentSession]:
+        matching = [
+            session
+            for session, _ in self._store.sessions.values()
+            if session.environment_id == environment_id
+        ]
+        # Same total order the table gives: by time, then by id, so two sessions
+        # established in the same instant do not swap places between reads.
+        return sorted(matching, key=lambda s: (s.established_at, s.session_id), reverse=True)
 
 
 class InMemoryRunPolicyRepository:

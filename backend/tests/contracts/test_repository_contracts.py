@@ -5,10 +5,14 @@ Every implementation of the ports must satisfy these behaviours identically. The
 touching this file.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from agentic_qa.application.errors import AlreadyExistsError
+from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
+from agentic_qa.domain.projects.session import EnvironmentSession
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion, UserStory
 from agentic_qa.domain.runs.run import Run, RunStatus, Verdict
 from tests.conftest import Repositories
@@ -24,6 +28,29 @@ def make_story(story_id: str, project_id: str) -> UserStory:
             AcceptanceCriterion(criterion_id="ac-1", description="reset email is sent"),
         ),
     )
+
+
+def make_session(session_id: str, *, hour: int = 10) -> EnvironmentSession:
+    return EnvironmentSession(
+        session_id=session_id,
+        environment_id="env-1",
+        label="admin",
+        established_at=datetime(2026, 8, 22, hour, 0, tzinfo=UTC),
+        established_by="captured by hand",
+    )
+
+
+async def seed_environment(
+    repositories: Repositories, environment_id: str = "env-1"
+) -> Environment:
+    """Sessions hang off an environment by foreign key, so one has to exist first."""
+    if await repositories.projects.get("p-1") is None:
+        await seed_project(repositories)
+    environment = Environment(
+        environment_id=environment_id, project_id="p-1", name=f"staging {environment_id}"
+    )
+    await repositories.environments.add(environment)
+    return environment
 
 
 async def seed_project(repositories: Repositories, project_id: str = "p-1") -> Project:
@@ -89,6 +116,84 @@ class TestStoryRepository:
 
         other = await repositories.stories.list_for_project("p-2", limit=10)
         assert [s.story_id for s in other] == ["s-9"]
+
+
+class TestSessionRepository:
+    """A borrowed session, stored the same way by both adapters (ADR 0019).
+
+    The behaviour that matters here is *resolution*: a run asks its environment for a
+    session and must get the newest one. Rotating adds a row rather than editing one — an
+    audit trail instead of an overwrite — which only works if "newest" is unambiguous.
+    """
+
+    async def test_the_record_round_trips_without_the_bytes(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-1"), b"sealed-bytes")
+
+        stored = await repositories.sessions.get("sess-1")
+
+        assert stored is not None
+        assert stored.label == "admin"
+        assert stored.environment_id == "env-1"
+
+    async def test_the_sealed_bytes_come_back_exactly(self, repositories: Repositories) -> None:
+        # Byte-for-byte or the ciphertext does not authenticate, and the failure would
+        # look like a revocation rather than like storage.
+        await seed_environment(repositories)
+        sealed = bytes(range(256))
+        await repositories.sessions.add(make_session("sess-1"), sealed)
+
+        assert await repositories.sessions.sealed_state("sess-1") == sealed
+
+    async def test_an_environment_resolves_to_its_newest_session(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-old", hour=9), b"old")
+        await repositories.sessions.add(make_session("sess-new", hour=11), b"new")
+
+        current = await repositories.sessions.current_for_environment("env-1")
+
+        assert current is not None
+        assert current.session_id == "sess-new"
+
+    async def test_rotating_leaves_the_previous_session_on_the_record(
+        self, repositories: Repositories
+    ) -> None:
+        # An overwrite would erase the answer to "what were we using yesterday", which is
+        # the first question after a run starts failing.
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-old", hour=9), b"old")
+        await repositories.sessions.add(make_session("sess-new", hour=11), b"new")
+
+        listed = await repositories.sessions.list_for_environment("env-1")
+
+        assert [session.session_id for session in listed] == ["sess-new", "sess-old"]
+
+    async def test_one_environment_never_sees_another_s_session(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_environment(repositories)
+        await seed_environment(repositories, environment_id="env-2")
+        await repositories.sessions.add(make_session("sess-1"), b"sealed")
+
+        assert await repositories.sessions.current_for_environment("env-2") is None
+
+    async def test_an_environment_with_no_session_says_so(self, repositories: Repositories) -> None:
+        # A run may legitimately proceed anonymously, so this is an answer and not a fault.
+        await seed_environment(repositories)
+
+        assert await repositories.sessions.current_for_environment("env-1") is None
+        assert await repositories.sessions.list_for_environment("env-1") == []
+
+    async def test_duplicate_id_is_rejected(self, repositories: Repositories) -> None:
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-1"), b"sealed")
+
+        with pytest.raises(AlreadyExistsError):
+            await repositories.sessions.add(make_session("sess-1"), b"other")
 
 
 class TestRunRepository:

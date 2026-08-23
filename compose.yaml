@@ -120,6 +120,7 @@ services:
       # filesystem — unreadable by the API and gone the moment the worker was replaced.
       # The references live in PostgreSQL (docs/11); this is where the bytes live.
       - artifact_data:/data/runs
+      - session_keyring:/data/keyring
     ports:
       - "8000:8000"
     depends_on:
@@ -179,6 +180,7 @@ services:
       # filesystem — unreadable by the API and gone the moment the worker was replaced.
       # The references live in PostgreSQL (docs/11); this is where the bytes live.
       - artifact_data:/data/runs
+      - session_keyring:/data/keyring
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -536,6 +538,11 @@ services:
 volumes:
   postgres_data: {}
   artifact_data: {}
+  # Keys for stored browser sessions, in a volume of their own and deliberately not in
+  # `scripts/backup.sh`. Revoking a session destroys its key, and that has to outlive a
+  # restore — a key inside the backup would come back with the ciphertext and resurrect
+  # a session somebody revoked on purpose (ADR 0019).
+  session_keyring: {}
   falkordb_data: {}
   frontend_node_modules: {}
   frontend_pnpm_store: {}

@@ -21,6 +21,7 @@ from agentic_qa.domain.projects.run_policy import RunPolicy
 
 class PolicyViolation(StrEnum):
     ORIGIN_NOT_ALLOWED = "origin_not_allowed"
+    PATH_FORBIDDEN = "path_forbidden"
     DESTRUCTIVE_NOT_ALLOWED = "destructive_not_allowed"
     UPLOAD_NOT_ALLOWED = "upload_not_allowed"
     UPLOAD_PATH_NOT_ALLOWED = "upload_path_not_allowed"
@@ -48,6 +49,16 @@ def evaluate_action(action: BrowserAction, policy: RunPolicy) -> PolicyDecision:
             return PolicyDecision.deny(
                 PolicyViolation.ORIGIN_NOT_ALLOWED,
                 f"navigation to {url} is outside the allowed origins",
+            )
+        forbidden = policy.forbids_path(url)
+        if forbidden is not None:
+            # Checked after the origin and reported separately, because they are
+            # different mistakes: one went to the wrong application, the other went to a
+            # part of the right one that somebody deliberately fenced off. A session makes
+            # the second reachable for the first time (ADR 0019).
+            return PolicyDecision.deny(
+                PolicyViolation.PATH_FORBIDDEN,
+                f"{url} is under {forbidden}, which this policy forbids",
             )
 
     if action.answers_consent and policy.consent is not ConsentPolicy.LEAVE:

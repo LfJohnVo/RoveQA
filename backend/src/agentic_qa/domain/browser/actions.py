@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from agentic_qa.domain.errors import InvalidEntityError
+from agentic_qa.domain.projects.session import SecretName
 from agentic_qa.domain.validation import require_text
 
 
@@ -113,6 +114,18 @@ class BrowserAction:
     planner cannot talk its way into this the way it can raise `side_effect` (ADR 0018).
     """
 
+    secret_ref: SecretName | None = None
+    """Type this secret instead of a literal value.
+
+    The whole containment argument rests on this being a *name*. The domain carries it,
+    the Playwright adapter resolves it in the last few lines before the keystroke, and no
+    layer in between is holding anything worth redacting — the action can be logged whole,
+    published to an event and put in a prompt, because there is nothing in it to leak.
+
+    Mutually exclusive with `value`: an action that carries both is one where somebody has
+    to decide which wins, and the wrong answer prints a password (ADR 0019).
+    """
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "intent", require_text(self.intent, field="intent"))
 
@@ -120,7 +133,15 @@ class BrowserAction:
             raise InvalidEntityError("navigate requires a target url")
         if self.type in NEEDS_TARGET and self.target.is_empty():
             raise InvalidEntityError(f"{self.type} requires a semantic target")
-        if self.type in NEEDS_VALUE and not self.value:
+        if self.secret_ref is not None:
+            if self.value is not None:
+                raise InvalidEntityError("an action carries a value or a secret, never both")
+            if self.type not in NEEDS_VALUE:
+                # A secret is a value, so it belongs only where a value belongs. Allowing
+                # it elsewhere would create a second path for one to travel that nothing
+                # downstream is expecting.
+                raise InvalidEntityError(f"{self.type} takes no value, so it takes no secret")
+        elif self.type in NEEDS_VALUE and not self.value:
             raise InvalidEntityError(f"{self.type} requires a value")
 
         if self.side_effect:

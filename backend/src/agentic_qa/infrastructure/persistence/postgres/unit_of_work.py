@@ -20,6 +20,7 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresRunEventLog,
     PostgresRunPolicyRepository,
     PostgresRunRepository,
+    PostgresSessionRepository,
     PostgresStateMapRepository,
     PostgresStoryRepository,
     PostgresTestPlanRepository,
@@ -66,6 +67,10 @@ class PostgresUnitOfWork:
     @property
     def environments(self) -> PostgresEnvironmentRepository:
         return PostgresEnvironmentRepository(self.session)
+
+    @property
+    def sessions(self) -> PostgresSessionRepository:
+        return PostgresSessionRepository(self.session)
 
     @property
     def recovery_points(self) -> PostgresRecoveryPointRepository:

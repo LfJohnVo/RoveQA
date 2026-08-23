@@ -6,6 +6,10 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "alembic>=1.19.1",
     "asyncpg>=0.31.0",
+    # AES-GCM for stored sessions (ADR 0019). The one place in this project where the
+    # smallest diff is the wrong answer: authenticated encryption written by hand is a
+    # vulnerability with tests around it.
+    "cryptography>=46.0.3",
     "fastapi>=0.141.1",
     # The learned-memory projection (ADR 0008). The `falkordb` extra brings the graph
     # driver; the LLM and embedder are injected explicitly so no hosted provider

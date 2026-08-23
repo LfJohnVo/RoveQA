@@ -23,6 +23,7 @@ from tests.fakes.repositories import (
     InMemoryRunEventLog,
     InMemoryRunPolicyRepository,
     InMemoryRunRepository,
+    InMemorySessionRepository,
     InMemoryStateMapRepository,
     InMemoryStore,
     InMemoryStoryRepository,
@@ -68,6 +69,10 @@ class InMemoryUnitOfWork:
     @property
     def environments(self) -> InMemoryEnvironmentRepository:
         return InMemoryEnvironmentRepository(self._require_active())
+
+    @property
+    def sessions(self) -> InMemorySessionRepository:
+        return InMemorySessionRepository(self._require_active())
 
     @property
     def artifacts(self) -> InMemoryArtifactIndex:
