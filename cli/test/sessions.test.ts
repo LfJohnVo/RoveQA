@@ -200,3 +200,35 @@ describe("what the client refuses to believe", () => {
     expect(record.valid_until).toBeNull();
   });
 });
+
+describe("what a failed pipeline is told to do", () => {
+  it("says how to get a token when there is none", async () => {
+    // Found by running the CI drill: the job went red with `AUTH_REQUIRED` and
+    // `next_action: null`, which is the one field an operator reads first.
+    open = await stubServer({ error: { code: "AUTH_REQUIRED", message: "no token" } }, 401);
+
+    const failure = await listSessions(open.client, "env-1").catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CliError);
+    expect((failure as CliError).nextAction).toMatch(/ROVEQA_TOKEN/);
+    expect((failure as CliError).nextAction).toMatch(/admin token issue/);
+  });
+
+  it("says which knob is wrong when the token is for another project", async () => {
+    open = await stubServer({ error: { code: "FORBIDDEN", message: "not yours" } }, 403);
+
+    const failure = await listSessions(open.client, "env-1").catch((error: unknown) => error);
+
+    expect((failure as CliError).nextAction).toMatch(/ROVEQA_PROJECT_ID/);
+  });
+
+  it("stays silent where there is no single right answer", async () => {
+    // A validation error can mean twenty things, and a guess printed as guidance is
+    // worse than the silence it replaces.
+    open = await stubServer({ error: { code: "VALIDATION_ERROR", message: "bad" } }, 422);
+
+    const failure = await listSessions(open.client, "env-1").catch((error: unknown) => error);
+
+    expect((failure as CliError).nextAction).toBeNull();
+  });
+});

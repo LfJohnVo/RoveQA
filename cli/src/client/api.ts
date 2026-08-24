@@ -196,12 +196,34 @@ const STATUS_CODES: Record<number, ErrorCode> = {
   504: "SERVICE_UNAVAILABLE",
 };
 
+const NEXT_ACTION: Partial<Record<ErrorCode, string>> = {
+  AUTH_REQUIRED:
+    "Set ROVEQA_TOKEN to a token for this project. One is issued on the RoveQA host: " +
+    "`python -m agentic_qa.admin token issue --project <id> --label ci`.",
+  FORBIDDEN:
+    "This token belongs to a different project. Check ROVEQA_PROJECT_ID, or issue a " +
+    "token for the project you meant.",
+};
+/**
+ * What to do about it, for the codes where there is a single right answer.
+ *
+ * Found by running the CI drill: the pipeline went red with `AUTH_REQUIRED` and
+ * `next_action: null`, which is the one field an operator staring at a failed job
+ * actually reads. The envelope has always had the field; these two codes are new enough
+ * that nothing had filled it.
+ *
+ * Only where the answer is unambiguous. A `VALIDATION_ERROR` can mean twenty things, and
+ * a guess printed as guidance is worse than the silence it replaced.
+ */
+
 async function toCliError(response: Response, url: string): Promise<CliError> {
   const body = await readBody(response).catch(() => null);
   const code = STATUS_CODES[response.status] ?? (response.status >= 500 ? "INTERNAL_ERROR" : "VALIDATION_ERROR");
   const detail = extractDetail(body);
+  const nextAction = NEXT_ACTION[code];
   return new CliError(code, `${response.status} from ${url}${detail ? `: ${detail}` : ""}`, {
     details: { status: response.status, body },
+    ...(nextAction === undefined ? {} : { nextAction }),
   });
 }
 

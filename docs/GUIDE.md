@@ -287,8 +287,30 @@ roveqa run flaky --plan plan.json --count 5 --output json
 
 ## 7. En CI
 
-Hay un workflow de ejemplo en [`examples/ci/github-actions.yml`](../examples/ci/github-actions.yml)
-y un adaptador a JUnit distribuido **dentro del paquete de la CLI**:
+Antes que nada, el token. Se emite en el host de RoveQA, una vez, y se muestra una vez:
+
+```bash
+docker compose exec api python -m agentic_qa.admin token issue --project <id> --label "github actions"
+```
+
+Ese valor va como secreto del repositorio en `ROVEQA_TOKEN`. No hay endpoint que emita
+tokens y no lo habrá: emitir una credencial es un acto del host, así que no hay ruta que
+filtrar ni token de administración cuyo robo escale de un proyecto a todos (ADR 0020).
+
+**Un token alcanza su proyecto y ninguno más**, así que el pipeline de un repositorio no
+puede tocar la aplicación de otro equipo, y revocar uno no corta a los demás:
+
+```bash
+docker compose exec api python -m agentic_qa.admin token revoke <token-id>
+```
+
+Si el valor se pierde, se emite otro y se revoca éste. Es la única recuperación honesta de
+un secreto que nadie guardó.
+
+Hay un workflow de ejemplo para las dos formas —
+[`examples/ci/github-actions.yml`](../examples/ci/github-actions.yml) y
+[`examples/ci/gitlab-ci.yml`](../examples/ci/gitlab-ci.yml) — y un adaptador a JUnit
+distribuido **dentro del paquete de la CLI**:
 
 ```bash
 roveqa run wait "$RUN" --timeout 30m --output json > verdict.json; echo $? > code
@@ -301,6 +323,19 @@ node "$(npm root -g)/roveqa-cli/examples/verdict-to-junit.mjs" verdict.json "$(c
 La única regla que importa de ese adaptador: **no decide el resultado**. Sale con el código
 que le dio la CLI. Un adaptador que reportara "los tests corrieron" mientras el run se quedó
 sin tiempo convertiría en verde una pregunta que nadie respondió.
+
+Cuatro salidas y cada una es una cosa distinta:
+
+| Salida | Qué pasó |
+| --- | --- |
+| 0 | `passed` |
+| 1 | veredicto terminal que no es pass — `failed`, `blocked`, `inconclusive` |
+| 3 | el token falta, no vale, o es de otro proyecto |
+| 7 | la espera venció; **el run sigue vivo** y la salida dice cómo retomarlo |
+
+Un `blocked` no es un defecto: el run no pudo hacer su trabajo y dice por qué. Y un 3 trae
+en `next_action` qué hacer al respecto, porque un pipeline en rojo a las tres de la mañana
+no debería exigir leer esta guía.
 
 ---
 
