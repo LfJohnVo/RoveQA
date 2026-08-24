@@ -3,10 +3,11 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 
 from agentic_qa.bootstrap.container import Container, build_container, connect_workflows
 from agentic_qa.bootstrap.settings import Settings
+from agentic_qa.interfaces.http.authorisation import authorise
 from agentic_qa.interfaces.http.errors import register_error_handlers
 from agentic_qa.interfaces.http.request_context import (
     REQUEST_ID_HEADER,
@@ -23,6 +24,7 @@ from agentic_qa.interfaces.http.routers import (
     realtime,
     runs,
     schedules,
+    sessions,
     triage,
 )
 
@@ -62,16 +64,32 @@ def create_app(container: Container | None = None) -> FastAPI:
         return response
 
     register_error_handlers(app)
-    app.include_router(projects.router)
-    app.include_router(artifacts.router)
-    app.include_router(meta.router)
-    app.include_router(memory.router)
-    app.include_router(plans.router)
-    app.include_router(runs.router)
+
+    # One list, one dependency, applied at inclusion rather than on each handler. A new
+    # endpoint inherits the check by living in a router that is already here, and the
+    # structural test in `tests/http/test_every_route_is_guarded.py` fails on any route
+    # that ends up neither guarded nor named in `OPEN_PATHS` (ADR 0020).
+    guarded = [
+        projects.router,
+        artifacts.router,
+        meta.router,
+        memory.router,
+        plans.router,
+        runs.router,
+        runs.by_project,
+        sessions.router,
+        triage.router,
+        schedules.router,
+        exploration.router,
+    ]
+    for router in guarded:
+        app.include_router(router, dependencies=[Depends(authorise)])
+
+    # The websocket route is included without the HTTP dependency: FastAPI resolves
+    # dependencies for a socket differently, and a bearer header is not something a
+    # browser can attach to one. Its own guard lands with the console's auth, and until
+    # then it is on the exempt list where the test can see it rather than silently open.
     app.include_router(realtime.router)
-    app.include_router(triage.router)
-    app.include_router(schedules.router)
-    app.include_router(exploration.router)
 
     @app.get("/health", tags=["ops"])
     async def health() -> dict[str, str]:

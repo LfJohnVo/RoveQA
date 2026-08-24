@@ -27,7 +27,7 @@ from agentic_qa.domain.browser.actions import (
     BrowserActionType,
 )
 
-PLANNING_PROMPT_VERSION = "planner.v5"
+PLANNING_PROMPT_VERSION = "planner.v7"
 JUDGEMENT_PROMPT_VERSION = "judge.v1"
 DEEP_ANALYSIS_PROMPT_VERSION = "deep-analysis.v1"
 """Bumped whenever the wording changes.
@@ -38,6 +38,11 @@ from the previous wording's (docs/08).
 """
 
 MAX_MEMORY_CHARS = 300
+
+MAX_FAILED_TARGETS = 8
+"""Targets already known missing, shown to the planner. A page where eight distinct
+targets were invented is one the planner is not reading, and a ninth line does not
+fix that."""
 
 MAX_ORIGINS = 10
 MAX_CRITERIA = 20
@@ -84,9 +89,10 @@ test (submitting, saving, deleting, purchasing, sending).
 - These actions cannot change anything and must not be marked side_effect: \
 {_READ_ONLY_ACTIONS}. Marking one of them anyway does not make a run safer; it \
 spends the run.
-- An element listed with a url after it can be reached with navigate, which changes \
-nothing. Clicking it is a write, and a read-only run will be refused. Prefer the \
-url when one is shown.
+- Each element says the action that takes it. An element marked "navigate to \
+<url>" is reached with navigate, which changes nothing; one marked "click" needs \
+click, which may change the world and needs permission. Use the action the element \
+names.
 - <acceptance_criteria> is what this run will be judged by. A criterion with an \
 expected text is checked literally, so assert_text with that exact text as the \
 value is how you confirm it. A criterion without one is judged separately — never \
@@ -135,6 +141,20 @@ def build_judgement_prompt(criterion: str, observation: str) -> str:
 def build_planning_prompt(request: PlanningRequest) -> str:
     """The user message: goal, bounded history and the delimited observation."""
     sections = [f"<goal>\n{_clip(request.goal, MAX_GOAL_CHARS)}\n</goal>"]
+
+    if request.failed_targets:
+        # Near the top, deliberately: it is the shortest thing in the prompt that can
+        # stop a whole class of wasted step, and a planner that reads it first is a
+        # planner that does not propose the same unreachable field a third time.
+        shown = request.failed_targets[:MAX_FAILED_TARGETS]
+        tried = "\n".join(f"- {target}" for target in shown)
+        sections.append(
+            "<targets_that_did_not_work>\n"
+            f"{tried}\n"
+            "The browser could not act on these here. Aiming at one again costs the run "
+            "an action and changes nothing — target something <page_observation> shows.\n"
+            "</targets_that_did_not_work>"
+        )
 
     if request.allowed_origins:
         # First, and deliberately: a run that starts on `about:blank` has nowhere to go

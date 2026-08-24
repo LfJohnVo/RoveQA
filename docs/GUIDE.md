@@ -60,6 +60,11 @@ puede planificar.
 
 Abre **http://localhost:5173** y pulsa **New project**.
 
+La consola usa el sistema de diseño de
+[Windmill Dashboard](https://github.com/estevanmaito/windmill-dashboard) (MIT). El botón de
+la luna/sol en la cabecera cambia entre claro y oscuro, y recuerda tu elección por encima de
+lo que prefiera el sistema operativo.
+
 Te pide cuatro cosas, y las cuatro importan:
 
 **Nombre.** Para ti.
@@ -80,6 +85,31 @@ cuyos datos no te importen.
 
 **Presupuestos** — acciones, llamadas al modelo, segundos. Un run que agota uno se detiene
 y reporta `blocked`. Nunca reporta un problema del producto que no terminó de mirar.
+
+### El banner de cookies
+
+Un quinto ajuste que sólo existe por API todavía: `consent`, con tres valores.
+
+| valor | qué hace |
+| --- | --- |
+| `leave` (por defecto) | No lo toca. Si el sitio tapa el contenido con el banner, el run falla ahí y lo dice. |
+| `reject` | Toma la opción **menos concesiva** que el banner ofrezca. Recomendado. |
+| `accept` | Toma la que acepta. Nunca por defecto, nunca inferido. |
+
+El default cuesta runs a propósito. Aceptar cookies es un acto legal hecho **en nombre de
+alguien**, y "Accept all" es casi siempre el botón más fácil de encontrar — más grande, más
+contraste, primero en el DOM. Cualquier heurística que optimice «pasar el banner» aterriza
+en la opción que más concede, por diseño del sitio.
+
+Un run que falla porque había un banner es un fallo visible con un remedio obvio. Uno que
+aceptó rastreo calladamente en un sitio que no es tuyo es algo de lo que nadie se entera
+hasta que se entera otro. Contra tu propio staging, pon `accept` y olvídate; el default
+protege el caso en que el objetivo es de otra persona, que es para lo que existe Phase 16.
+
+Detalle honesto: el reconocimiento es **por etiqueta**, no estructural. Un banner cuyos
+botones digan "Sure" y "Maybe later" no se reconoce, y el run no adivina — lo reporta sin
+tocar. [ADR 0018](adr/0018-consent-overlays.md) explica por qué y qué costaría hacerlo
+estructural.
 
 <details>
 <summary>Lo mismo por API, si prefieres scriptearlo</summary>
@@ -257,8 +287,30 @@ roveqa run flaky --plan plan.json --count 5 --output json
 
 ## 7. En CI
 
-Hay un workflow de ejemplo en [`examples/ci/github-actions.yml`](../examples/ci/github-actions.yml)
-y un adaptador a JUnit distribuido **dentro del paquete de la CLI**:
+Antes que nada, el token. Se emite en el host de RoveQA, una vez, y se muestra una vez:
+
+```bash
+docker compose exec api python -m agentic_qa.admin token issue --project <id> --label "github actions"
+```
+
+Ese valor va como secreto del repositorio en `ROVEQA_TOKEN`. No hay endpoint que emita
+tokens y no lo habrá: emitir una credencial es un acto del host, así que no hay ruta que
+filtrar ni token de administración cuyo robo escale de un proyecto a todos (ADR 0020).
+
+**Un token alcanza su proyecto y ninguno más**, así que el pipeline de un repositorio no
+puede tocar la aplicación de otro equipo, y revocar uno no corta a los demás:
+
+```bash
+docker compose exec api python -m agentic_qa.admin token revoke <token-id>
+```
+
+Si el valor se pierde, se emite otro y se revoca éste. Es la única recuperación honesta de
+un secreto que nadie guardó.
+
+Hay un workflow de ejemplo para las dos formas —
+[`examples/ci/github-actions.yml`](../examples/ci/github-actions.yml) y
+[`examples/ci/gitlab-ci.yml`](../examples/ci/gitlab-ci.yml) — y un adaptador a JUnit
+distribuido **dentro del paquete de la CLI**:
 
 ```bash
 roveqa run wait "$RUN" --timeout 30m --output json > verdict.json; echo $? > code
@@ -271,6 +323,19 @@ node "$(npm root -g)/roveqa-cli/examples/verdict-to-junit.mjs" verdict.json "$(c
 La única regla que importa de ese adaptador: **no decide el resultado**. Sale con el código
 que le dio la CLI. Un adaptador que reportara "los tests corrieron" mientras el run se quedó
 sin tiempo convertiría en verde una pregunta que nadie respondió.
+
+Cuatro salidas y cada una es una cosa distinta:
+
+| Salida | Qué pasó |
+| --- | --- |
+| 0 | `passed` |
+| 1 | veredicto terminal que no es pass — `failed`, `blocked`, `inconclusive` |
+| 3 | el token falta, no vale, o es de otro proyecto |
+| 7 | la espera venció; **el run sigue vivo** y la salida dice cómo retomarlo |
+
+Un `blocked` no es un defecto: el run no pudo hacer su trabajo y dice por qué. Y un 3 trae
+en `next_action` qué hacer al respecto, porque un pipeline en rojo a las tres de la mañana
+no debería exigir leer esta guía.
 
 ---
 

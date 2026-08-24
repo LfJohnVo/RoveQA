@@ -48,3 +48,6 @@ backups/
 
 # Working directory for scripts/agent-baseline.sh: measurements, not sources.
 .agent-baseline/
+
+# Results of scripts/smoke-archetypes.sh, regenerated on every run.
+smoke-archetypes.json

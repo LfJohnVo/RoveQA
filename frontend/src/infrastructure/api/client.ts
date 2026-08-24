@@ -16,6 +16,7 @@ import type {
   MemoryGateway,
   ProjectGateway,
   RunGateway,
+  SessionGateway,
   StartRunInput,
   StoryGateway,
   DraftStory,
@@ -23,9 +24,11 @@ import type {
   NewProjectInput,
 } from "@application/ports/gateways";
 import type { MemoryStatus } from "@domain/knowledge/memory";
+import type { ExplorationMap } from "@domain/runs/exploration";
 import type { Project } from "@domain/projects/project";
 import type { UserStory } from "@domain/qa/story";
 import type { RunReport } from "@domain/runs/findings";
+import type { Environment, EnvironmentSession } from "@domain/projects/session";
 import type { Run } from "@domain/runs/run";
 import type { RunEvent } from "@domain/runs/timeline";
 
@@ -34,7 +37,11 @@ import {
   toMemoryStatus,
   toProject,
   toProjects,
+  toExplorationMap,
+  toEnvironments,
   toRun,
+  toRuns,
+  toSessions,
   toRunEventPage,
   toRunReport,
   toStories,
@@ -164,6 +171,44 @@ export class HttpProjectGateway implements ProjectGateway {
   }
 }
 
+export class HttpSessionGateway implements SessionGateway {
+  private readonly client: ApiClient;
+
+  constructor(client: ApiClient) {
+    this.client = client;
+  }
+
+  async environments(projectId: string): Promise<Environment[]> {
+    return toEnvironments(
+      await this.client.request(
+        "GET",
+        `/api/v1/projects/${encodeURIComponent(projectId)}/environments`,
+      ),
+    );
+  }
+
+  async sessions(environmentId: string): Promise<EnvironmentSession[]> {
+    return toSessions(
+      await this.client.request(
+        "GET",
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/sessions`,
+      ),
+    );
+  }
+
+  async revoke(environmentId: string, sessionId: string): Promise<void> {
+    // A command, not a delete. The record stays as the audit trail and the key is what
+    // gets destroyed; `DELETE` would promise the row disappears, and the list refreshing
+    // with the session still on it would read as a failed call.
+    await this.client.request(
+      "POST",
+      `/api/v1/environments/${encodeURIComponent(environmentId)}/sessions/` +
+        `${encodeURIComponent(sessionId)}/revoke`,
+    );
+  }
+}
+
+
 export class HttpRunGateway implements RunGateway {
   private readonly client: ApiClient;
 
@@ -173,6 +218,15 @@ export class HttpRunGateway implements RunGateway {
 
   async get(runId: string): Promise<Run> {
     return toRun(await this.client.request("GET", `/api/v1/runs/${encodeURIComponent(runId)}`));
+  }
+
+  async listForProject(projectId: string, limit: number): Promise<Run[]> {
+    return toRuns(
+      await this.client.request(
+        "GET",
+        `/api/v1/projects/${encodeURIComponent(projectId)}/runs?limit=${limit}`,
+      ),
+    );
   }
 
   async events(runId: string, after: number): Promise<RunEvent[]> {
@@ -192,16 +246,27 @@ export class HttpRunGateway implements RunGateway {
     // evidence list for a frame.
     const [report, failureContext] = await Promise.all([
       this.client.request("GET", `/api/v1/runs/${id}/report`),
-      this.client.request("GET", `/api/v1/runs/${id}/failure-context`),
+      // A run that passed has no failure to bundle, and the server says so with a 404.
+      // Treating that as an error put a red alert on every healthy run's page — the
+      // screen crying wolf about the absence of a problem. Absence is the answer here.
+      this.client
+        .request("GET", `/api/v1/runs/${id}/failure-context`)
+        .catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 404) {
+            return { run_id: runId, evidence_set_id: null, artifacts: [] };
+          }
+          throw error;
+        }),
     ]);
     return toRunReport(report, failureContext);
   }
 
   async start(input: StartRunInput): Promise<Run> {
-    const body: Record<string, string> = { project_id: input.projectId };
+    const body: Record<string, string | boolean> = { project_id: input.projectId };
     if (input.planId !== undefined) body.plan_id = input.planId;
     if (input.planVersion !== undefined) body.plan_version = input.planVersion;
     if (input.environmentId !== undefined) body.environment_id = input.environmentId;
+    if (input.explore === true) body.explore = true;
 
     return toRun(
       await this.client.request("POST", "/api/v1/runs", {
@@ -209,6 +274,23 @@ export class HttpRunGateway implements RunGateway {
         idempotencyKey: input.idempotencyKey,
       }),
     );
+  }
+
+  async exploration(runId: string): Promise<ExplorationMap | null> {
+    try {
+      return toExplorationMap(
+        await this.client.request(
+          "GET",
+          `/api/v1/runs/${encodeURIComponent(runId)}/exploration`,
+        ),
+      );
+    } catch (error) {
+      // A run that never explored has no map, and the server says so with a 404. That is
+      // a fact about the run, not a failure to read it — surfacing it as an error would
+      // put a red banner on every planned run's page.
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async pause(runId: string): Promise<void> {

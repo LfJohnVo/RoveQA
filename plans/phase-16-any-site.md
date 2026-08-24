@@ -60,9 +60,14 @@ lo cierra.
 
 | ADR | Decisión |
 | --- | --- |
-| 0015 | Estado HTTP y fallas observadas en el resultado de una acción, y qué veredicto merece un 5xx |
-| 0016 | Barrido de sitio: un modo de run sin historia, con comprobaciones deterministas por estado |
-| 0017 | Overlays de consentimiento: qué puede cerrar un run y bajo qué decisión de policy |
+| 0015 | Estado HTTP y fallas observadas en el resultado de una acción, y qué veredicto merece un 5xx ✅ |
+| ~~0016~~ **0017** | Barrido de sitio: un modo de run sin historia, con comprobaciones deterministas por estado |
+| ~~0017~~ **0018** | Overlays de consentimiento: qué puede cerrar un run y bajo qué decisión de policy |
+
+> Los números se corrieron: **0016 es el sistema de diseño del frontend** (Windmill +
+> Tailwind), escrito antes que estos dos. Un ADR reusando un número es peor que uno con el
+> número «equivocado» — se citan por número y dos documentos distintos bajo el mismo lo
+> vuelven una referencia inútil.
 
 ---
 
@@ -83,10 +88,24 @@ que separarlos.
    página de error. Hoy no puede saberlo.
 
 **Gates**
-- Un `navigate` a un 404 no vuelve como `succeeded` sin más.
-- Un 5xx produce el veredicto que el ADR decida; test dedicado.
-- Un error de consola aparece en el reporte, separado de las conclusiones del modelo.
-- Ningún token en una URL fallida llega al reporte sin redactar.
+- Un `navigate` a un 404 no vuelve como `succeeded` sin más. ✅
+- Un 5xx produce el veredicto que el ADR decida; test dedicado. ✅
+- Un error de consola aparece en el reporte, separado de las conclusiones del modelo. ✅
+- Ningún token en una URL fallida llega al reporte sin redactar. ✅
+
+**Cerrada.** La última mitad —lo observado llegando al reporte— tardó una fase de más:
+`EpisodeResult.page_problems` existía desde el slice 1 y era el único campo del resultado
+que nadie leía. Ahora hay tabla (`observed_failures`, migración `d41f7c2a9e08`), clave
+propia en el reporte, sección propia en markdown y en la UI, y la frase dicha en voz alta:
+ninguna de esas líneas es un veredicto.
+
+Tres defectos salieron al usarlo. La redacción estaba escrita y nunca ejercitada —
+`auth failed for token sk-live-…` pasaba entera, porque los patrones cubrían lo que emite
+una máquina y no lo que teclea una persona. `page_problems()` deduplicaba **después** de
+recortar, así que veinticinco reintentos de una imagen rota reportaban un hallazgo y
+escondían las veintiséis URLs distintas detrás — con el comentario del propio código
+describiendo lo correcto. Y el episode runner le preguntaba al gateway crudo, no al
+guardado que le había pasado al grafo.
 
 ### Slice 2 — La exploración sale de `about:blank` *(R1)*
 
@@ -104,8 +123,16 @@ policy read-only arreglada se rechaza.
    taparlo.
 
 **Gates**
-- Una exploración mapea más de un estado sin ayuda del test.
-- Un origen inalcanzable sale `blocked` con causa, no `frontier_exhausted`.
+- Una exploración mapea más de un estado sin ayuda del test. ✅
+- Un origen inalcanzable sale `blocked` con causa, no `frontier_exhausted`. ✅
+
+**Cerrada.** `seed_action` en `domain/exploration/actions.py`; el nodo `explore` la emite
+mientras no haya descrito ninguna página **y** la última acción no haya tenido éxito — las
+dos condiciones hacen falta: una bandera puesta al *pedir* la navegación sigue en alto
+cuando falla, y el reintento describiría `about:blank` y lo llamaría mapa completo. El
+segundo gate no necesitó código nuevo: Recover ya clasifica una navegación que no completa
+como `environment`. Los dos `page.goto` que los tests hacían por cuenta de producción están
+fuera.
 
 ### Slice 3 — Barrido de sitio
 
@@ -126,12 +153,29 @@ como declinados con su URL, y comprobarlos queda como decisión del ADR — alca
 eso es política, no implementación.
 
 **Gates**
-- Un barrido de un sitio de varias páginas reporta una fila por estado alcanzable.
-- Una página con un 500 plantado aparece señalada.
-- Un JS roto plantado aparece señalado.
+- Un barrido de un sitio de varias páginas reporta una fila por estado alcanzable. ✅
+- Una página con un 500 plantado aparece señalada. ✅
+- Un JS roto plantado aparece señalado. ✅ (slice 1 + `observed_failures`)
 - Un sitio con cien páginas equivalentes no produce cien hallazgos iguales: la normalización de
-  rutas que la exploración ya hace debe sostenerlo, y el test lo fija.
-- Cero llamadas al modelo en un barrido. Medido, no supuesto.
+  rutas que la exploración ya hace debe sostenerlo, y el test lo fija. ✅
+- Cero llamadas al modelo en un barrido. Medido, no supuesto. ✅ — y mejor que medido:
+  el smoke de gate 4 corre **sin endpoint de modelo configurado**.
+
+**Cerrada, con una decisión que el plan no anticipaba.** El barrido **no es un modo**: es
+una capa. Todo run aplica los mismos chequeos universales a toda página que observa, tenga
+historia o no. Un tercer modo al lado de «historia» y «recorrido» habría significado tres
+reglas de veredicto y una combinación que nadie prueba; una capa compone porque no hay nada
+que componer. ADR 0017.
+
+Consecuencia útil que no estaba en el plan: un run **con** historia ahora también reporta la
+salud de las páginas por las que pasó. Una historia de checkout que atraviesa un 500 de
+camino es un run que debería decirlo, y hasta ahora el 500 era invisible salvo que un
+criterio lo nombrara.
+
+Y «ambas a la vez» **ya funcionaba** y nadie lo sabía: sale de exploración + ADR 0013
+(verificación continua). Lo que faltaba era probarlo — y el primer intento pasó por la razón
+equivocada, porque el doble de navegador contestaba `succeeded=True` a un `assert_text` que
+no implementaba. Todo criterio salía cumplido contra páginas que no decían nada.
 
 ### Slice 4 — Overlays de consentimiento
 
@@ -145,10 +189,26 @@ de la policy, nunca comportamiento tácito.
 2. Cierre acotado, bajo la decisión de policy, registrado como acción visible en el log.
 
 **Gates**
-- Un sitio con banner deja ver el contenido detrás.
-- El cierre aparece en el log: nunca una acción invisible.
-- Con la policy que lo prohíbe, el run no lo cierra y lo dice.
-- La opción elegida por defecto es la que menos concede.
+- Un sitio con banner deja ver el contenido detrás. ✅ gov.uk con `consent: reject`
+- El cierre aparece en el log: nunca una acción invisible. ✅ `run.action.taken` índice 2,
+  «answer the consent overlay: Reject additional cookies»
+- Con la policy que lo prohíbe, el run no lo cierra y lo dice. ✅ 0 clics de aceptación, y
+  el log dice el motivo y el remedio
+- La opción elegida por defecto es la que menos concede. ✅ eligió *Reject* estando
+  *Accept* antes en el DOM
+
+**Cerrada.** ADR 0018, con dos correcciones que costaron su medición:
+
+1. **La primera versión del ADR afirmaba una detección estructural que no existe.** Decía
+   que `dialog` y `alertdialog` son roles interactivos cuyos botones cargan su contenedor.
+   No lo son — la observación aplana el diálogo y sus botones quedan como cualquier otro.
+   El reconocimiento es **por etiqueta**, y eso es una heurística con límites reales que el
+   ADR ahora enumera en vez de esconder.
+2. **El default no se cumplía.** `leave` gobernaba el crawl y era consejo en todo lo demás:
+   el guard lee `last_page` y sólo el nodo `observe` lo ponía, así que un run explorando lo
+   dejaba ciego — y pulsó «Accept additional cookies» en gov.uk bajo la policy que dice no
+   tocar nada. Los tests unitarios afirmaban que cada pieza era cierta y ninguno la
+   composición. Lo encontró correrlo contra el sitio real.
 
 ### Slice 5 — El run cuenta lo que hizo *(R5)*
 

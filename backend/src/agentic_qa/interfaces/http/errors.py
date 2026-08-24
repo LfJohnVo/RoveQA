@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 
 from agentic_qa.application.errors import (
     AlreadyExistsError,
+    AuthenticationRequiredError,
+    ForbiddenError,
     IdempotencyConflictError,
     NotFoundError,
 )
@@ -50,6 +52,17 @@ def error_response(
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AuthenticationRequiredError)
+    async def _needs_a_token(_: Request, error: AuthenticationRequiredError) -> JSONResponse:
+        # `AUTH_REQUIRED` and `FORBIDDEN` were reserved in the CLI's envelope and exit
+        # code contract long before there was a server to send them (docs/13). Using the
+        # reserved names is what makes the client exit 3 without a line of change.
+        return error_response(status.HTTP_401_UNAUTHORIZED, "AUTH_REQUIRED", str(error))
+
+    @app.exception_handler(ForbiddenError)
+    async def _not_allowed(_: Request, error: ForbiddenError) -> JSONResponse:
+        return error_response(status.HTTP_403_FORBIDDEN, "FORBIDDEN", str(error))
+
     @app.exception_handler(NotFoundError)
     async def _not_found(_: Request, error: NotFoundError) -> JSONResponse:
         return error_response(status.HTTP_404_NOT_FOUND, "NOT_FOUND", str(error))

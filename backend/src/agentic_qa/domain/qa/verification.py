@@ -52,6 +52,13 @@ class FailureKind(StrEnum):
     MODEL = "model"
     """Inference was unavailable or produced nothing usable."""
 
+    SESSION = "session"
+    """The run needed an authenticated session and did not have a usable one.
+
+    Distinct from ENVIRONMENT on purpose: "the site is down" and "your session expired"
+    are read by different people and fixed in different places, and folding the second
+    into the first sends someone to check a server that is fine (ADR 0019)."""
+
     UNKNOWN = "unknown"
 
 
@@ -59,9 +66,32 @@ PRODUCT_DEFECT_KINDS = frozenset({FailureKind.PRODUCT})
 """Only these justify a `failed` verdict. Everything else is inconclusive or blocked."""
 
 BLOCKING_KINDS = frozenset(
-    {FailureKind.ENVIRONMENT, FailureKind.POLICY, FailureKind.AGENT_BUDGET, FailureKind.MODEL}
+    {
+        FailureKind.ENVIRONMENT,
+        FailureKind.POLICY,
+        FailureKind.AGENT_BUDGET,
+        FailureKind.MODEL,
+        FailureKind.SESSION,
+    }
 )
 """The run could not do its job. `blocked` says that honestly."""
+
+
+class CriterionSource(StrEnum):
+    """Who asked for this criterion to be checked.
+
+    A reader seeing a `criteria` array must never confuse "the story asked for this" with
+    "the sweep checks this on every page". Both are genuinely criteria — a thing checked,
+    with an outcome — and both feed the same verdict, so they share a table. What they do
+    not share is provenance, and an id prefix would be a convention where this is a fact
+    (ADR 0017).
+    """
+
+    PLAN = "plan"
+    """An acceptance criterion from the run's test plan."""
+
+    SWEEP = "sweep"
+    """A universal page check, run on every page any run observes."""
 
 
 @dataclass(frozen=True)
@@ -74,6 +104,9 @@ class CriterionResult:
     failure_kind: FailureKind | None = None
     model_derived: bool = False
     """True when a model produced this judgement rather than a deterministic check."""
+
+    source: CriterionSource = CriterionSource.PLAN
+    """Defaulted to `plan`, which is what every existing caller means."""
 
     evidence_refs: tuple[str, ...] = field(default=())
     step_id: str | None = None

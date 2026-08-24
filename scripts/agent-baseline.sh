@@ -13,6 +13,12 @@
 #   after-a-form  a criterion visible only after typing and submitting
 #   unreachable   a goal the application has no path to. It must come back `blocked` with
 #                 a cause and never `failed`, because `failed` accuses the product
+#   sweep-only    no story at all. Every page the run reaches is checked, so "do all the
+#                 reachable pages load" becomes answerable — it used to report
+#                 `inconclusive` no matter what it had learned (ADR 0017)
+#   story-and-sweep  both at once, which nobody designed: a crawl credits a story's
+#                 criteria wherever it meets them, with no planner steering and no model
+#                 call for the walking part
 #
 # The first three run under a **read-only** policy, which is both the safe default and
 # the mode that used to die on its first navigation. Only `after-a-form` gets permission
@@ -66,10 +72,39 @@ say "target: $TARGET"
 say "model endpoint: $model"
 
 say "starting the bundled target application"
-docker compose --profile baseline up -d --wait target-app >/dev/null 2>&1 || {
-  echo "could not start target-app" >&2
-  exit 8
+# Started, then *checked*, and the check is a poll rather than the exit code of the
+# start. Two things went wrong here, both worth naming: `up -d --wait` returns 1 when the
+# service is already running, and it has also left the container merely `Created` — so
+# the status of the command answered a different question from the one being asked, in
+# both directions. What matters is whether the target is healthy now.
+start_target() {
+  docker compose --profile baseline up -d target-app 2>&1 | tail -3 >&2
 }
+
+target_health() {
+  docker compose ps target-app --format '{{.State}} {{.Status}}' 2>/dev/null || true
+}
+
+start_target
+waited=0
+until [ "$waited" -ge 90 ]; do
+  case "$(target_health)" in *healthy*) break ;; esac
+  # A container that never left `Created` is not going to become healthy by waiting.
+  case "$(target_health)" in
+    *created*|"") start_target ;;
+  esac
+  sleep 3
+  waited=$((waited + 3))
+done
+
+case "$(target_health)" in
+  *healthy*) : ;;
+  *)
+    echo "target-app never became healthy: $(target_health)" >&2
+    docker compose logs target-app --tail 10 >&2 || true
+    exit 8
+    ;;
+esac
 
 PROJECT="$(curl -sS -X POST "$API/api/v1/projects" -H 'content-type: application/json' \
   -d '{"name":"agent baseline"}' | jfield project_id)"
@@ -125,13 +160,20 @@ cat > "$workdir/multi-page.json" <<'JSON'
     "verification_hint": "Create record"}]}
 JSON
 
-cat > "$workdir/after-a-form.json" <<'JSON'
+# Written per attempt, further down, because the reference has to be unique: the fixture
+# refuses a duplicate and answers "already exists", so a fixed reference passes on the
+# first run of the day and never again. A real QA run does not assume a clean database
+# either, so unique data is the honest shape rather than a workaround.
+write_after_a_form() {  # $1 = unique reference
+  cat > "$workdir/after-a-form.json" <<JSON
 {"actor": "an operator",
- "goal": "on the records page, create a record with reference BASELINE and name Probe",
+ "goal": "on the records page, create a record with reference $1 and name Probe",
  "acceptance_criteria": [
    {"criterion_id": "ac-created", "description": "the application confirms the record was created",
-    "verification_hint": "Created BASELINE"}]}
+    "verification_hint": "Created $1"}]}
 JSON
+}
+write_after_a_form "BASELINE-seed"
 
 cat > "$workdir/unreachable.json" <<'JSON'
 {"actor": "an analyst",
@@ -146,8 +188,21 @@ declare -A POLICY=(
   [multi-page]="$READ_ONLY"
   [after-a-form]="$INTERACTIVE"
   [unreachable]="$READ_ONLY"
+  [sweep-only]="$READ_ONLY"
+  [story-and-sweep]="$READ_ONLY"
 )
-SHAPES=(one-page multi-page after-a-form unreachable)
+
+# Which shapes walk the site as well as, or instead of, following a plan (ADR 0017).
+declare -A EXPLORES=(
+  [sweep-only]=true
+  [story-and-sweep]=true
+)
+
+# Unquoted on purpose: `BASELINE_SHAPES="after-a-form"` re-runs one shape after a change
+# that only touches it, which is minutes instead of the better part of an hour. The full
+# list is what a baseline means, so it stays the default.
+# shellcheck disable=SC2206
+SHAPES=(${BASELINE_SHAPES:-one-page multi-page after-a-form unreachable sweep-only story-and-sweep})
 
 # --------------------------------------------------------------------------------------
 # Run them.
@@ -156,15 +211,48 @@ results="$workdir/results.jsonl"
 : > "$results"
 
 for shape in "${SHAPES[@]}"; do
-  sid="$(story "$workdir/$shape.json")"
-  pid="$(plan_for "$sid")"
+  # One story per shape, except the one whose data must not repeat and the one that has
+  # no story at all — which is the point of it.
+  pid=""
+  if [ "$shape" = "sweep-only" ]; then
+    :
+  elif [ "$shape" = "story-and-sweep" ]; then
+    sid="$(story "$workdir/one-page.json")"
+    pid="$(plan_for "$sid")"
+  elif [ "$shape" != "after-a-form" ]; then
+    sid="$(story "$workdir/$shape.json")"
+    pid="$(plan_for "$sid")"
+  fi
   for attempt in $(seq 1 "$REPEATS"); do
     say "$shape, attempt $attempt"
     started="$(date +%s)"
+    if [ "$shape" = "after-a-form" ]; then
+      write_after_a_form "BASELINE-$started-$attempt"
+      sid="$(story "$workdir/$shape.json")"
+      pid="$(plan_for "$sid")"
+    fi
+    # Built up rather than templated, because one shape has no plan at all — that is the
+    # point of it — and sending `"plan_id": ""` is not the same request as omitting it.
+    # `if` rather than `[ … ] && …`: under `set -e` a failing test is the statement's own
+    # exit status, and would end the suite.
+    body="{\"project_id\":\"$PROJECT\",\"run_policy_id\":\"${POLICY[$shape]}\""
+    if [ -n "$pid" ]; then
+      body="$body,\"plan_id\":\"$pid\",\"plan_version\":\"1\""
+    fi
+    if [ "${EXPLORES[$shape]:-false}" = true ]; then
+      body="$body,\"explore\":true"
+    fi
+    body="$body}"
+
     run="$(curl -sS -X POST "$API/api/v1/runs" -H 'content-type: application/json' \
       -H "Idempotency-Key: baseline-$shape-$attempt-$started" \
-      -d "{\"project_id\":\"$PROJECT\",\"plan_id\":\"$pid\",\"plan_version\":\"1\",
-           \"run_policy_id\":\"${POLICY[$shape]}\"}" | jfield run_id)"
+      -d "$body" | jfield run_id)"
+
+    if [ -z "$run" ]; then
+      # Said here rather than three lines later as a JSON decode error on an empty body.
+      echo "$shape attempt $attempt: the API did not return a run id for: $body" >&2
+      exit 1
+    fi
 
     deadline=$(( started + WAIT_SECONDS ))
     status=running
@@ -204,6 +292,10 @@ print(json.dumps({
     'verdict': report.get('verdict'),
     'criteria_total': len(criteria),
     'criteria_met': sum(1 for c in criteria if c.get('outcome') == 'met'),
+    # Split by who asked, so a shape that answers a story and a shape that checks pages
+    # cannot be read as the same number (ADR 0017).
+    'story_criteria': sum(1 for c in criteria if c.get('source', 'plan') == 'plan'),
+    'sweep_criteria': sum(1 for c in criteria if c.get('source') == 'sweep'),
     'failure_kinds': sorted({c['failure_kind'] for c in criteria if c.get('failure_kind')}),
     'seconds': $elapsed,
 }))" >> "$results"
@@ -229,6 +321,8 @@ def summarise(rows):
                      for v in sorted({r['verdict'] for r in rows if r['verdict']})},
         'criteria_met': sum(r['criteria_met'] for r in rows),
         'criteria_total': sum(r['criteria_total'] for r in rows),
+        'story_criteria': sum(r.get('story_criteria', 0) for r in rows),
+        'sweep_criteria': sum(r.get('sweep_criteria', 0) for r in rows),
         'failure_kinds': sorted({k for r in rows for k in r['failure_kinds']}),
         'median_seconds': sorted(r['seconds'] for r in rows)[len(rows) // 2],
     }

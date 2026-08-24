@@ -41,15 +41,15 @@ graphify-out/
 
 Commit the portable structural outputs when they remain reasonably sized. Ignore generated visualization/cost/cache files unless the team deliberately chooses otherwise.
 
-## El grafo de hoy (2026-08-20, commit `916faed`)
+## El grafo de hoy (2026-08-21, commit `902882a`)
 
 `graphify update .` sobre el repositorio completo:
 
 | | |
 | --- | --- |
-| Nodos | 6 183 |
-| Edges | 15 946 |
-| Comunidades | 457 |
+| Nodos | 6 648 |
+| Edges | 17 001 |
+| Comunidades | 469 |
 | Ficheros | 532 (~230 k palabras) |
 | Extracción | 79 % EXTRACTED · 21 % INFERRED · 0 % AMBIGUOUS |
 
@@ -63,9 +63,9 @@ Agregando los edges de código (`imports`, `calls`, `uses`, `inherits`, `method`
 `references`) por capa, el backend queda así:
 
 ```
-infrastructure -> domain         718
-application    -> domain         494
-infrastructure -> application    478
+infrastructure -> domain         757
+application    -> domain         515
+infrastructure -> application    501
 interfaces     -> domain         195
 interfaces     -> application    186
 bootstrap      -> infrastructure  50
@@ -84,7 +84,7 @@ El frontend, por especificadores de import:
 ```
 infrastructure -> domain     14
 application    -> domain     11
-views          -> viewmodels  8
+views          -> viewmodels  9
 viewmodels     -> domain      6
 views          -> domain      4
 viewmodels     -> application 3
@@ -116,6 +116,10 @@ Nodos por módulo, backend:
 `application/ports` es el módulo más grande del backend, y eso es exactamente lo que se
 espera de esta arquitectura: la superficie que la aplicación declara necesitar es mayor que
 cualquier implementación concreta de ella.
+
+> Medido de nuevo el 2026-08-21, después de las fases 15 y 16 y del rediseño del frontend a
+> Tailwind: **los dos ceros siguen siendo cero.** El grafo creció en 465 nodos y mil edges
+> sin que ninguno saliera del dominio.
 
 ## Query-before-scan rule
 For architecture, dependency and impact questions, query Graphify first when its graph is fresh. Then open only the source files needed to verify implementation details.

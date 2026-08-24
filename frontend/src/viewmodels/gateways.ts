@@ -12,6 +12,7 @@ import type {
   ProjectGateway,
   RunEventStream,
   RunGateway,
+  SessionGateway,
   StoryGateway,
 } from "@application/ports/gateways";
 import {
@@ -19,6 +20,7 @@ import {
   HttpMemoryGateway,
   HttpProjectGateway,
   HttpRunGateway,
+  HttpSessionGateway,
   HttpStoryGateway,
 } from "@infrastructure/api/client";
 import { WebSocketRunEventStream } from "@infrastructure/realtime/run-events";
@@ -29,6 +31,7 @@ export interface Gateways {
   events: RunEventStream;
   memory: MemoryGateway;
   stories: StoryGateway;
+  sessions: SessionGateway;
 }
 
 /** The composition root: the one place that names a concrete adapter. */
@@ -42,5 +45,6 @@ export function buildGateways(baseUrl = ""): Gateways {
     events: new WebSocketRunEventStream(baseUrl === "" ? {} : { baseUrl }),
     memory: new HttpMemoryGateway(client),
     stories: new HttpStoryGateway(client),
+    sessions: new HttpSessionGateway(client),
   };
 }

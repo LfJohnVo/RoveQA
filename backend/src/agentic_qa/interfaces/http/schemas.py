@@ -12,8 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentic_qa.application.ports.events import RunEvent
 from agentic_qa.application.ports.schedules import RunSchedule
+from agentic_qa.domain.browser.consent import ConsentPolicy
+from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.projects.session import EnvironmentSession
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.runs.run import Run, RunStatus, Verdict
 
@@ -56,6 +59,9 @@ class CreateRunPolicyRequest(BaseModel):
     max_actions: int = Field(ge=1, le=10_000)
     max_model_calls: int = Field(ge=0, le=10_000)
     destructive_actions: bool = False
+    consent: ConsentPolicy = ConsentPolicy.LEAVE
+    """Whether a run may answer a cookie banner. `leave` unless asked (ADR 0018)."""
+
     allow_file_uploads: bool = False
     upload_path_allowlist: list[str] = Field(default_factory=list)
     allow_downloads: bool = False
@@ -74,6 +80,7 @@ class RunPolicyResponse(BaseModel):
     max_actions: int
     max_model_calls: int
     destructive_actions: bool
+    consent: ConsentPolicy
     allow_file_uploads: bool
     upload_path_allowlist: list[str]
     allow_downloads: bool
@@ -90,6 +97,7 @@ class RunPolicyResponse(BaseModel):
             max_actions=policy.max_actions,
             max_model_calls=policy.max_model_calls,
             destructive_actions=policy.destructive_actions,
+            consent=policy.consent,
             allow_file_uploads=policy.allow_file_uploads,
             upload_path_allowlist=list(policy.upload_path_allowlist),
             allow_downloads=policy.allow_downloads,
@@ -186,6 +194,80 @@ class RunResponse(BaseModel):
             environment_id=run.environment_id,
             plan_id=run.plan_id,
             plan_version=run.plan_version,
+        )
+
+
+class CreateEnvironmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=240)
+    default_run_policy_id: str | None = None
+
+
+class EnvironmentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    environment_id: str
+    project_id: str
+    name: str
+    default_run_policy_id: str | None
+
+    @classmethod
+    def from_domain(cls, environment: Environment) -> "EnvironmentResponse":
+        return cls(
+            environment_id=environment.environment_id,
+            project_id=environment.project_id,
+            name=environment.name,
+            default_run_policy_id=environment.default_run_policy_id,
+        )
+
+
+MAX_STORAGE_STATE_CHARS = 512_000
+"""A storage state is cookies and origin storage, which is kilobytes. Half a megabyte
+is generous for the largest real one and small enough that nothing else fits."""
+
+
+class RegisterSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=240)
+    """What a person calls it — "admin", "read-only reviewer". Shown wherever a session
+    is listed, so rotating the right one does not depend on recognising a uuid."""
+
+    storage_state: str = Field(min_length=2, max_length=MAX_STORAGE_STATE_CHARS)
+    """The session as the browser exported it, JSON.
+
+    Bounded like every other body in this API. A storage state is cookies and origin
+    storage — kilobytes — and something megabytes long is a mistake or an attack, either
+    way better refused than sealed.
+    """
+
+    valid_until: datetime | None = None
+    established_by: str = Field(default="", max_length=1000)
+
+
+class EnvironmentSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    environment_id: str
+    label: str
+    established_at: datetime
+    valid_until: datetime | None
+    established_by: str
+    """Deliberately no `storage_state`. A session goes in and never comes back out —
+    a field here would make it readable by anyone who can read the API, which is a wider
+    set than the worker that needs it (ADR 0019)."""
+
+    @classmethod
+    def from_domain(cls, session: EnvironmentSession) -> "EnvironmentSessionResponse":
+        return cls(
+            session_id=session.session_id,
+            environment_id=session.environment_id,
+            label=session.label,
+            established_at=session.established_at,
+            valid_until=session.valid_until,
+            established_by=session.established_by,
         )
 
 

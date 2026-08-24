@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request, WebSocket, status
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
+from agentic_qa.application.ports.sessions import SecretKeyring
 from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
@@ -89,3 +90,20 @@ def get_artifacts(
 
 
 ArtifactRepositoryDep = Annotated[ArtifactRepository, Depends(get_artifacts)]
+
+
+def get_keyring(
+    container: Annotated[Container, Depends(get_container)],
+) -> SecretKeyring:
+    if container.keyring is None:
+        # A deployment with no keyring can still test everything an anonymous browser
+        # reaches. What it cannot do is hold a session, and saying so is better than
+        # storing one nobody can ever open.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="session storage is not configured",
+        )
+    return container.keyring
+
+
+SecretKeyringDep = Annotated[SecretKeyring, Depends(get_keyring)]

@@ -5,13 +5,20 @@ Every implementation of the ports must satisfy these behaviours identically. The
 touching this file.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from agentic_qa.application.errors import AlreadyExistsError
+from agentic_qa.domain.projects.api_token import fingerprint, issue
+from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
+from agentic_qa.domain.projects.session import EnvironmentSession
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion, UserStory
 from agentic_qa.domain.runs.run import Run, RunStatus, Verdict
 from tests.conftest import Repositories
+
+ISSUED = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 def make_story(story_id: str, project_id: str) -> UserStory:
@@ -24,6 +31,29 @@ def make_story(story_id: str, project_id: str) -> UserStory:
             AcceptanceCriterion(criterion_id="ac-1", description="reset email is sent"),
         ),
     )
+
+
+def make_session(session_id: str, *, hour: int = 10) -> EnvironmentSession:
+    return EnvironmentSession(
+        session_id=session_id,
+        environment_id="env-1",
+        label="admin",
+        established_at=datetime(2026, 8, 22, hour, 0, tzinfo=UTC),
+        established_by="captured by hand",
+    )
+
+
+async def seed_environment(
+    repositories: Repositories, environment_id: str = "env-1"
+) -> Environment:
+    """Sessions hang off an environment by foreign key, so one has to exist first."""
+    if await repositories.projects.get("p-1") is None:
+        await seed_project(repositories)
+    environment = Environment(
+        environment_id=environment_id, project_id="p-1", name=f"staging {environment_id}"
+    )
+    await repositories.environments.add(environment)
+    return environment
 
 
 async def seed_project(repositories: Repositories, project_id: str = "p-1") -> Project:
@@ -91,6 +121,175 @@ class TestStoryRepository:
         assert [s.story_id for s in other] == ["s-9"]
 
 
+class TestApiTokenRepository:
+    """What a CI presents, stored the same way by both adapters (ADR 0020).
+
+    The behaviour that matters is the lookup: a request arrives with a string, and the
+    server has to find its row by the hash of that string or refuse. Everything else here
+    exists so a revocation cannot be confused with a typo.
+    """
+
+    async def test_a_token_is_found_by_the_hash_of_its_value(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_project(repositories)
+        minted = issue(token_id="tok-1", project_id="p-1", label="ci", now=ISSUED)
+        await repositories.api_tokens.add(minted.record)
+
+        found = await repositories.api_tokens.find_by_fingerprint(fingerprint(minted.secret))
+
+        assert found is not None
+        assert found.token_id == "tok-1"
+        assert found.covers("p-1")
+
+    async def test_a_value_nobody_issued_finds_nothing(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+
+        assert await repositories.api_tokens.find_by_fingerprint(fingerprint("roveqa_nope")) is None
+
+    async def test_the_value_is_nowhere_in_what_comes_back(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_project(repositories)
+        minted = issue(token_id="tok-1", project_id="p-1", label="ci", now=ISSUED)
+        await repositories.api_tokens.add(minted.record)
+
+        found = await repositories.api_tokens.find_by_fingerprint(fingerprint(minted.secret))
+
+        assert minted.secret not in repr(found)
+
+    async def test_two_tokens_for_one_project_are_independent(
+        self, repositories: Repositories
+    ) -> None:
+        # The property the whole design is for: one pipeline's token is revocable without
+        # touching another's.
+        await seed_project(repositories)
+        first = issue(token_id="tok-1", project_id="p-1", label="actions", now=ISSUED)
+        second = issue(token_id="tok-2", project_id="p-1", label="nightly", now=ISSUED)
+        await repositories.api_tokens.add(first.record)
+        await repositories.api_tokens.add(second.record)
+
+        assert await repositories.api_tokens.revoke("tok-1") is True
+
+        assert await repositories.api_tokens.find_by_fingerprint(fingerprint(first.secret)) is None
+        assert (
+            await repositories.api_tokens.find_by_fingerprint(fingerprint(second.secret))
+        ) is not None
+
+    async def test_revoking_something_that_is_not_there_says_so(
+        self, repositories: Repositories
+    ) -> None:
+        # So a caller can tell a revocation from a typo without a second query.
+        await seed_project(repositories)
+
+        assert await repositories.api_tokens.revoke("never-existed") is False
+
+    async def test_listing_shows_the_records_of_one_project(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_project(repositories)
+        await seed_project(repositories, project_id="p-2")
+        await repositories.api_tokens.add(
+            issue(token_id="mine", project_id="p-1", label="ci", now=ISSUED).record
+        )
+        await repositories.api_tokens.add(
+            issue(token_id="theirs", project_id="p-2", label="ci", now=ISSUED).record
+        )
+
+        listed = await repositories.api_tokens.list_for_project("p-1")
+
+        assert [token.token_id for token in listed] == ["mine"]
+
+    async def test_a_duplicate_id_is_rejected(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+        await repositories.api_tokens.add(
+            issue(token_id="tok-1", project_id="p-1", label="ci", now=ISSUED).record
+        )
+
+        with pytest.raises(AlreadyExistsError):
+            await repositories.api_tokens.add(
+                issue(token_id="tok-1", project_id="p-1", label="again", now=ISSUED).record
+            )
+
+
+class TestSessionRepository:
+    """A borrowed session, stored the same way by both adapters (ADR 0019).
+
+    The behaviour that matters here is *resolution*: a run asks its environment for a
+    session and must get the newest one. Rotating adds a row rather than editing one — an
+    audit trail instead of an overwrite — which only works if "newest" is unambiguous.
+    """
+
+    async def test_the_record_round_trips_without_the_bytes(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-1"), b"sealed-bytes")
+
+        stored = await repositories.sessions.get("sess-1")
+
+        assert stored is not None
+        assert stored.label == "admin"
+        assert stored.environment_id == "env-1"
+
+    async def test_the_sealed_bytes_come_back_exactly(self, repositories: Repositories) -> None:
+        # Byte-for-byte or the ciphertext does not authenticate, and the failure would
+        # look like a revocation rather than like storage.
+        await seed_environment(repositories)
+        sealed = bytes(range(256))
+        await repositories.sessions.add(make_session("sess-1"), sealed)
+
+        assert await repositories.sessions.sealed_state("sess-1") == sealed
+
+    async def test_an_environment_resolves_to_its_newest_session(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-old", hour=9), b"old")
+        await repositories.sessions.add(make_session("sess-new", hour=11), b"new")
+
+        current = await repositories.sessions.current_for_environment("env-1")
+
+        assert current is not None
+        assert current.session_id == "sess-new"
+
+    async def test_rotating_leaves_the_previous_session_on_the_record(
+        self, repositories: Repositories
+    ) -> None:
+        # An overwrite would erase the answer to "what were we using yesterday", which is
+        # the first question after a run starts failing.
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-old", hour=9), b"old")
+        await repositories.sessions.add(make_session("sess-new", hour=11), b"new")
+
+        listed = await repositories.sessions.list_for_environment("env-1")
+
+        assert [session.session_id for session in listed] == ["sess-new", "sess-old"]
+
+    async def test_one_environment_never_sees_another_s_session(
+        self, repositories: Repositories
+    ) -> None:
+        await seed_environment(repositories)
+        await seed_environment(repositories, environment_id="env-2")
+        await repositories.sessions.add(make_session("sess-1"), b"sealed")
+
+        assert await repositories.sessions.current_for_environment("env-2") is None
+
+    async def test_an_environment_with_no_session_says_so(self, repositories: Repositories) -> None:
+        # A run may legitimately proceed anonymously, so this is an answer and not a fault.
+        await seed_environment(repositories)
+
+        assert await repositories.sessions.current_for_environment("env-1") is None
+        assert await repositories.sessions.list_for_environment("env-1") == []
+
+    async def test_duplicate_id_is_rejected(self, repositories: Repositories) -> None:
+        await seed_environment(repositories)
+        await repositories.sessions.add(make_session("sess-1"), b"sealed")
+
+        with pytest.raises(AlreadyExistsError):
+            await repositories.sessions.add(make_session("sess-1"), b"other")
+
+
 class TestRunRepository:
     async def test_round_trip_preserves_status_and_verdict(
         self, repositories: Repositories
@@ -121,3 +320,41 @@ class TestRunRepository:
         await repositories.runs.add(Run(run_id="r-1", project_id="p-1"))
         with pytest.raises(AlreadyExistsError):
             await repositories.runs.add(Run(run_id="r-1", project_id="p-1"))
+
+    async def test_listing_a_project_returns_its_own_runs_newest_first(
+        self, repositories: Repositories
+    ) -> None:
+        """Newest first because that is the order a person looks.
+
+        The run you want is almost always the one that just finished, and a list that
+        opens on the oldest makes the newest the hardest thing to reach.
+
+        What this proves is the *total* order, not the timestamp: `now()` is fixed for a
+        transaction, so three runs added here share one `created_at` and `run_id DESC`
+        decides. That tiebreak is the half worth pinning anyway — in real use each run
+        arrives in its own transaction and `created_at` separates them, while two runs
+        created in the same millisecond are exactly the case that would otherwise come
+        back in whatever order the query plan chose.
+        """
+        await seed_project(repositories)
+        await seed_project(repositories, project_id="p-2")
+        for index in range(3):
+            await repositories.runs.add(Run(run_id=f"r-{index}", project_id="p-1"))
+        await repositories.runs.add(Run(run_id="other", project_id="p-2"))
+
+        listed = await repositories.runs.list_for_project("p-1", limit=50)
+
+        assert [run.run_id for run in listed] == ["r-2", "r-1", "r-0"]
+
+    async def test_the_listing_respects_its_limit(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+        for index in range(5):
+            await repositories.runs.add(Run(run_id=f"r-{index}", project_id="p-1"))
+
+        listed = await repositories.runs.list_for_project("p-1", limit=2)
+
+        assert len(listed) == 2
+
+    async def test_a_project_with_no_runs_lists_nothing(self, repositories: Repositories) -> None:
+        await seed_project(repositories)
+        assert await repositories.runs.list_for_project("p-1", limit=50) == []

@@ -28,7 +28,10 @@
     "verdict": { "type": "string", "enum": ["failed", "blocked", "inconclusive", "cancelled"] },
     "failure_kind": {
       "type": ["string", "null"],
-      "enum": ["product", "plan", "environment", "policy", "agent_budget", "model", "unknown", null]
+      "enum": [
+        "product", "plan", "environment", "policy",
+        "agent_budget", "model", "session", "unknown", null
+      ]
     },
     "failed_step_index": { "type": ["integer", "null"], "minimum": 0 },
     "failed_step_id": {

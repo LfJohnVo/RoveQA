@@ -5,6 +5,7 @@ leak into the domain.
 """
 
 from agentic_qa.application.ports.knowledge import GraphSyncRecord, GraphSyncState
+from agentic_qa.domain.browser.consent import ConsentPolicy
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.knowledge.experience import (
     CandidateKind,
@@ -29,7 +30,12 @@ from agentic_qa.domain.qa.test_plan import (
     TestPlan,
 )
 from agentic_qa.domain.qa.user_story import AcceptanceCriterion, UserStory
-from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionResult, FailureKind
+from agentic_qa.domain.qa.verification import (
+    CriterionOutcome,
+    CriterionResult,
+    CriterionSource,
+    FailureKind,
+)
 from agentic_qa.domain.runs.run import Run
 from agentic_qa.infrastructure.persistence.postgres.models import (
     AcceptanceCriterionModel,
@@ -140,6 +146,7 @@ def policy_to_domain(model: RunPolicyModel) -> RunPolicy:
         max_actions=model.max_actions,
         max_model_calls=model.max_model_calls,
         destructive_actions=model.destructive_actions,
+        consent=ConsentPolicy(model.consent),
         allow_file_uploads=model.allow_file_uploads,
         upload_path_allowlist=tuple(model.upload_path_allowlist),
         allow_downloads=model.allow_downloads,
@@ -155,6 +162,7 @@ def policy_to_model(policy: RunPolicy) -> RunPolicyModel:
         allowed_origins=list(policy.allowed_origins),
         upload_path_allowlist=list(policy.upload_path_allowlist),
         destructive_actions=policy.destructive_actions,
+        consent=policy.consent.value,
         allow_file_uploads=policy.allow_file_uploads,
         allow_downloads=policy.allow_downloads,
         synthetic_data_allowed=policy.synthetic_data_allowed,
@@ -285,6 +293,7 @@ def criterion_result_to_domain(model: CriterionResultModel) -> CriterionResult:
         model_derived=model.model_derived,
         evidence_refs=tuple(model.evidence_refs),
         step_id=model.step_id,
+        source=CriterionSource(model.source),
         model_invocation_id=model.model_invocation_id,
         model_name=model.model_name,
         prompt_version=model.prompt_version,
@@ -297,6 +306,7 @@ def criterion_result_to_model(run_id: str, result: CriterionResult) -> Criterion
         criterion_id=result.criterion_id,
         step_id=result.step_id,
         outcome=result.outcome.value,
+        source=result.source.value,
         failure_kind=result.failure_kind.value if result.failure_kind else None,
         observation=result.observation,
         model_derived=result.model_derived,

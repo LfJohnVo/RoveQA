@@ -12,6 +12,7 @@ from agentic_qa.domain.knowledge.redaction import (
     REDACTED,
     UnsafeKnowledgeError,
     redact_payload,
+    redact_secrets,
 )
 
 
@@ -95,3 +96,44 @@ def test_clean_content_is_left_exactly_as_it_was() -> None:
     result = redact_payload(payload)
     assert result.payload == payload
     assert not result.changed
+
+
+class TestASecretNamedInProse:
+    """How a credential actually escapes through a console line.
+
+    The patterns covered query strings, URL userinfo, `Bearer` headers and JWTs — every
+    shape a *machine* produces. A debug line saying "auth failed for token sk-live-…" is
+    the shape a *person* produces, and it went straight through. Nothing noticed while
+    console errors were collected and dropped; the moment they reached the run report,
+    the redaction that had always been written had to become true.
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "auth failed for token sk-live-9f2b41c7d8e6a5b3",
+            "api_key: AKIAIOSFODNN7EXAMPLE",
+            "using credential 8f3a91bc22de4177",
+            "ghp_abcdefghijklmnop1234567",
+            "xoxb-1234567890-abcdefghij",
+        ],
+    )
+    def test_it_is_redacted(self, message: str) -> None:
+        assert REDACTED in redact_secrets(message)
+        assert "sk-live-9f2b41c7d8e6a5b3" not in redact_secrets(message)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # Each of these contains a word from the secret vocabulary and no secret.
+            # A filter that eats them makes every console error less useful in order to
+            # protect nothing — and an over-redacted report is one people stop reading.
+            "session expired, please sign in again",
+            "authorization required",
+            "Uncaught TypeError: cannot read property 'map' of undefined",
+            "Failed to load resource: net::ERR_NAME_NOT_RESOLVED",
+            "the password is hunter2",
+        ],
+    )
+    def test_ordinary_prose_survives_intact(self, message: str) -> None:
+        assert redact_secrets(message) == message

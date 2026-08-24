@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Self
 
 from tests.fakes.repositories import (
+    InMemoryApiTokenRepository,
     InMemoryArtifactIndex,
     InMemoryCriterionResultRepository,
     InMemoryEnvironmentRepository,
@@ -17,11 +18,13 @@ from tests.fakes.repositories import (
     InMemoryIdempotencyRepository,
     InMemoryKnowledgeRepository,
     InMemoryMemoryFeedbackRepository,
+    InMemoryObservedFailureRepository,
     InMemoryProjectRepository,
     InMemoryRecoveryPointRepository,
     InMemoryRunEventLog,
     InMemoryRunPolicyRepository,
     InMemoryRunRepository,
+    InMemorySessionRepository,
     InMemoryStateMapRepository,
     InMemoryStore,
     InMemoryStoryRepository,
@@ -69,12 +72,24 @@ class InMemoryUnitOfWork:
         return InMemoryEnvironmentRepository(self._require_active())
 
     @property
+    def sessions(self) -> InMemorySessionRepository:
+        return InMemorySessionRepository(self._require_active())
+
+    @property
+    def api_tokens(self) -> InMemoryApiTokenRepository:
+        return InMemoryApiTokenRepository(self._require_active())
+
+    @property
     def artifacts(self) -> InMemoryArtifactIndex:
         return InMemoryArtifactIndex(self._require_active())
 
     @property
     def criterion_results(self) -> InMemoryCriterionResultRepository:
         return InMemoryCriterionResultRepository(self._require_active())
+
+    @property
+    def observed_failures(self) -> InMemoryObservedFailureRepository:
+        return InMemoryObservedFailureRepository(self._require_active())
 
     @property
     def failure_clusters(self) -> InMemoryFailureClusterRepository:

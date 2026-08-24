@@ -53,14 +53,44 @@ function relative(path: string): string {
   return path.slice(SRC.length + 1).replaceAll("\\", "/");
 }
 
+/** Every module this file imports, by specifier. */
+function importsOf(text: string): string[] {
+  const found: string[] = [];
+  const pattern = /(?:from|import)\s+["']([^"']+)["']/g;
+  for (const match of text.matchAll(pattern)) {
+    if (match[1] !== undefined) found.push(match[1]);
+  }
+  return found;
+}
+
+/**
+ * A needle naming a module is checked against the *imports*; one naming a call is
+ * checked against the text.
+ *
+ * The distinction is not pedantry. `text.includes("react")` matched the word "reached"
+ * in a domain file's comment and failed the build — so the guard's real cost was that
+ * people would learn to reword prose around it, which is how a guard stops being
+ * believed. `fetch(` and `WebSocket` stay textual because they are not imports; there is
+ * nothing else they could be.
+ */
+function isModuleNeedle(needle: string): boolean {
+  return !needle.includes("(") && needle !== "WebSocket";
+}
+
 function offendersIn(layer: string, forbidden: readonly string[]): string[] {
   const offenders: string[] = [];
   for (const file of sourceFiles(join(SRC, layer))) {
     const name = relative(file);
     if (COMPOSITION_ROOT.includes(name)) continue;
     const text = readFileSync(file, "utf8");
+    const specifiers = importsOf(text);
     for (const needle of forbidden) {
-      if (text.includes(needle)) offenders.push(`${name} → ${needle}`);
+      const offends = isModuleNeedle(needle)
+        ? specifiers.some(
+            (specifier) => specifier === needle || specifier.startsWith(needle),
+          )
+        : text.includes(needle);
+      if (offends) offenders.push(`${name} → ${needle}`);
     }
   }
   return offenders;
@@ -86,10 +116,25 @@ describe("layer boundaries", () => {
   });
 
   it("catches a planted violation", () => {
-    // A guard that cannot fail proves nothing.
-    const planted = "views/leaky.tsx";
-    const text = 'const data = await fetch("/api/v1/runs");';
-    expect(FORBIDDEN.views?.some((needle) => text.includes(needle))).toBe(true);
-    expect(planted).toContain("views/");
+    // A guard that cannot fail proves nothing. Both kinds of needle are planted, because
+    // the two are now checked differently.
+    const fetching = 'const data = await fetch("/api/v1/runs");';
+    expect(FORBIDDEN.views?.some((needle) => fetching.includes(needle))).toBe(true);
+
+    const importing = 'import { HttpRunGateway } from "@infrastructure/api/client";';
+    expect(importsOf(importing)).toContain("@infrastructure/api/client");
+    expect(
+      FORBIDDEN.views
+        ?.filter(isModuleNeedle)
+        .some((needle) => importsOf(importing).some((s) => s.startsWith(needle))),
+    ).toBe(true);
+  });
+
+  it("does not fire on prose that merely contains a module name", () => {
+    // "reached" contains "react". A domain file's comment failed the build on that, and a
+    // guard people reword their comments around is one they will eventually route around.
+    const prose = "/** What a traversal reached, and the reaction to it. */";
+
+    expect(importsOf(prose)).toEqual([]);
   });
 });

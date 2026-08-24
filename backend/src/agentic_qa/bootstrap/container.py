@@ -18,6 +18,7 @@ from agentic_qa.application.ports.deep_analysis import DeepAnalyst
 from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.application.ports.graph import GraphMemoryPort
 from agentic_qa.application.ports.schedules import ScheduleGateway
+from agentic_qa.application.ports.sessions import SecretKeyring
 from agentic_qa.application.ports.streams import RunEventPublisher
 from agentic_qa.application.ports.unit_of_work import UnitOfWork
 from agentic_qa.application.ports.workflows import WorkflowGateway
@@ -26,6 +27,7 @@ from agentic_qa.infrastructure.artifacts.filesystem.repository import (
     FilesystemArtifactRepository,
 )
 from agentic_qa.infrastructure.cache.redis.streams import RedisRunEventPublisher
+from agentic_qa.infrastructure.keyring.file_keyring import FileSecretKeyring
 from agentic_qa.infrastructure.knowledge.graphiti.factory import build_graph_projection
 from agentic_qa.infrastructure.persistence.postgres.engine import (
     create_engine,
@@ -50,8 +52,19 @@ class Container:
     """Realtime fan-out. Absent means clients fall back to durable REST catch-up."""
 
     episodes: EpisodeRunner | None = None
-    """Absent when no model endpoint is configured; the worker then says so honestly
-    instead of pretending to run an agent."""
+    """Absent on a process that is not a worker — the API never plans or drives a browser.
+
+    Present on a worker whether or not a model is configured, because an exploring run
+    calls no model at all. Absence used to mean "no model endpoint", which made a site
+    sweep need a GPU in order not to use one."""
+
+    keyring: SecretKeyring | None = None
+    """Where the keys for stored sessions live, which is not the database.
+
+    Absent means no run can borrow a session — and that is a working configuration, not
+    a broken one: everything an anonymous browser can reach still works. A run that
+    *names* an environment with a session and finds no keyring is the case that must say
+    so rather than proceeding logged out (ADR 0019)."""
 
     redis: Redis | None = None
     """Owned connection to Redis, closed with the container."""
@@ -96,6 +109,9 @@ def build_container(settings: Settings) -> Container:
         unit_of_work=lambda: PostgresUnitOfWork(session_factory),
         events=RedisRunEventPublisher(redis),
         artifacts=FilesystemArtifactRepository(Path(settings.artifact_root)),
+        # Present in both processes: the API registers and revokes sessions, the
+        # worker opens them. Neither can do the other's half.
+        keyring=FileSecretKeyring(Path(settings.keyring_root)),
         redis=redis,
         engine=engine,
         # Optional by design: `None` here means memory is served from PostgreSQL
@@ -124,28 +140,28 @@ def with_agent_runtime(container: Container, settings: Settings) -> Container:
         build_episode_runner,
         build_model_router,
     )
-    from agentic_qa.domain.inference.tasks import ModelCapability
 
     router = build_model_router(settings)
-    if router is None:
-        return container
     if container.redis is None:
         raise RuntimeError("the agent runtime needs Redis to bound model concurrency")
 
     http = httpx.AsyncClient()
-    # Each capability wires what it can serve, independently. A worker configured only
-    # for deep analysis gets no episode runner and says so, rather than accepting
-    # episodes it would fail at the first planning call.
-    runner = (
-        build_episode_runner(
-            settings,
-            router=router,
-            redis=container.redis,
-            http=http,
-            artifacts=container.artifacts,
-        )
-        if router.serves(ModelCapability.FAST)
-        else None
+    # Built whether or not a model is configured, because **an exploring run calls no
+    # model at all** — the frontier decides from what the page offers. Gating the runner
+    # on a fast endpoint meant a site sweep, whose whole point is zero inference, needed
+    # a GPU to do nothing with; a run against a blog came back `inconclusive` with the
+    # only explanation in a worker log line.
+    #
+    # A *planned* run on this worker now fails where it should: the first planning call
+    # raises `NoEndpointConfiguredError`, which the gateway turns into a decision with a
+    # failure, and the episode ends `blocked` with kind `model` and the reason attached.
+    # That is strictly better than executing no episode and reporting nothing.
+    runner = build_episode_runner(
+        settings,
+        router=router,
+        redis=container.redis,
+        http=http,
+        artifacts=container.artifacts,
     )
     return replace(
         container,

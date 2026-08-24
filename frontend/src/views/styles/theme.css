@@ -1,0 +1,172 @@
+/*
+ * The Windmill Dashboard design system, ported to Tailwind 4.
+ *
+ * Windmill (Estevan Maito, MIT) ships as a Tailwind 1 template with a JS config. Tailwind
+ * 4 is configured from CSS, so the palette, the font and the custom utilities are declared
+ * here rather than in `tailwind.config.js`. The values are Windmill's, unchanged — the
+ * point of adopting a design system is that its numbers travel with it.
+ *
+ * Two things Tailwind 4 does not give for free and Windmill depends on:
+ *
+ *   - `.theme-dark` on <html> as the dark switch, rather than the OS preference alone.
+ *     Windmill toggles it from a button and remembers the choice, so the variant has to
+ *     follow a class.
+ *   - `shadow-outline-<colour>`, the focus ring. In Windmill it comes from a plugin that
+ *     derives a 45%-alpha ring from each colour's 300 shade; here the three that are
+ *     actually used are written out.
+ *
+ * Semantic colour is deliberately *not* remapped onto Windmill's names. A verdict is the
+ * reason someone opened this screen, and `--color-pass` says what it means where
+ * `green-500` does not.
+ */
+
+@import "tailwindcss";
+
+/* Windmill styles inputs with `form-input`/`form-select`/`form-checkbox`, from what was
+   `@tailwindcss/custom-forms` in Tailwind 1. The class strategy is the same contract in
+   the modern plugin, so the template's markup works unchanged — and, unlike the base
+   strategy, it leaves any input that does not ask for it alone. */
+@plugin "@tailwindcss/forms" {
+  strategy: class;
+}
+
+@custom-variant dark (&:where(.theme-dark, .theme-dark *));
+
+@theme {
+  /* Windmill's own greys: cooler and darker at the top end than Tailwind's default. */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f4f5f7;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d5d6d7;
+  --color-gray-400: #9e9e9e;
+  --color-gray-500: #707275;
+  --color-gray-600: #4c4f52;
+  --color-gray-700: #24262d;
+  --color-gray-800: #1a1c23;
+  --color-gray-900: #121317;
+
+  --color-purple-50: #f6f5ff;
+  --color-purple-100: #edebfe;
+  --color-purple-200: #dcd7fe;
+  --color-purple-300: #cabffd;
+  --color-purple-400: #ac94fa;
+  --color-purple-500: #9061f9;
+  --color-purple-600: #7e3af2;
+  --color-purple-700: #6c2bd9;
+  --color-purple-800: #5521b5;
+  --color-purple-900: #4a1d96;
+
+  --color-green-50: #f3faf7;
+  --color-green-100: #def7ec;
+  --color-green-200: #bcf0da;
+  --color-green-300: #84e1bc;
+  --color-green-400: #31c48d;
+  --color-green-500: #0e9f6e;
+  --color-green-600: #057a55;
+  --color-green-700: #046c4e;
+  --color-green-800: #03543f;
+  --color-green-900: #014737;
+
+  --color-red-50: #fdf2f2;
+  --color-red-100: #fde8e8;
+  --color-red-200: #fbd5d5;
+  --color-red-300: #f8b4b4;
+  --color-red-400: #f98080;
+  --color-red-500: #f05252;
+  --color-red-600: #e02424;
+  --color-red-700: #c81e1e;
+  --color-red-800: #9b1c1c;
+  --color-red-900: #771d1d;
+
+  --color-yellow-50: #fdfdea;
+  --color-yellow-100: #fdf6b2;
+  --color-yellow-200: #fce96a;
+  --color-yellow-300: #faca15;
+  --color-yellow-400: #e3a008;
+  --color-yellow-500: #c27803;
+  --color-yellow-600: #9f580a;
+  --color-yellow-700: #8e4b10;
+  --color-yellow-800: #723b13;
+  --color-yellow-900: #633112;
+
+  --color-blue-50: #ebf5ff;
+  --color-blue-100: #e1effe;
+  --color-blue-200: #c3ddfd;
+  --color-blue-300: #a4cafe;
+  --color-blue-400: #76a9fa;
+  --color-blue-500: #3f83f8;
+  --color-blue-600: #1c64f2;
+  --color-blue-700: #1a56db;
+  --color-blue-800: #1e429f;
+  --color-blue-900: #233876;
+
+  --color-teal-50: #edfafa;
+  --color-teal-100: #d5f5f6;
+  --color-teal-500: #0694a2;
+  --color-teal-600: #047481;
+
+  --color-orange-100: #feecdc;
+  --color-orange-500: #ff5a1f;
+  --color-orange-600: #d03801;
+  --color-orange-700: #b43403;
+
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+/*
+ * Verdicts.
+ *
+ * These are not decoration and they are not Windmill's: a run's answer is the reason the
+ * screen exists. Named for what they mean so a component cannot quietly use "green" for
+ * something that is not a pass — and `no-answer` deliberately reads as caution rather than
+ * failure, because saying the product is broken when the agent was merely unsure is the one
+ * mistake that makes every later report suspect.
+ */
+@theme {
+  --color-pass: var(--color-green-500);
+  --color-pass-soft: var(--color-green-100);
+  --color-fail: var(--color-red-500);
+  --color-fail-soft: var(--color-red-100);
+  --color-no-answer: var(--color-yellow-500);
+  --color-no-answer-soft: var(--color-yellow-100);
+  --color-stopped: var(--color-gray-500);
+  --color-stopped-soft: var(--color-gray-100);
+}
+
+/*
+ * Windmill's focus ring: a 3px halo at 45% alpha, derived from each colour's 300 shade.
+ * Only the shades the interface actually focuses are written out.
+ */
+@utility shadow-outline-purple {
+  box-shadow: 0 0 0 3px rgb(202 191 253 / 0.45);
+}
+@utility shadow-outline-gray {
+  box-shadow: 0 0 0 3px rgb(213 214 215 / 0.45);
+}
+@utility shadow-outline-red {
+  box-shadow: 0 0 0 3px rgb(248 180 180 / 0.45);
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    /* Windmill's own base: the shell paints the surfaces, but a browser that has not
+       loaded the shell yet should still be on the right ground. */
+    background-color: var(--color-gray-50);
+  }
+
+  html.theme-dark {
+    background-color: var(--color-gray-900);
+  }
+
+  /* Every interactive element gets a visible focus state. The template relies on
+     `focus:outline-none focus:shadow-outline-*` per component; this is the floor for
+     anything that misses one, so keyboard focus is never invisible. */
+  :focus-visible {
+    outline: 2px solid var(--color-purple-600);
+    outline-offset: 2px;
+  }
+}

@@ -54,3 +54,12 @@ class RunRepository(Protocol):
     async def save(self, run: Run) -> None:
         """Persist changes to an existing run. Raises NotFoundError when it is gone."""
         ...
+
+    async def list_for_project(self, project_id: str, *, limit: int) -> list[Run]:
+        """One project's runs, newest first, capped at `limit`.
+
+        Newest first because that is the order a person looks: the run you want is
+        almost always the one that just finished. Bounded because a project accumulates
+        runs for as long as it is tested (docs/11).
+        """
+        ...

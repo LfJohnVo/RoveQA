@@ -8,7 +8,7 @@ LangGraph, and which checkpointer or browser it drives, is entirely behind here.
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from agentic_qa.application.ports.browser import PageProblems
+from agentic_qa.application.ports.browser import BrowserSetup, PageProblems
 from agentic_qa.domain.browser.evidence import EvidenceRef
 from agentic_qa.domain.exploration.comparison import StateMap
 from agentic_qa.domain.exploration.frontier import ExplorationBudget, ExplorationReport
@@ -39,6 +39,16 @@ class EpisodeRequest:
     and the graph stays free of it so a replay cannot depend on what the database
     happened to contain at replay time (ADR 0009)."""
 
+    setup: BrowserSetup = field(default_factory=BrowserSetup)
+    """The session and secrets this episode may use.
+
+    Safe here and nowhere upstream. `EpisodeRequest` is built inside the activity and
+    handed straight to the runner, so it never reaches Temporal's history — unlike
+    `RunEpisodeParams`, which is an activity argument and is written there verbatim. A
+    storage state in that one would be a session cookie in a durable store nobody
+    redacts (ADR 0019).
+    """
+
     exploration: ExplorationBudget | None = None
     """Present when this episode explores instead of following a plan.
 
@@ -46,6 +56,28 @@ class EpisodeRequest:
     limit is visible at the boundary instead of being derived somewhere inside an
     adapter. Never wider than the run's policy — `ExplorationBudget.under` is how one
     is built."""
+
+
+@dataclass(frozen=True)
+class ActionRecord:
+    """One thing the agent asked the browser to do, and what came back.
+
+    Enough to reconstruct a run and no more. `detail` carries the browser's own first line
+    on failure -- a locator timeout, a policy refusal -- because that sentence is usually
+    the whole diagnosis.
+
+    No value field, deliberately. A `fill` carries what was typed, and what was typed is
+    the one thing in an action that can be a credential. The intent says what the step was
+    for; the value is not needed to understand the run and cannot be published safely.
+    """
+
+    index: int
+    action: str
+    intent: str
+    succeeded: bool
+    url: str | None = None
+    http_status: int | None = None
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -67,6 +99,13 @@ class EpisodeResult:
 
     evidence: tuple[EvidenceRef, ...] = ()
     """Artifacts captured while the browser was still open. The caller indexes them."""
+
+    actions: tuple[ActionRecord, ...] = ()
+    """Every action the episode sent to the browser, in order.
+
+    Bounded by construction: the RunPolicy caps how many actions a run may take, so this
+    cannot grow past that cap however long the run lasts.
+    """
 
     page_problems: PageProblems = field(default_factory=PageProblems)
     """Console errors and failed requests seen during the episode.

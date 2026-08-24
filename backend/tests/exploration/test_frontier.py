@@ -448,3 +448,157 @@ class TestResumingAnExploration:
 
         assert empty.states_discovered == 0
         assert empty.actions_taken == 0
+
+
+HOST = "https://app.test"
+
+
+def linked(path: str, *targets: str) -> PageState:
+    """A page whose links say where they go, the way a real one does."""
+    return PageState(
+        url=f"{HOST}{path}",
+        affordances=tuple(
+            Affordance(role="link", name=target.strip("/") or "home", url=f"{HOST}{target}")
+            for target in targets
+        ),
+    )
+
+
+def walk(site: dict[str, PageState], budget: ExplorationBudget) -> ExplorationReport:
+    """The driver loop, following urls rather than names."""
+    frontier = Frontier(budget)
+    frontier.record(site["/"], depth=0)
+    elapsed = 0.0
+    while True:
+        reason = stop_reason(budget, frontier.progress(elapsed_seconds=elapsed))
+        if reason is not None:
+            return frontier.report(reason)
+        entry = frontier.take()
+        if entry is None:
+            return frontier.report(StopReason.FRONTIER_EXHAUSTED)
+        elapsed += 1.0
+        destination = site.get((entry.affordance.url or "").removeprefix(HOST))
+        if destination is not None:
+            frontier.record(destination, depth=entry.depth)
+
+
+class TestASharedNavigationBarDoesNotCostTheBudget:
+    """Measured against a real corporate site, and the numbers were stark.
+
+    26 navigations produced 8 unique pages: `/en/` visited eight times, `about.html`
+    seven. The crawl stopped on `max_actions` at depth 1 with 109 entries still queued,
+    having never reached a single Spanish sub-page.
+
+    The cause is that an affordance is deduplicated per *state*, so one navigation bar
+    repeated across eight pages queues each of its links eight times. Every site has a
+    navigation bar, so this was every crawl.
+    """
+
+    def site_with_shared_nav(self, count: int) -> dict[str, PageState]:
+        paths = [f"/p{index}" for index in range(count)]
+        nav = ["/", *paths]
+        return {path: linked(path, *nav) for path in nav}
+
+    def test_a_page_is_visited_once_however_many_pages_link_to_it(self) -> None:
+        report = walk(self.site_with_shared_nav(6), GENEROUS)
+
+        assert report.states_discovered == 7
+        # One navigation per page, and the entry page needed none.
+        assert report.actions_taken == 6
+
+    def test_what_was_dropped_is_reported_rather_than_silent(self) -> None:
+        # A frontier that drained without spending actions would otherwise look like a
+        # crawl that gave up. Saying how many were already-known destinations is the
+        # difference between "finished" and "stopped".
+        report = walk(self.site_with_shared_nav(6), GENEROUS)
+
+        assert report.revisits_skipped > 0
+
+    def test_the_budget_now_buys_depth_instead_of_repetition(self) -> None:
+        # The real failure was not slowness, it was reach: the run spent its whole
+        # allowance at depth 1 and never saw what was below.
+        deep = {
+            "/": linked("/", "/a"),
+            "/a": linked("/a", "/", "/b"),
+            "/b": linked("/b", "/", "/a", "/c"),
+            "/c": linked("/c", "/", "/a", "/b"),
+        }
+        tight = ExplorationBudget(
+            max_actions=5, max_states=100, max_depth=10, max_duration_seconds=3600
+        )
+
+        report = walk(deep, tight)
+
+        assert report.states_discovered == 4
+        assert report.max_depth_reached == 3
+
+    def test_a_button_is_still_taken_because_nobody_knows_where_it_goes(self) -> None:
+        # The skip is only safe for links that say their destination. A control without
+        # one could lead anywhere, and assuming otherwise would stop mapping the parts
+        # of an application that are not plain links.
+        site = {
+            "/": PageState(
+                url=f"{HOST}/",
+                affordances=(
+                    Affordance(role="link", name="home", url=f"{HOST}/"),
+                    Affordance(role="button", name="Open the drawer"),
+                ),
+            )
+        }
+
+        report = walk(site, GENEROUS)
+
+        # The self-link is skipped, the button is not.
+        assert report.actions_taken == 1
+        assert report.revisits_skipped == 1
+
+    def test_a_query_string_is_never_assumed_to_be_a_page_already_seen(self) -> None:
+        # `/records?status=open` and `/records` are different pages to act on, and a
+        # recorded state keeps only scheme, host and path — so the two cannot be told
+        # apart once stored. The safe reading of that ambiguity is to go and look.
+        site = {
+            "/": PageState(
+                url=f"{HOST}/",
+                affordances=(
+                    Affordance(role="link", name="records", url=f"{HOST}/records"),
+                    Affordance(role="link", name="open", url=f"{HOST}/records?status=open"),
+                ),
+            ),
+            "/records": linked("/records"),
+        }
+
+        report = walk(site, GENEROUS)
+
+        assert report.actions_taken == 2
+        assert report.revisits_skipped == 0
+
+    def test_a_fragment_is_the_same_page(self) -> None:
+        # `#section` scrolls; it does not navigate. Spending an action on it buys a
+        # second copy of a page already mapped.
+        site = {
+            "/": PageState(
+                url=f"{HOST}/",
+                affordances=(
+                    Affordance(role="link", name="top", url=f"{HOST}/#top"),
+                    Affordance(role="link", name="next", url=f"{HOST}/next"),
+                ),
+            ),
+            "/next": linked("/next"),
+        }
+
+        report = walk(site, GENEROUS)
+
+        assert report.actions_taken == 1
+        assert report.revisits_skipped == 1
+
+    def test_a_resumed_crawl_still_knows_what_it_had_mapped(self) -> None:
+        # `_visited_urls` is derived from the restored states rather than kept beside
+        # them, so there is nothing extra for `from_snapshot` to forget.
+        frontier = Frontier(GENEROUS)
+        frontier.record(linked("/", "/", "/a"), depth=0)
+        frontier.take()
+
+        resumed = Frontier.from_snapshot(GENEROUS, frontier.snapshot())
+
+        assert resumed.take() is None, "the only entry left points at a page already mapped"
+        assert resumed.report(StopReason.FRONTIER_EXHAUSTED).revisits_skipped >= 1

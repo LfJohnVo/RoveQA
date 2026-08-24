@@ -23,7 +23,9 @@ from agentic_qa.application.ports.browser import BrowserGateway
 from agentic_qa.application.ports.models import JudgementRequest, ModelGateway
 from agentic_qa.application.services.guarded_browser import ActionDeniedError
 from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
+from agentic_qa.domain.browser.authentication import looks_like_sign_in
 from agentic_qa.domain.qa.test_plan import PlanStep
+from agentic_qa.domain.qa.text_match import TextMatch, describe_match, find_text
 from agentic_qa.domain.qa.verification import (
     CriterionOutcome,
     CriterionResult,
@@ -61,14 +63,8 @@ async def verify_criteria(
     seen = observed_earlier or {}
 
     if goal_failure is not None:
-        # A criterion this run *watched* come true is not an open question, even though
-        # the run then failed at something else. Reporting it as unreached threw away a
-        # deterministic observation the run had already made.
-        return tuple(
-            _observed(step, _criterion_of(step), seen[_criterion_of(step)])
-            if _criterion_of(step) in seen
-            else _unreached(step, goal_failure, goal_failure_kind)
-            for step in assertions
+        return criteria_never_reached(
+            assertions, reason=goal_failure, kind=goal_failure_kind, observed_earlier=seen
         )
 
     hints = hints or {}
@@ -88,6 +84,34 @@ async def verify_criteria(
         else:
             results.append(await _judge_semantically(step, criterion_id, browser, model))
     return tuple(results)
+
+
+def criteria_never_reached(
+    assertions: tuple[PlanStep, ...],
+    *,
+    reason: str,
+    kind: FailureKind | None = None,
+    observed_earlier: Mapping[str, str] | None = None,
+) -> tuple[CriterionResult, ...]:
+    """One result per assertion for a run that could not do its job.
+
+    Public and browser-free on purpose. The same answer is needed in two places: inside
+    the graph, when the agent gave up partway, and inside the activity, when a run could
+    not start at all — a session that expired, for instance, which is decided before any
+    browser exists. Writing it twice is how the two drift, and the way they drift is one
+    of them forgetting to credit what the run already saw.
+
+    A criterion the run *watched* come true is not an open question, even though the run
+    then failed at something else. Reporting it as unreached would throw away a
+    deterministic observation already made.
+    """
+    seen = observed_earlier or {}
+    return tuple(
+        _observed(step, _criterion_of(step), seen[_criterion_of(step)])
+        if _criterion_of(step) in seen
+        else _unreached(step, reason, kind)
+        for step in assertions
+    )
 
 
 def _observed(step: PlanStep, criterion_id: str, where: str) -> CriterionResult:
@@ -128,9 +152,42 @@ async def _check_deterministically(
         return CriterionResult(
             criterion_id=criterion_id,
             outcome=CriterionOutcome.MET,
-            observation=f"the page contains {hint!r}",
+            observation=describe_match(hint, TextMatch.EXACT),
             step_id=step.step_id,
         )
+
+    # Playwright compares literally, and a heading styled `text-transform: uppercase`
+    # reports as uppercase however the markup was written. Before accusing the product —
+    # the only verdict that does — look at the text once more with the rendering
+    # discounted. Measured: a criterion asking for `Mission Control` against a page whose
+    # `<title>` contains exactly that (docs/qa/text_match).
+    rendered = await browser.describe_page()
+    forgiving = find_text(hint, rendered.visible_text)
+    if forgiving is not None:
+        return CriterionResult(
+            criterion_id=criterion_id,
+            outcome=CriterionOutcome.MET,
+            observation=describe_match(hint, forgiving),
+            step_id=step.step_id,
+        )
+
+    if looks_like_sign_in(rendered):
+        # The page is asking to be signed into, so the literal is absent for a reason
+        # that is not the product's. Found by running the Phase 17 gate: the fixture's
+        # dashboard answers 200 with a login prompt, behaving exactly as designed, and
+        # the run came back `failed` — an accusation against a correct application
+        # (ADR 0019).
+        return CriterionResult(
+            criterion_id=criterion_id,
+            outcome=CriterionOutcome.NOT_MET,
+            observation=(
+                f"the page asked to be signed in to, so {hint!r} was never reachable; "
+                "this run had no usable session for it"
+            ),
+            failure_kind=FailureKind.SESSION,
+            step_id=step.step_id,
+        )
+
     return CriterionResult(
         criterion_id=criterion_id,
         outcome=CriterionOutcome.NOT_MET,

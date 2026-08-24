@@ -26,9 +26,12 @@ from agentic_qa.domain.knowledge.experience import (
     KnowledgeExperienceCandidate,
 )
 from agentic_qa.domain.knowledge.feedback import MemoryFeedback
+from agentic_qa.domain.projects.api_token import ApiToken
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.projects.session import EnvironmentSession
+from agentic_qa.domain.qa.observations import ObservedFailure
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionResult
@@ -46,9 +49,17 @@ class InMemoryStore:
     events: list[RunEvent] = field(default_factory=list)
     policies: dict[str, RunPolicy] = field(default_factory=dict)
     environments: dict[str, Environment] = field(default_factory=dict)
+    api_tokens: dict[str, ApiToken] = field(default_factory=dict)
+    sessions: dict[str, tuple[EnvironmentSession, bytes]] = field(default_factory=dict)
+    """Record and sealed bytes together, the way the table stores them. Rotating adds
+    an entry rather than editing one, so the dict is an audit trail."""
+
     recovery_points: list[RecoveryPoint] = field(default_factory=list)
     plans: dict[tuple[str, str], TestPlan] = field(default_factory=dict)
     criterion_results: dict[str, dict[str, CriterionResult]] = field(default_factory=dict)
+    observed_failures: dict[str, list[ObservedFailure]] = field(default_factory=dict)
+    """Appended, not keyed: an observation is a thing that happened, and two episodes
+    seeing the same broken image saw it twice."""
     artifacts: dict[str, EvidenceRef] = field(default_factory=dict)
     knowledge: dict[tuple[str, str, str], KnowledgeExperienceCandidate] = field(
         default_factory=dict
@@ -78,11 +89,14 @@ class InMemoryStore:
             events=list(self.events),
             policies=dict(self.policies),
             environments=dict(self.environments),
+            sessions=dict(self.sessions),
+            api_tokens=dict(self.api_tokens),
             recovery_points=list(self.recovery_points),
             plans=dict(self.plans),
             criterion_results={
                 run: dict(results) for run, results in self.criterion_results.items()
             },
+            observed_failures={run: list(seen) for run, seen in self.observed_failures.items()},
             artifacts=dict(self.artifacts),
             knowledge=dict(self.knowledge),
             memory_feedback=dict(self.memory_feedback),
@@ -108,6 +122,10 @@ class InMemoryStore:
         self.policies.update(snapshot.policies)
         self.environments.clear()
         self.environments.update(snapshot.environments)
+        self.sessions.clear()
+        self.sessions.update(snapshot.sessions)
+        self.api_tokens.clear()
+        self.api_tokens.update(snapshot.api_tokens)
         self.recovery_points.clear()
         self.recovery_points.extend(snapshot.recovery_points)
         self.plans.clear()
@@ -115,6 +133,10 @@ class InMemoryStore:
         self.criterion_results.clear()
         self.criterion_results.update(
             {run: dict(results) for run, results in snapshot.criterion_results.items()}
+        )
+        self.observed_failures.clear()
+        self.observed_failures.update(
+            {run: list(seen) for run, seen in snapshot.observed_failures.items()}
         )
         self.artifacts.clear()
         self.artifacts.update(snapshot.artifacts)
@@ -230,6 +252,81 @@ class InMemoryRunRepository:
             raise NotFoundError("run", run.run_id)
         self._store.runs[run.run_id] = replace(run)
 
+    async def list_for_project(self, project_id: str, *, limit: int) -> list[Run]:
+        """Insertion order reversed, which is this store's only notion of "newest".
+
+        Honest rather than convenient: nothing here records a time, so a test that needs
+        to assert on real ordering has to talk to PostgreSQL, where `created_at` exists.
+        """
+        matching = [
+            replace(run) for run in self._store.runs.values() if run.project_id == project_id
+        ]
+        return list(reversed(matching))[:limit]
+
+
+class InMemoryApiTokenRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, token: ApiToken) -> None:
+        if token.token_id in self._store.api_tokens:
+            raise AlreadyExistsError("api_token", token.token_id)
+        if any(known.fingerprint == token.fingerprint for known in self._store.api_tokens.values()):
+            # The unique index, honoured here too. A fake that allowed a collision would
+            # let a test pass on behaviour PostgreSQL refuses.
+            raise AlreadyExistsError("api_token", token.token_id)
+        self._store.api_tokens[token.token_id] = token
+
+    async def find_by_fingerprint(self, fingerprint: str) -> ApiToken | None:
+        for token in self._store.api_tokens.values():
+            if token.fingerprint == fingerprint:
+                return token
+        return None
+
+    async def list_for_project(self, project_id: str) -> list[ApiToken]:
+        matching = [
+            token for token in self._store.api_tokens.values() if token.project_id == project_id
+        ]
+        return sorted(matching, key=lambda item: (item.issued_at, item.token_id), reverse=True)
+
+    async def revoke(self, token_id: str) -> bool:
+        return self._store.api_tokens.pop(token_id, None) is not None
+
+
+class InMemorySessionRepository:
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def add(self, session: EnvironmentSession, sealed_state: bytes) -> None:
+        if session.session_id in self._store.sessions:
+            raise AlreadyExistsError("environment_session", session.session_id)
+        self._store.sessions[session.session_id] = (session, sealed_state)
+
+    async def get(self, session_id: str) -> EnvironmentSession | None:
+        found = self._store.sessions.get(session_id)
+        return found[0] if found is not None else None
+
+    async def current_for_environment(self, environment_id: str) -> EnvironmentSession | None:
+        newest = self._newest_first(environment_id)
+        return newest[0] if newest else None
+
+    async def sealed_state(self, session_id: str) -> bytes | None:
+        found = self._store.sessions.get(session_id)
+        return found[1] if found is not None else None
+
+    async def list_for_environment(self, environment_id: str) -> list[EnvironmentSession]:
+        return self._newest_first(environment_id)
+
+    def _newest_first(self, environment_id: str) -> list[EnvironmentSession]:
+        matching = [
+            session
+            for session, _ in self._store.sessions.values()
+            if session.environment_id == environment_id
+        ]
+        # Same total order the table gives: by time, then by id, so two sessions
+        # established in the same instant do not swap places between reads.
+        return sorted(matching, key=lambda s: (s.established_at, s.session_id), reverse=True)
+
 
 class InMemoryRunPolicyRepository:
     def __init__(self, store: InMemoryStore) -> None:
@@ -257,6 +354,14 @@ class InMemoryEnvironmentRepository:
     async def get(self, environment_id: str) -> Environment | None:
         stored = self._store.environments.get(environment_id)
         return replace(stored) if stored is not None else None
+
+    async def list_for_project(self, project_id: str) -> list[Environment]:
+        matching = [
+            replace(environment)
+            for environment in self._store.environments.values()
+            if environment.project_id == project_id
+        ]
+        return sorted(matching, key=lambda item: item.environment_id)
 
 
 class InMemoryRecoveryPointRepository:
@@ -297,6 +402,19 @@ class InMemoryTestPlanRepository:
     async def list_for_story(self, story_id: str, *, limit: int) -> list[TestPlan]:
         matches = [plan for plan in self._store.plans.values() if plan.source_story_id == story_id]
         return list(reversed(matches))[:limit]
+
+
+class InMemoryObservedFailureRepository:
+    """Appends, like the table: a later episode never erases an earlier one's findings."""
+
+    def __init__(self, store: InMemoryStore) -> None:
+        self._store = store
+
+    async def record(self, run_id: str, failures: Sequence[ObservedFailure]) -> None:
+        self._store.observed_failures.setdefault(run_id, []).extend(failures)
+
+    async def list_for_run(self, run_id: str) -> list[ObservedFailure]:
+        return list(self._store.observed_failures.get(run_id, []))
 
 
 class InMemoryCriterionResultRepository:

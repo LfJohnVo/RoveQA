@@ -46,9 +46,9 @@ from agentic_qa.infrastructure.inference.prompts import (
     MAX_OBSERVATION_CHARS,
     build_planning_prompt,
 )
-from agentic_qa.interfaces.http.app import create_app
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
+from tests.http.test_api_contract import asgi_client, bootstrap_token
 
 HOSTILE = 200_000
 """Bigger than any bound here, and the size a real page of generated content reaches."""
@@ -213,11 +213,7 @@ class TestPagesOfResultsAreBounded:
 @pytest.fixture
 async def client() -> AsyncIterator[httpx.AsyncClient]:
     store = InMemoryStore()
-    transport = httpx.ASGITransport(
-        app=create_app(Container(unit_of_work=lambda: InMemoryUnitOfWork(store))),
-        raise_app_exceptions=True,
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://api") as opened:
+    async with asgi_client(Container(unit_of_work=lambda: InMemoryUnitOfWork(store))) as opened:
         yield opened
 
 
@@ -226,6 +222,9 @@ async def test_the_api_refuses_an_unbounded_event_page(client: httpx.AsyncClient
 
     A client asking for a million events is asking the API to buffer a million events.
     """
+    # Authenticated, because the point is that *validation* refuses the page size — a
+    # 401 would make this pass for the wrong reason and stop testing the ceiling.
+    await bootstrap_token(client)
     response = await client.get(
         "/api/v1/runs/does-not-matter/events", params={"limit": MAX_EVENT_PAGE_SIZE + 1}
     )

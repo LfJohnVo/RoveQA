@@ -34,7 +34,26 @@ async def gateway(temporal_address: str) -> AsyncIterator[TemporalScheduleGatewa
         client = await Client.connect(temporal_address)
     except RuntimeError as error:  # server not reachable
         pytest.skip(f"Temporal not reachable at {temporal_address}: {error}")
-    yield TemporalScheduleGateway(client)
+
+    schedules = TemporalScheduleGateway(client)
+    await _sweep_stale(schedules)
+    yield schedules
+
+
+async def _sweep_stale(gateway: TemporalScheduleGateway) -> None:
+    """Delete schedules a killed run left behind.
+
+    The fixture below cleans up in a `finally`, which is correct and not enough: a run
+    stopped by a timeout or a Ctrl-C never reaches it, and Temporal keeps the schedule.
+    Six of them had accumulated in the shared namespace — paused, harmless, and exactly
+    the sort of debris that later makes somebody ask what is still running.
+
+    Swept at the start rather than at the end, because the run that has to clean up after
+    an interrupted one is by definition the next one.
+    """
+    for schedule in await gateway.list_for_project("proj-integration"):
+        if schedule.schedule_id.startswith("it-"):
+            await gateway.delete(schedule.schedule_id)
 
 
 @pytest.fixture

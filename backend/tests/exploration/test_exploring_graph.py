@@ -10,9 +10,16 @@ from dataclasses import dataclass, field
 
 from agentic_qa.application.ports.browser import ActionOutcome
 from agentic_qa.domain.agent.state import AgentState
-from agentic_qa.domain.browser.actions import BrowserAction
-from agentic_qa.domain.exploration.frontier import ExplorationBudget
+from agentic_qa.domain.browser.actions import BrowserAction, BrowserActionType
+from agentic_qa.domain.exploration.frontier import (
+    ExplorationBudget,
+    ExplorationReport,
+    FrontierSnapshot,
+)
 from agentic_qa.domain.exploration.state import Affordance, PageState
+from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.test_plan import PlanStep, PlanStepType
+from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionSource, FailureKind
 from agentic_qa.infrastructure.agent.langgraph.graph import build_agent_graph
 from tests.fakes.agent import ScriptedModelGateway
 
@@ -22,8 +29,12 @@ GENEROUS = ExplorationBudget(
 
 
 def _path_of(url: str) -> str:
-    """`https://app.test/alpha` -> `alpha`, and the root -> the empty string."""
-    return url.removeprefix("https://app.test/")
+    """`https://app.test/alpha` -> `alpha`, and the root -> the empty string.
+
+    The trailing slash is stripped separately because a policy origin is normalised
+    without one, and the seed navigates to exactly that string.
+    """
+    return url.removeprefix("https://app.test").removeprefix("/")
 
 
 def page(path: str, *names: str) -> PageState:
@@ -51,6 +62,19 @@ class SiteBrowser:
     unclickable: set[str] = field(default_factory=set)
 
     async def execute(self, action: BrowserAction) -> ActionOutcome:
+        # A text assertion is a question about the page, not a move through the site, and
+        # answering it with a blanket `succeeded=True` is how a fake reports every
+        # criterion met. It did: the first version of the story-and-sweep test below
+        # passed against a site whose pages said nothing at all.
+        if action.type is BrowserActionType.ASSERT_TEXT:
+            expected = action.value or ""
+            here = self.pages.get(self.current, page(self.current))
+            return ActionOutcome(
+                succeeded=expected in here.visible_text,
+                current_url=f"https://app.test{self.current}",
+                detail="" if expected in here.visible_text else "text not found",
+            )
+
         # Exploration navigates when the page said where a link goes, and clicks only
         # when it did not — so this fake reads both.
         name = _path_of(action.target.url) if action.target.url else action.target.name
@@ -108,8 +132,7 @@ async def test_it_walks_a_small_site_and_stops_when_there_is_nowhere_left() -> N
 
 
 async def test_a_cycle_does_not_become_an_infinite_walk() -> None:
-    # Two pages linking to each other. Nothing about the budget saves this — what
-    # saves it is that an affordance is offered once.
+    # Two pages linking to each other. Nothing about the budget saves this.
     browser = SiteBrowser(pages={"/": page("/", "b"), "/b": page("/b", "")})
     browser.pages["/b"] = PageState(
         url="https://app.test/b",
@@ -119,8 +142,13 @@ async def test_a_cycle_does_not_become_an_infinite_walk() -> None:
     agent = await explore(browser)
 
     assert agent.goal_reached is True
-    # Each link taken exactly once, and then nowhere left to go. "" is the root.
-    assert sorted(browser.clicked) == ["", "b"]
+    # The back-link is never followed at all. Offering each affordance once was enough
+    # to guarantee termination and no more: the walk still paid an action to arrive
+    # somewhere it had already been. A link whose destination is a mapped page is now
+    # dropped instead, so the cycle costs one navigation rather than two — which on a
+    # real site, where every page carries the same navigation bar, is the difference
+    # between mapping it and spending the whole budget re-walking it.
+    assert sorted(browser.clicked) == ["b"]
 
 
 async def test_it_stops_on_the_action_budget_and_says_why() -> None:
@@ -182,3 +210,213 @@ async def test_a_page_that_offers_nothing_ends_the_exploration_immediately() -> 
 
     assert browser.clicked == []
     assert agent.goal_reached is True
+
+
+def crawlable_policy(origin: str = "https://app.test") -> RunPolicy:
+    """Read-only, which is the mode a crawl of somebody else's site deserves."""
+    return RunPolicy(
+        policy_id="pol-explore",
+        project_id="proj-explore",
+        allowed_origins=(origin,),
+        max_duration_seconds=600,
+        max_actions=50,
+        max_model_calls=0,
+        destructive_actions=False,
+    )
+
+
+async def explore_with_policy(
+    browser: SiteBrowser, policy: RunPolicy, budget: ExplorationBudget = GENEROUS
+) -> dict[str, object]:
+    model = ScriptedModelGateway(script=[])
+    graph = build_agent_graph(
+        browser=browser, model=model, exploration_budget=budget, policy=policy
+    )
+    result = await graph.ainvoke(
+        {"agent": AgentState(run_id="run-1", goal="explore the application")}
+    )
+    assert model.calls == 0
+    return dict(result)
+
+
+class TestAnExplorationFindsItsOwnWayToTheApplication:
+    """A browser opens on `about:blank`, and nothing in production ever navigated away
+    from it. An exploring run therefore mapped exactly one state — the blank one — and
+    reported it as a *complete* map.
+
+    The Phase 12 gate passed anyway, because the test called `page.goto` itself before
+    building the graph. A gate that supplies the step it is checking is not a gate.
+    """
+
+    async def test_it_navigates_to_the_policy_origin_first(self) -> None:
+        # Starts where a real browser starts: nowhere.
+        browser = SiteBrowser(
+            pages={
+                "/": page("/", "alpha", "beta"),
+                "/alpha": page("/alpha"),
+                "/beta": page("/beta"),
+            },
+            current="/about:blank",
+        )
+
+        agent = (await explore_with_policy(browser, crawlable_policy()))["agent"]
+        assert isinstance(agent, AgentState)
+
+        # The seed is the first thing it does, and it goes through the ordinary action
+        # path — so it is bounded and policed like every other step.
+        assert browser.clicked[0] == ""
+        assert sorted(browser.clicked[1:]) == ["alpha", "beta"]
+        assert agent.goal_reached is True
+
+    async def test_it_maps_more_than_one_state_without_help(self) -> None:
+        browser = SiteBrowser(
+            pages={
+                "/": page("/", "alpha"),
+                "/alpha": page("/alpha", "beta"),
+                "/beta": page("/beta"),
+            },
+            current="/about:blank",
+        )
+
+        result = await explore_with_policy(browser, crawlable_policy())
+
+        report = result["exploration_report"]
+        assert isinstance(report, ExplorationReport)
+        # The blank page is not one of them: it is never described, so it never becomes
+        # a state. Three real pages, reached without the test touching the browser.
+        assert report.states_discovered == 3
+
+    async def test_an_unreachable_origin_is_blocked_with_a_cause(self) -> None:
+        # Nothing at the other end. The run must say so — `frontier_exhausted` would
+        # claim it had seen the whole application, which is the opposite of the truth.
+        browser = SiteBrowser(pages={}, current="/about:blank", unclickable={""})
+
+        result = await explore_with_policy(browser, crawlable_policy())
+
+        agent = result["agent"]
+        assert isinstance(agent, AgentState)
+        assert agent.goal_reached is False
+        assert result["failure_kind"] is FailureKind.ENVIRONMENT
+        assert result.get("exploration_report") is None
+
+    async def test_a_resumed_crawl_does_not_start_over(self) -> None:
+        # `exploration is None` is what "not seeded yet" means, so a state that already
+        # carries a frontier must go straight back to crawling. Re-seeding would send a
+        # browser that died on page nine back to page one.
+        browser = SiteBrowser(pages={"/": page("/", "alpha"), "/alpha": page("/alpha")})
+        model = ScriptedModelGateway(script=[])
+        graph = build_agent_graph(
+            browser=browser,
+            model=model,
+            exploration_budget=GENEROUS,
+            policy=crawlable_policy(),
+        )
+
+        result = await graph.ainvoke(
+            {
+                "agent": AgentState(run_id="run-1", goal="explore the application"),
+                "exploration": FrontierSnapshot(),
+            }
+        )
+
+        assert isinstance(result["agent"], AgentState)
+        # No seed navigation: the first thing it did was take a link off the page it was
+        # already on.
+        assert browser.clicked == ["alpha"]
+
+
+class TestAStoryAndASweepInOneRun:
+    """A run may carry a story, a traversal, or both — and "both" was never designed in.
+
+    It falls out of two decisions that were made separately: exploring walks the site
+    from what each page offers, and ADR 0013 evaluates every criterion's hint against
+    *every* observation rather than once at the end. Put together, a crawl credits a
+    criterion the moment some page satisfies it, without a planner ever steering there.
+
+    Tested rather than assumed, because nothing in the code says it: the run-creation
+    docstring still claims exploring happens "instead of following a plan".
+    """
+
+    async def test_a_crawl_verifies_a_story_it_walks_past(self) -> None:
+        browser = SiteBrowser(
+            pages={
+                "/": page("/", "alpha", "beta"),
+                "/alpha": page("/alpha"),
+                "/beta": page("/beta"),
+            },
+            current="/about:blank",
+        )
+        # The literal lives on a page the frontier reaches on its own; no planner is
+        # involved and the model is never called.
+        browser.pages["/beta"] = PageState(
+            url="https://app.test/beta",
+            affordances=(),
+            body_text="Order confirmed",
+        )
+
+        model = ScriptedModelGateway(script=[])
+        graph = build_agent_graph(
+            browser=browser,
+            model=model,
+            exploration_budget=GENEROUS,
+            policy=crawlable_policy(),
+            assertions=(
+                PlanStep(
+                    step_id="assert-confirmed",
+                    type=PlanStepType.ASSERTION,
+                    description="the confirmation appears",
+                    criterion_id="ac-confirmed",
+                ),
+            ),
+            hints={"ac-confirmed": "Order confirmed"},
+        )
+
+        result = await graph.ainvoke(
+            {"agent": AgentState(run_id="run-both", goal="explore the application")}
+        )
+
+        # Both kinds come back now: the story's criterion and one universal page check
+        # per route the crawl walked (ADR 0017). Filtering by source is the supported way
+        # to ask for one of them — see tests/qa/test_run_shapes.py for the sweep half.
+        results = result["criterion_results"]
+        story = [r for r in results if r.source is CriterionSource.PLAN]
+
+        assert len(story) == 1
+        assert story[0].criterion_id == "ac-confirmed"
+        assert story[0].outcome is CriterionOutcome.MET
+        # The whole point: a story was answered and the model was never asked.
+        assert story[0].model_derived is False
+        assert model.calls == 0
+
+    async def test_a_crawl_that_never_meets_the_story_does_not_claim_it_did(self) -> None:
+        browser = SiteBrowser(
+            pages={"/": page("/", "alpha"), "/alpha": page("/alpha")},
+            current="/about:blank",
+        )
+
+        model = ScriptedModelGateway(script=[])
+        graph = build_agent_graph(
+            browser=browser,
+            model=model,
+            exploration_budget=GENEROUS,
+            policy=crawlable_policy(),
+            assertions=(
+                PlanStep(
+                    step_id="assert-confirmed",
+                    type=PlanStepType.ASSERTION,
+                    description="the confirmation appears",
+                    criterion_id="ac-confirmed",
+                ),
+            ),
+            hints={"ac-confirmed": "Order confirmed"},
+        )
+
+        result = await graph.ainvoke(
+            {"agent": AgentState(run_id="run-both", goal="explore the application")}
+        )
+
+        story = [r for r in result["criterion_results"] if r.source is CriterionSource.PLAN]
+
+        assert len(story) == 1
+        assert story[0].outcome is not CriterionOutcome.MET
+        assert model.calls == 0

@@ -15,11 +15,14 @@ import type {
   RunEventStream,
   RunGateway,
   RunSubscription,
+  SessionGateway,
   StartRunInput,
   StoryGateway,
 } from "@application/ports/gateways";
+import type { Environment, EnvironmentSession } from "@domain/projects/session";
 import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { UserStory } from "@domain/qa/story";
+import type { ExplorationMap } from "@domain/runs/exploration";
 import type { RunReport } from "@domain/runs/findings";
 import type { ConnectionState } from "@domain/runs/connection";
 import type { NewProjectInput } from "@application/ports/gateways";
@@ -115,13 +118,35 @@ export class FakeRunGateway implements RunGateway {
     return Promise.resolve(this.durable.filter((event) => event.sequence > after));
   }
 
+  /** What a project's history holds. Empty by default, which is a new project. */
+  history: Run[] = [];
+
+  listForProject(projectId: string, limit: number): Promise<Run[]> {
+    return Promise.resolve(
+      this.history.filter((run) => run.projectId === projectId).slice(0, limit),
+    );
+  }
+
   report(runId: string): Promise<RunReport> {
     return Promise.resolve(
-      this.reportValue ?? { runId, findings: [], artifacts: [], evidenceSetId: null },
+      this.reportValue ?? {
+        runId,
+        findings: [],
+        observed: [],
+        artifacts: [],
+        evidenceSetId: null,
+      },
     );
   }
 
   reportValue: RunReport | null = null;
+
+  explorationValue: ExplorationMap | null = null;
+
+  exploration(): Promise<ExplorationMap | null> {
+    // Null by default: most runs never explored, and that is not a failure to read one.
+    return Promise.resolve(this.explorationValue);
+  }
 
   start(input: StartRunInput): Promise<Run> {
     this.started.push(input);
@@ -246,5 +271,30 @@ export class FakeStoryGateway implements StoryGateway {
   compile(storyId: string, runPolicyId: string): Promise<CompiledPlan> {
     this.compiled.push(`${storyId}@${runPolicyId}`);
     return Promise.resolve({ planId: "plan-1", planVersion: "1" });
+  }
+}
+
+/** Environments and the sessions on record for them — records only, never contents. */
+export class FakeSessionGateway implements SessionGateway {
+  known: Environment[] = [];
+  registered: EnvironmentSession[] = [];
+  readonly revoked: string[] = [];
+
+  environments(projectId: string): Promise<Environment[]> {
+    return Promise.resolve(this.known.filter((item) => item.projectId === projectId));
+  }
+
+  sessions(environmentId: string): Promise<EnvironmentSession[]> {
+    return Promise.resolve(
+      this.registered.filter((item) => item.environmentId === environmentId),
+    );
+  }
+
+  revoke(_environmentId: string, sessionId: string): Promise<void> {
+    // Records what was asked for rather than mutating the list: revoking destroys a key,
+    // and the row deliberately survives. A fake that removed it would let a view assert
+    // the opposite of what the real one does.
+    this.revoked.push(sessionId);
+    return Promise.resolve();
   }
 }

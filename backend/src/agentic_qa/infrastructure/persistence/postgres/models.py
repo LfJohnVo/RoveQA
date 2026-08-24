@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -82,6 +83,9 @@ class RunPolicyModel(Base):
     """Immutable once written: a finished run's rules must not change underneath it."""
 
     __tablename__ = "run_policies"
+    __table_args__ = (
+        CheckConstraint("consent IN ('leave', 'reject', 'accept')", name="ck_run_policies_consent"),
+    )
 
     policy_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
     project_id: Mapped[str] = mapped_column(
@@ -93,6 +97,8 @@ class RunPolicyModel(Base):
     allowed_origins: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     upload_path_allowlist: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     destructive_actions: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    consent: Mapped[str] = mapped_column(String(20), nullable=False, default="leave")
+    """Whether a run under this policy may answer a cookie banner (ADR 0018)."""
     allow_file_uploads: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     allow_downloads: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     synthetic_data_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -103,6 +109,72 @@ class RunPolicyModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ApiTokenModel(Base):
+    """A token a CI job presents, stored as a hash and never as itself (ADR 0020)."""
+
+    __tablename__ = "api_tokens"
+    __table_args__ = (
+        # Unique, and the lookup path: a request arrives, the server hashes what it was
+        # given and finds the row by that. Two rows sharing a fingerprint would mean the
+        # CSPRNG repeated itself, and the database says so rather than accepting it.
+        UniqueConstraint("fingerprint", name="uq_api_tokens_fingerprint"),
+        Index("ix_api_tokens_project", "project_id"),
+    )
+
+    token_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(String(NAME_LENGTH), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    """SHA-256, hex. Sixty-four characters exactly, so a value that is not one is a bug
+    rather than a token."""
+
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    issued_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+
+class EnvironmentSessionModel(Base):
+    """A borrowed browser session: the record, and the sealed bytes (ADR 0019).
+
+    The ciphertext lives here and its key does not. That is the revocation design rather
+    than an implementation detail — there is deliberately no `revoked_at` column, because
+    a column restores from a backup and the whole gate is that a revocation must not.
+    """
+
+    __tablename__ = "environment_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "valid_until IS NULL OR valid_until > established_at",
+            name="ck_environment_sessions_validity_ordered",
+        ),
+        # The query a run makes: this environment's most recent session. Rotating adds a
+        # row rather than editing one, so "most recent" is the whole resolution rule.
+        Index(
+            "ix_environment_sessions_env_established",
+            "environment_id",
+            desc("established_at"),
+            desc("session_id"),
+        ),
+    )
+
+    session_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
+    environment_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("environments.environment_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(String(NAME_LENGTH), nullable=False)
+    established_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    established_by: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    sealed_state: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    """AES-GCM ciphertext. Unreadable without the key, which is not in this database and
+    not in any dump taken from it."""
 
 
 class EnvironmentModel(Base):
@@ -319,6 +391,48 @@ class ArtifactModel(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ObservedFailureModel(Base):
+    """Something the browser saw go wrong that belongs to no acceptance criterion.
+
+    A console exception or an image answering 404 is first-class QA signal on any site,
+    and until now there was nowhere to put it: every findings surface in the schema is
+    keyed to a `criterion_id`, so an observation about a *page* had no row it could
+    occupy. It was collected by the adapter, carried as far as `EpisodeResult`, and
+    dropped (ADR 0015 said it would reach the report; this is that).
+
+    One row per problem rather than an array per run, so the grain can get finer without
+    a migration — a site sweep will want to say *which page* each one came from.
+
+    Nothing here can produce a `failed` verdict. These are observations, and only a
+    deterministic check against a criterion may accuse the product.
+    """
+
+    __tablename__ = "observed_failures"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('console_error', 'failed_request')", name="ck_observed_failures_kind"
+        ),
+        Index("ix_observed_failures_run", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    episode_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    """Redacted before it gets here. A failed-request URL carries tokens in its query
+    string and a console message can print one, so the adapter cleans both — this column
+    is not the place to discover that."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class CriterionResultModel(Base):
     """One acceptance criterion's outcome for one run (docs/02).
 
@@ -333,6 +447,7 @@ class CriterionResultModel(Base):
         CheckConstraint(
             "outcome IN ('met', 'not_met', 'unverified')", name="ck_criterion_results_outcome"
         ),
+        CheckConstraint("source IN ('plan', 'sweep')", name="ck_criterion_results_source"),
         CheckConstraint(
             "(outcome = 'not_met') = (failure_kind IS NOT NULL)",
             name="ck_criterion_results_failure_kind",
@@ -348,6 +463,12 @@ class CriterionResultModel(Base):
     criterion_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), nullable=False)
     step_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="plan")
+    """Who asked for this check: the run's plan, or the universal page sweep.
+
+    A column rather than an id prefix, because a reader must never confuse "the story
+    asked for this" with "every run checks this on every page" (ADR 0017)."""
+
     failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     observation: Mapped[str] = mapped_column(Text, nullable=False)
     model_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -571,6 +692,11 @@ class RunModel(Base):
             "(plan_id IS NULL) = (plan_version IS NULL)",
             name="ck_runs_plan_identity_complete",
         ),
+        # Serves the runs list: one project, newest first. Composite rather than an
+        # additional index because `project_id` leads it, so it answers the plain
+        # by-project lookups too — the single-column index it replaces would only have
+        # been a second copy of the same prefix.
+        Index("ix_runs_project_created", "project_id", desc("created_at"), desc("run_id")),
     )
 
     run_id: Mapped[str] = mapped_column(String(IDENTIFIER_LENGTH), primary_key=True)
@@ -578,7 +704,6 @@ class RunModel(Base):
         String(IDENTIFIER_LENGTH),
         ForeignKey("projects.project_id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
     )
     run_policy_id: Mapped[str | None] = mapped_column(
         String(IDENTIFIER_LENGTH),

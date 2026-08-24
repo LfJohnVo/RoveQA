@@ -16,7 +16,7 @@ import httpx
 from redis.asyncio import Redis
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
-from agentic_qa.application.ports.browser import BrowserGateway
+from agentic_qa.application.ports.browser import BrowserGateway, BrowserSetup
 from agentic_qa.application.ports.deep_analysis import DeepAnalyst
 from agentic_qa.application.ports.episodes import EpisodeRunner
 from agentic_qa.bootstrap.settings import Settings
@@ -25,6 +25,7 @@ from agentic_qa.infrastructure.agent.langgraph.checkpointer import open_checkpoi
 from agentic_qa.infrastructure.agent.langgraph.episode_runner import LangGraphEpisodeRunner
 from agentic_qa.infrastructure.browser.playwright.gateway import (
     DEFAULT_NAVIGATION_TIMEOUT_MS,
+    parse_storage_state,
     start_browser_session,
 )
 from agentic_qa.infrastructure.cache.redis.semaphores import RedisResourceSemaphore
@@ -38,14 +39,21 @@ FAST_ENDPOINT_NAME = "vllm-fast"
 DEEP_ENDPOINT_NAME = "deep"
 
 
-def build_model_router(settings: Settings) -> ModelRouter | None:
-    """None when no endpoint is configured at all — an honest absence, not a fake model.
+def build_model_router(settings: Settings) -> ModelRouter:
+    """A router for whatever is configured, including nothing.
 
     The capabilities are genuinely independent, and each absence costs exactly one
-    thing. No fast endpoint means no episodes; no deep endpoint means no hypotheses.
-    A machine configured with only the deep model — the sensible way to run analysis on
-    a second box — still gets a router, because refusing to build one there would make
-    a fully configured capability unreachable.
+    thing: no fast endpoint means no *planned* episode, no deep endpoint means no
+    hypotheses. A machine configured with only the deep model — the sensible way to run
+    analysis on a second box — still gets a router, because refusing to build one there
+    would make a fully configured capability unreachable.
+
+    An empty router used to be `None`, which read as "there is nothing to run" and was
+    wrong in one important case: **an exploring run calls no model at all.** A site sweep
+    needed a GPU in order not to use it. An empty router raises
+    `NoEndpointConfiguredError` the first time somebody actually asks for a model, which
+    is the honest moment — and the callers already turn that into a reported failure
+    rather than a crash.
     """
     endpoints = []
     if settings.vllm_base_url and settings.vllm_model:
@@ -60,7 +68,10 @@ def build_model_router(settings: Settings) -> ModelRouter | None:
             )
         )
     else:
-        logger.info("no fast model endpoint configured; the worker will not run episodes")
+        logger.info(
+            "no fast model endpoint configured; exploring runs still work, "
+            "planned runs will report a model failure"
+        )
 
     if settings.deep_base_url and settings.deep_model:
         endpoints.append(
@@ -84,7 +95,7 @@ def build_model_router(settings: Settings) -> ModelRouter | None:
     else:
         logger.info("no deep endpoint configured; failure triage runs without hypotheses")
 
-    return ModelRouter(endpoints) if endpoints else None
+    return ModelRouter(endpoints)
 
 
 def build_deep_analyst(
@@ -114,7 +125,7 @@ def build_episode_runner(
     )
 
     @asynccontextmanager
-    async def browser_factory() -> AsyncIterator[BrowserGateway]:
+    async def browser_factory(setup: BrowserSetup) -> AsyncIterator[BrowserGateway]:
         session = await start_browser_session(
             headless=settings.browser_headless,
             # `or` on purpose: an unset override means the adapter's own default, so the
@@ -122,6 +133,15 @@ def build_episode_runner(
             navigation_timeout_ms=(
                 settings.browser_navigation_timeout_ms or DEFAULT_NAVIGATION_TIMEOUT_MS
             ),
+            # Absent for most runs, and that is the ordinary path rather than a fallback:
+            # a landing page, a documentation site or a shop with guest checkout needs no
+            # session at all (ADR 0019).
+            storage_state=(
+                parse_storage_state(setup.storage_state_json)
+                if setup.storage_state_json is not None
+                else None
+            ),
+            secrets=setup.secrets,
         )
         try:
             yield session.gateway

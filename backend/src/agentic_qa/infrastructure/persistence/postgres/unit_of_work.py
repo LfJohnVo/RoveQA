@@ -6,6 +6,7 @@ from typing import Self
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from agentic_qa.infrastructure.persistence.postgres.repositories import (
+    PostgresApiTokenRepository,
     PostgresArtifactIndex,
     PostgresCriterionResultRepository,
     PostgresEnvironmentRepository,
@@ -14,11 +15,13 @@ from agentic_qa.infrastructure.persistence.postgres.repositories import (
     PostgresIdempotencyRepository,
     PostgresKnowledgeRepository,
     PostgresMemoryFeedbackRepository,
+    PostgresObservedFailureRepository,
     PostgresProjectRepository,
     PostgresRecoveryPointRepository,
     PostgresRunEventLog,
     PostgresRunPolicyRepository,
     PostgresRunRepository,
+    PostgresSessionRepository,
     PostgresStateMapRepository,
     PostgresStoryRepository,
     PostgresTestPlanRepository,
@@ -67,6 +70,14 @@ class PostgresUnitOfWork:
         return PostgresEnvironmentRepository(self.session)
 
     @property
+    def sessions(self) -> PostgresSessionRepository:
+        return PostgresSessionRepository(self.session)
+
+    @property
+    def api_tokens(self) -> PostgresApiTokenRepository:
+        return PostgresApiTokenRepository(self.session)
+
+    @property
     def recovery_points(self) -> PostgresRecoveryPointRepository:
         return PostgresRecoveryPointRepository(self.session)
 
@@ -77,6 +88,10 @@ class PostgresUnitOfWork:
     @property
     def criterion_results(self) -> PostgresCriterionResultRepository:
         return PostgresCriterionResultRepository(self.session)
+
+    @property
+    def observed_failures(self) -> PostgresObservedFailureRepository:
+        return PostgresObservedFailureRepository(self.session)
 
     @property
     def failure_clusters(self) -> PostgresFailureClusterRepository:

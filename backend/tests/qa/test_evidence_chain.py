@@ -19,7 +19,7 @@ import pytest
 from temporalio.testing import ActivityEnvironment
 
 from agentic_qa.application.commands.compile_plan import CompilePlanCommand, compile_plan
-from agentic_qa.application.ports.browser import BrowserGateway
+from agentic_qa.application.ports.browser import BrowserGateway, BrowserSetup
 from agentic_qa.application.queries.failure_context import load_failure_context, to_manifest
 from agentic_qa.bootstrap.container import Container
 from agentic_qa.domain.browser.actions import ActionTarget, BrowserAction, BrowserActionType
@@ -114,7 +114,7 @@ async def prepared(base_url: str, artifact_root: Path) -> AsyncIterator[tuple[Co
         await uow.commit()
 
     @asynccontextmanager
-    async def browser_factory() -> AsyncIterator[BrowserGateway]:
+    async def browser_factory(_setup: BrowserSetup) -> AsyncIterator[BrowserGateway]:
         session = await start_browser_session(headless=True)
         try:
             yield session.gateway

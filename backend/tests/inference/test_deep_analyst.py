@@ -27,6 +27,7 @@ from agentic_qa.bootstrap.agent_runtime import (
 from agentic_qa.bootstrap.settings import Settings
 from agentic_qa.domain.inference.tasks import InferenceBudget, ModelCapability, TaskType
 from agentic_qa.infrastructure.inference.airllm.gateway import AirLLMDeepAnalyst
+from agentic_qa.infrastructure.inference.errors import NoEndpointConfiguredError
 from agentic_qa.infrastructure.inference.prompts import DEEP_ANALYSIS_PROMPT_VERSION
 from agentic_qa.infrastructure.inference.router import ModelEndpoint, ModelRouter
 from tests.fakes.semaphores import InMemoryResourceSemaphore
@@ -288,5 +289,40 @@ class TestWiring:
         assert router.serves(ModelCapability.DEEP)
         assert not router.serves(ModelCapability.FAST)
 
-    def test_no_endpoint_at_all_is_still_an_honest_absence(self) -> None:
-        assert build_model_router(self.settings(vllm_base_url=None, vllm_model="")) is None
+    def test_no_endpoint_at_all_still_builds_a_router(self) -> None:
+        # Empty is not absent. Why that distinction earns its keep is in
+        # TestASweepNeedsNoModel below.
+        assert build_model_router(self.settings(vllm_base_url=None, vllm_model="")) is not None
+
+
+class TestASweepNeedsNoModel:
+    """An exploring run calls the model zero times, and used to need one anyway.
+
+    `build_model_router` returned `None` with nothing configured, which made
+    `with_agent_runtime` leave `container.episodes` unset — so every run on that worker
+    "executed no episode" and came back `inconclusive`, with the only explanation in a
+    log line. A site sweep, whose entire premise is zero inference, required a GPU in
+    order not to use it.
+
+    Measured against the real thing afterwards: three public sites swept with no endpoint
+    configured at all, mapping 1, 9 and 8 states. Zero model calls is structural there
+    rather than a number that happened to come out at zero.
+    """
+
+    def settings_without_a_model(self) -> Settings:
+        return Settings(postgres_dsn="postgresql+asyncpg://x/y", vllm_base_url=None, vllm_model="")
+
+    def test_the_router_exists_and_serves_nothing(self) -> None:
+        router = build_model_router(self.settings_without_a_model())
+
+        assert not router.serves(ModelCapability.FAST)
+        assert not router.serves(ModelCapability.DEEP)
+
+    def test_asking_it_for_a_model_fails_where_the_asking_happens(self) -> None:
+        # The honest moment: not at startup, where nothing is being asked for yet, but at
+        # the first planning call — which the gateway already turns into a reported
+        # failure rather than a crash.
+        router = build_model_router(self.settings_without_a_model())
+
+        with pytest.raises(NoEndpointConfiguredError):
+            router.endpoint_for(TaskType.GUI_ACTION)

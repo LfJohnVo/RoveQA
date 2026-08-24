@@ -28,20 +28,27 @@ from agentic_qa.application.commands.transition_run import (
     transition_run,
 )
 from agentic_qa.application.errors import NotFoundError
+from agentic_qa.application.ports.browser import BrowserSetup
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
+from agentic_qa.application.ports.events import RUN_ACTION_TAKEN, NewRunEvent
+from agentic_qa.application.ports.sessions import SessionNotUsableError
 from agentic_qa.application.queries.memory_context import (
     MemoryContextRequest,
     retrieve_memory_context,
 )
+from agentic_qa.application.services.criterion_verification import criteria_never_reached
 from agentic_qa.application.services.experience_consolidation import DEFAULT_ENVIRONMENT
 from agentic_qa.application.services.policy_resolution import resolve_run_policy
 from agentic_qa.bootstrap.container import Container
+from agentic_qa.domain.browser.urls import safe_url
 from agentic_qa.domain.exploration.frontier import ExplorationBudget
 from agentic_qa.domain.knowledge.compatibility import MemoryScope
 from agentic_qa.domain.knowledge.memory_context import MemoryContext, MemoryItem
+from agentic_qa.domain.knowledge.redaction import redact_secrets
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.observations import ObservedFailure, ObservedFailureKind
 from agentic_qa.domain.qa.test_plan import TestPlan
-from agentic_qa.domain.qa.verification import derive_verdict
+from agentic_qa.domain.qa.verification import CriterionSource, FailureKind, derive_verdict
 from agentic_qa.domain.runs.recovery import (
     BrowserRecoveryData,
     RecoveryPoint,
@@ -154,6 +161,19 @@ class RunActivities:
 
         memory = await self._recall(run, policy)
 
+        try:
+            setup = await self._provision(run.environment_id)
+        except SessionNotUsableError as unusable:
+            # Not allowed to escape. An exception here would reach Temporal as an
+            # infrastructure failure and be retried until the timeout, re-provisioning a
+            # session that will be just as expired next time (ADR 0009). It is a fact
+            # about the run: it could not do its job, and it says why.
+            logger.warning("run %s cannot borrow a session: %s", params.run_id, unusable)
+            await self._record_unreachable(
+                params, plan, reason=str(unusable), kind=FailureKind.SESSION
+            )
+            return EpisodeOutcome(more_work=False, verdict=Verdict.BLOCKED.value)
+
         # Exploring is asked for, never inferred. The budget comes from the run's own
         # policy: exploration is a way of spending a run's allowance, not a second
         # allowance beside it.
@@ -172,6 +192,7 @@ class RunActivities:
                 assertions=plan.assertions if plan is not None else (),
                 verification_hints=hints,
                 memory=memory,
+                setup=setup,
                 exploration=exploration,
             )
         )
@@ -182,8 +203,51 @@ class RunActivities:
         if result.safe_point and result.graph_checkpoint_id:
             await self._record_recovery_point(params, result)
 
+        await self._record_actions(params.run_id, result)
+        await self._record_observed_failures(params, result)
         verdict = await self._record_results(params, plan, result)
         return EpisodeOutcome(more_work=result.more_work, verdict=verdict)
+
+    async def _record_actions(self, run_id: str, result: EpisodeResult) -> None:
+        """Append one event per action the episode took.
+
+        Twenty-five actions used to leave three events -- `run.created` and two status
+        changes -- so an operator with a stuck run had the verdict and a screenshot and
+        nothing between them (R5).
+
+        Swallowed on failure, like the screenshot and unlike the state map: a run whose
+        trace could not be written still produced a verdict, and refusing to report the
+        verdict because the trace failed would trade the answer for the audit of it.
+
+        The URL is sanitised and no typed value is carried at all -- see `ActionRecord`.
+        """
+        if not result.actions:
+            return
+        try:
+            async with self._container.unit_of_work() as uow:
+                for record in result.actions:
+                    await uow.events.append(
+                        NewRunEvent(
+                            run_id=run_id,
+                            type=RUN_ACTION_TAKEN,
+                            payload={
+                                "index": record.index,
+                                "action": record.action,
+                                "intent": record.intent,
+                                "succeeded": record.succeeded,
+                                # Query strings are where tokens ride, and this one comes
+                                # from a page we do not control.
+                                "url": safe_url(record.url or "") or None,
+                                "http_status": record.http_status,
+                                "detail": redact_secrets(record.detail),
+                            },
+                        )
+                    )
+                await uow.commit()
+        except Exception:
+            logger.exception("could not record the action trace for run %s", run_id)
+            return
+        logger.info("recorded %d action(s) for run %s", len(result.actions), run_id)
 
     async def _record_state_map(self, run_id: str, project_id: str, result: EpisodeResult) -> None:
         """Store what an exploration mapped, or nothing for a planned episode.
@@ -205,6 +269,65 @@ class RunActivities:
             run_id,
             result.exploration_report.states_discovered,
             result.exploration_report.stop_reason.value,
+        )
+
+    async def _record_unreachable(
+        self,
+        params: EpisodeParams,
+        plan: TestPlan | None,
+        *,
+        reason: str,
+        kind: FailureKind,
+    ) -> None:
+        """Write one `not_met` per criterion for a run that never started.
+
+        The same shape a run that gave up partway produces, from the same function, so a
+        reader cannot tell from the report which layer decided — only what happened and
+        why. A run with no plan has nothing to write, and the verdict speaks for itself.
+        """
+        if plan is None or not plan.assertions:
+            return
+        results = criteria_never_reached(plan.assertions, reason=reason, kind=kind)
+        async with self._container.unit_of_work() as uow:
+            await uow.criterion_results.record(params.run_id, results)
+            await uow.commit()
+
+    async def _provision(self, environment_id: str | None) -> BrowserSetup:
+        """Open the environment's session, if it has one this run may use.
+
+        Four outcomes, and only one of them is a failure:
+
+        - no environment, or no session recorded for it — an anonymous context, which is
+          the ordinary path and most of what this tests;
+        - a session whose stated validity is over — refused here rather than discovered
+          twenty actions later on a login page;
+        - a session whose key is gone — revoked, or restored from a dump older than the
+          revocation. Also refused, and for the same reason;
+        - a session that opens — provisioned.
+
+        Refusing raises `SessionNotUsableError`, which the caller turns into a
+        `FailureKind.SESSION` and a `blocked` run. Never `failed`: a session that expired
+        says nothing about the application under test (ADR 0019).
+        """
+        if environment_id is None or self._container.keyring is None:
+            return BrowserSetup()
+
+        async with self._container.unit_of_work() as uow:
+            session = await uow.sessions.current_for_environment(environment_id)
+            sealed = (
+                await uow.sessions.sealed_state(session.session_id) if session is not None else None
+            )
+
+        if session is None or sealed is None:
+            return BrowserSetup()
+        if session.has_expired():
+            raise SessionNotUsableError(
+                f"the session {session.label!r} for this environment expired at "
+                f"{session.valid_until:%Y-%m-%d %H:%M %Z}"
+            )
+        # Raises on a missing key, which is what a revocation leaves behind.
+        return BrowserSetup(
+            storage_state_json=await self._container.keyring.open(session.session_id, sealed)
         )
 
     async def _recall(self, run: Run, policy: RunPolicy) -> tuple[MemoryItem, ...]:
@@ -382,17 +505,74 @@ class RunActivities:
         the workflow must stay free of I/O, and a verdict computed from data it never
         saw could not be re-derived when someone questions the report.
         """
-        if plan is None:
+        if not result.criterion_results:
+            # Nothing was checked at all — no story, and no page reached. There is no
+            # honest verdict to derive and `derive_verdict` would refuse anyway.
             return None
 
         async with self._container.unit_of_work() as uow:
             await uow.criterion_results.record(params.run_id, result.criterion_results)
             await uow.commit()
 
-        return derive_verdict(
-            result.criterion_results,
-            expected=[step.criterion_id for step in plan.assertions if step.criterion_id],
-        ).value
+        # A run without a story used to stop above, so a sweep that mapped nine pages and
+        # found a console error came back `inconclusive` — "nobody knows" from a run that
+        # knew nine things. The universal page checks are criteria too, and expecting them
+        # is what gives such a run a real verdict (ADR 0017).
+        expected = (
+            [step.criterion_id for step in plan.assertions if step.criterion_id] if plan else []
+        )
+        expected += [
+            check.criterion_id
+            for check in result.criterion_results
+            if check.source is CriterionSource.SWEEP
+        ]
+        if not expected:
+            return None
+
+        return derive_verdict(result.criterion_results, expected=expected).value
+
+    async def _record_observed_failures(self, params: EpisodeParams, result: EpisodeResult) -> None:
+        """Persist what the browser saw go wrong.
+
+        These arrived at this method for a long time and went no further: `page_problems`
+        was the one field of `EpisodeResult` nothing read. A JavaScript exception and an
+        image answering 404 are QA signal on any site, and they were measured and dropped
+        (ADR 0015 promised the report would carry them).
+
+        Written unconditionally of whether a plan exists — `_record_results` returns early
+        without one, and a run with no story is exactly the run these matter most for.
+        They never influence the verdict: only a deterministic check against a criterion
+        may accuse the product.
+        """
+        problems = result.page_problems
+        if not problems:
+            return
+
+        failures = [
+            ObservedFailure(
+                kind=ObservedFailureKind.CONSOLE_ERROR,
+                detail=message,
+                episode_index=params.episode_index,
+            )
+            for message in problems.console_errors
+        ] + [
+            ObservedFailure(
+                kind=ObservedFailureKind.FAILED_REQUEST,
+                detail=url,
+                episode_index=params.episode_index,
+            )
+            for url in problems.failed_requests
+        ]
+
+        async with self._container.unit_of_work() as uow:
+            await uow.observed_failures.record(params.run_id, failures)
+            await uow.commit()
+        logger.info(
+            "run %s observed %d browser problem(s) in episode %d",
+            params.run_id,
+            len(failures),
+            params.episode_index,
+        )
 
     async def _index_evidence(self, run_id: str, result: EpisodeResult) -> None:
         """Record the artifacts the episode captured.

@@ -15,18 +15,18 @@ import pytest
 from agentic_qa.application.ports.schedules import RunSchedule
 from agentic_qa.bootstrap.container import Container
 from agentic_qa.domain.projects.project import Project
-from agentic_qa.interfaces.http.app import create_app
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.schedules import InMemoryScheduleGateway
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
+from tests.http.test_api_contract import asgi_client, authorise_for
 
 SCHEDULES = "/api/v1/projects/proj-1/schedules"
 NIGHTLY = {"schedule_id": "nightly", "cron": "0 2 * * *", "plan_id": "plan-1"}
 
 
 def client_for(container: Container) -> httpx.AsyncClient:
-    transport = httpx.ASGITransport(app=create_app(container), raise_app_exceptions=True)
-    return httpx.AsyncClient(transport=transport, base_url="http://api")
+    """The shared helper, so the client carries its container and can mint a token."""
+    return asgi_client(container)
 
 
 @pytest.fixture
@@ -50,6 +50,10 @@ async def client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     container = Container(unit_of_work=lambda: InMemoryUnitOfWork(store), schedules=gateway)
     async with client_for(container) as client:
+        # Authenticated like any real caller. That every route refuses *without* a
+        # token is proved exhaustively in `test_every_route_is_guarded.py`; these
+        # suites are about what the endpoints do once you are through the door.
+        await authorise_for(client, "proj-1")
         yield client
 
 
@@ -81,9 +85,12 @@ class TestCreating:
         assert response.status_code == 422
 
     async def test_an_unknown_project_cannot_be_scheduled(self, client: httpx.AsyncClient) -> None:
+        # A token covers one project, so a path naming another is refused before the
+        # handler runs. `403` rather than the old `404` — and the stronger answer: the
+        # caller learns nothing about whether `ghost` exists.
         assert (
             await client.post("/api/v1/projects/ghost/schedules", json=NIGHTLY)
-        ).status_code == 404
+        ).status_code == 403
 
 
 class TestOwnership:
@@ -104,14 +111,19 @@ class TestOwnership:
 
         response = await client.post("/api/v1/projects/proj-2/schedules/nightly/pause")
 
-        assert response.status_code == 404
+        # Refused by the token now, before the handler's ownership check ever runs. Both
+        # guards are real and this asserts the outer one; the handler's own check is what
+        # protects a caller who legitimately holds tokens for both projects.
+        assert response.status_code == 403
 
     async def test_another_project_cannot_delete_this_one(
         self, client: httpx.AsyncClient, gateway: InMemoryScheduleGateway
     ) -> None:
         await client.post(SCHEDULES, json=NIGHTLY)
 
-        assert (await client.delete("/api/v1/projects/proj-2/schedules/nightly")).status_code == 404
+        # Refused by the token, and the schedule is still there — which is the half
+        # that matters: a refusal that deleted something first would be no refusal.
+        assert (await client.delete("/api/v1/projects/proj-2/schedules/nightly")).status_code == 403
         assert await gateway.get("nightly") is not None
 
 
@@ -155,6 +167,7 @@ async def test_without_temporal_scheduling_reports_itself_unavailable(
     container = Container(unit_of_work=lambda: InMemoryUnitOfWork(store))
 
     async with client_for(container) as client:
+        await authorise_for(client, "proj-1")
         response = await client.post(SCHEDULES, json=NIGHTLY)
 
     assert response.status_code == 503

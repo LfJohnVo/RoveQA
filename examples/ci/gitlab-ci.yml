@@ -1,0 +1,76 @@
+# Running a RoveQA plan from GitLab CI, with a verdict a machine can act on.
+#
+# Copy into `.gitlab-ci.yml`, or include it from one. The RoveQA installation is assumed
+# to be reachable at `ROVEQA_API_URL`; this pipeline is a client, not a deployment.
+#
+# Three variables, set under Settings → CI/CD → Variables:
+#
+#   ROVEQA_API_URL      where the API is, through your proxy
+#   ROVEQA_PROJECT_ID   the project this repository tests
+#   ROVEQA_TOKEN        issued on the RoveQA host, masked and protected
+#
+# The token is issued once, on the host, and shown once:
+#
+#   docker compose exec api python -m agentic_qa.admin token issue \
+#       --project <id> --label "gitlab"
+#
+# Mark it **Masked** so it cannot appear in a job log, and **Protected** if only default
+# branches should run against the real application. A token reaches its own project and
+# nothing else, so this repository's pipeline cannot touch another team's (ADR 0020).
+
+stages: [qa]
+
+roveqa:
+  stage: qa
+  image: node:22
+  # Not `allow_failure`: the whole point is that this decides the pipeline. A QA stage
+  # that cannot fail is a QA stage nobody reads.
+  variables:
+    # Fail fast and loudly rather than starting a run against whatever the default is.
+    ROVEQA_REQUEST_TIMEOUT_MS: "30000"
+  before_script:
+    - npm install -g roveqa-cli-0.1.0.tgz
+  script:
+    # Exits non-zero when the API is unreachable, the token is refused, or the contracts
+    # disagree — all different from a run that found a defect, and all worth failing on
+    # before anything is started.
+    - roveqa doctor --output json
+
+    - roveqa plan lint qa/plan.json --output json
+
+    # The key is derived from the commit, so a retried job finds its own run instead of
+    # starting a second one against the same application.
+    - |
+      roveqa run create --plan qa/plan.json \
+        --idempotency-key "ci-$CI_COMMIT_SHA" \
+        --output json > created.json
+      RUN_ID="$(node -e 'console.log(require("./created.json").data.run_id)')"
+      echo "RUN_ID=$RUN_ID" >> run.env
+
+    # `set +e` only to capture the code; the adapter re-raises it below. Exit 7 means the
+    # wait expired and the run is still going — never a pass, never a failure. Exit 3
+    # means the token was refused or does not reach this project.
+    - |
+      set +e
+      roveqa run wait "$RUN_ID" --timeout 30m --output json > verdict.json
+      CODE=$?
+      set -e
+      echo "CODE=$CODE" >> run.env
+
+    - |
+      if [ "$CODE" != "0" ]; then
+        roveqa run failure "$RUN_ID" --out bundle --output json || true
+      fi
+
+    # Shipped inside the CLI package, so there is nothing to vendor here. Its one rule:
+    # it never decides the outcome, it exits with the code the CLI gave it.
+    - |
+      ADAPTER="$(dirname "$(readlink -f "$(which roveqa)")")/../examples/verdict-to-junit.mjs"
+      node "$ADAPTER" verdict.json "$CODE" > junit.xml
+  artifacts:
+    when: always
+    paths:
+      - verdict.json
+      - bundle/
+    reports:
+      junit: junit.xml

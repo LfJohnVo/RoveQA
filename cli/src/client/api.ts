@@ -102,6 +102,31 @@ export class ApiClient {
    * running it through JSON parsing would corrupt it. No retries: a partial download
    * is discarded by the caller, which re-materializes the whole bundle.
    */
+  /**
+   * A response that is deliberately not JSON.
+   *
+   * `request` refuses a non-JSON body, and that refusal is the contract: a 2xx that is
+   * not JSON is not a success an agent can act on. A human-readable report is the one
+   * case where text *is* the answer, so it gets its own door rather than a hole in that
+   * one. Bounded the same way, because a report is still a response from a server.
+   */
+  async requestText(path: string, accept: string): Promise<string> {
+    const url = `${this.options.baseUrl.replace(/\/+$/, "")}${path}`;
+    const response = await this.fetchImpl(url, {
+      method: "GET",
+      headers: { Accept: accept, "X-Request-Id": this.options.requestId, ...this.authHeader() },
+      signal: AbortSignal.timeout(this.options.timeoutMs),
+    });
+
+    if (!response.ok) throw await toCliError(response, url);
+
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+      throw new CliError("RESOURCE_UNAVAILABLE", `response exceeds ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    return text;
+  }
+
   async requestBytes(path: string): Promise<Buffer> {
     const url = `${this.options.baseUrl.replace(/\/+$/, "")}${path}`;
     let response: Response;
@@ -171,12 +196,34 @@ const STATUS_CODES: Record<number, ErrorCode> = {
   504: "SERVICE_UNAVAILABLE",
 };
 
+const NEXT_ACTION: Partial<Record<ErrorCode, string>> = {
+  AUTH_REQUIRED:
+    "Set ROVEQA_TOKEN to a token for this project. One is issued on the RoveQA host: " +
+    "`python -m agentic_qa.admin token issue --project <id> --label ci`.",
+  FORBIDDEN:
+    "This token belongs to a different project. Check ROVEQA_PROJECT_ID, or issue a " +
+    "token for the project you meant.",
+};
+/**
+ * What to do about it, for the codes where there is a single right answer.
+ *
+ * Found by running the CI drill: the pipeline went red with `AUTH_REQUIRED` and
+ * `next_action: null`, which is the one field an operator staring at a failed job
+ * actually reads. The envelope has always had the field; these two codes are new enough
+ * that nothing had filled it.
+ *
+ * Only where the answer is unambiguous. A `VALIDATION_ERROR` can mean twenty things, and
+ * a guess printed as guidance is worse than the silence it replaced.
+ */
+
 async function toCliError(response: Response, url: string): Promise<CliError> {
   const body = await readBody(response).catch(() => null);
   const code = STATUS_CODES[response.status] ?? (response.status >= 500 ? "INTERNAL_ERROR" : "VALIDATION_ERROR");
   const detail = extractDetail(body);
+  const nextAction = NEXT_ACTION[code];
   return new CliError(code, `${response.status} from ${url}${detail ? `: ${detail}` : ""}`, {
     details: { status: response.status, body },
+    ...(nextAction === undefined ? {} : { nextAction }),
   });
 }
 

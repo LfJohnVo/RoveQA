@@ -19,7 +19,11 @@ from typing import Any
 from agentic_qa.application.errors import NotFoundError
 from agentic_qa.application.ports.plans import TestPlanRepository
 from agentic_qa.application.ports.repositories import RunRepository
-from agentic_qa.application.ports.results import CriterionResultRepository
+from agentic_qa.application.ports.results import (
+    CriterionResultRepository,
+    ObservedFailureRepository,
+)
+from agentic_qa.domain.qa.observations import ObservedFailure
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionResult
 from agentic_qa.domain.runs.run import Run
@@ -32,6 +36,12 @@ class RunReport:
     run: Run
     plan: TestPlan | None
     results: tuple[CriterionResult, ...]
+    observed: tuple[ObservedFailure, ...] = ()
+    """What the browser saw go wrong, belonging to no criterion.
+
+    A separate field rather than more `results`, because they answer different
+    questions and only one of them can accuse the product. Defaulted so a caller that
+    predates them — a test, a query built for something else — still constructs."""
 
     @property
     def deterministic(self) -> tuple[CriterionResult, ...]:
@@ -51,6 +61,7 @@ async def build_run_report(
     runs: RunRepository,
     plans: TestPlanRepository,
     results: CriterionResultRepository,
+    observed: ObservedFailureRepository,
     *,
     run_id: str,
 ) -> RunReport:
@@ -65,7 +76,12 @@ async def build_run_report(
         if run.plan_id is not None and run.plan_version is not None
         else None
     )
-    return RunReport(run=run, plan=plan, results=tuple(await results.list_for_run(run_id)))
+    return RunReport(
+        run=run,
+        plan=plan,
+        results=tuple(await results.list_for_run(run_id)),
+        observed=tuple(await observed.list_for_run(run_id)),
+    )
 
 
 def to_document(report: RunReport) -> dict[str, Any]:
@@ -89,6 +105,9 @@ def to_document(report: RunReport) -> dict[str, Any]:
         "criteria": [
             {
                 "criterion_id": result.criterion_id,
+                # `plan` or `sweep`. A consumer that wants only what the story asked for
+                # filters on this rather than on the id's shape.
+                "source": result.source.value,
                 "step_id": result.step_id,
                 "outcome": result.outcome.value,
                 "failure_kind": result.failure_kind.value if result.failure_kind else None,
@@ -105,6 +124,18 @@ def to_document(report: RunReport) -> dict[str, Any]:
                 "evidence_refs": list(result.evidence_refs),
             }
             for result in report.results
+        ],
+        # Its own key, never folded into `criteria`. These are things the browser saw,
+        # not answers to anything the plan asked, and nothing here may be read as a
+        # verdict about the application — a console error is worth reporting precisely
+        # when it is strange, which is not the same as being anybody's fault.
+        "observed_failures": [
+            {
+                "kind": failure.kind.value,
+                "detail": failure.detail,
+                "episode_index": failure.episode_index,
+            }
+            for failure in report.observed
         ],
     }
 
@@ -145,6 +176,20 @@ def render_markdown(report: RunReport) -> str:
         lines.append("")
         for result in report.model_derived:
             lines.append(f"- {_status(result)} **{result.criterion_id}** — {result.observation}")
+        lines.append("")
+
+    if report.observed:
+        lines.append("## What the browser saw")
+        lines.append("")
+        lines.append(
+            "Console errors and requests that never completed. Nobody asked about these "
+            "and the browser saw them anyway; **none of them is a verdict** about the "
+            "application."
+        )
+        lines.append("")
+        for failure in report.observed:
+            label = failure.kind.value.replace("_", " ")
+            lines.append(f"- `{label}` {failure.detail}")
         lines.append("")
 
     lines.append("## Defects")

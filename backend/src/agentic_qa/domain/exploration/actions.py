@@ -24,8 +24,12 @@ from agentic_qa.domain.projects.run_policy import RunPolicy
 
 
 def exploration_action(affordance: Affordance) -> BrowserAction:
-    """The safest action that takes this affordance."""
-    if affordance.url:
+    """The safest action that takes this affordance.
+
+    The choice itself lives on `Affordance.reached_by`, so the observation shown to a
+    planner and the action an explorer builds cannot disagree about it.
+    """
+    if affordance.reached_by == "navigate" and affordance.url:
         return BrowserAction(
             type=BrowserActionType.NAVIGATE,
             intent=f"explore {affordance.role} {affordance.name}",
@@ -40,6 +44,28 @@ def exploration_action(affordance: Affordance) -> BrowserAction:
         # what happened has to be looked at first (ADR 0009).
         idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
         verification_strategy="observe the page after the click",
+    )
+
+
+def seed_action(policy: RunPolicy) -> BrowserAction:
+    """The navigation that puts an exploring run in front of the application.
+
+    A browser opens on `about:blank`, which offers nothing, so a crawl seeded from
+    whatever page happens to be loaded maps exactly one state — the blank one — and
+    reports it as a complete map. Nothing in production ever navigated first; the Phase 12
+    gate passed only because the test did it by hand.
+
+    The origin comes from the RunPolicy, which is the same source that already tells the
+    planner where the application is. Using anything else would introduce a second answer
+    to "what are we testing", and the allowlist would refuse whichever one was wrong.
+
+    Read-only by construction: a navigation is in `READ_ONLY_ACTIONS`, so this works under
+    a policy that forbids everything else — which is the policy a public site deserves.
+    """
+    return BrowserAction(
+        type=BrowserActionType.NAVIGATE,
+        intent="open the application",
+        target=ActionTarget(url=policy.allowed_origins[0]),
     )
 
 

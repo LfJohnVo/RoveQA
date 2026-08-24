@@ -8,7 +8,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { defects, unresolved, type Artifact, type Finding } from "@domain/runs/findings";
+import {
+  defects,
+  unresolved,
+  type Artifact,
+  type Finding,
+  type ObservedFailure,
+} from "@domain/runs/findings";
 import { useGateways } from "@viewmodels/gateways-context";
 
 export interface RunReportViewModel {
@@ -17,6 +23,9 @@ export interface RunReportViewModel {
    * could not be verified is a failure of the run, not of what it tested. */
   defects: readonly Finding[];
   unresolved: readonly Finding[];
+  /** What the browser saw go wrong, answering no criterion. Never counted among
+   *  `defects`: a noisy console is not an accusation. */
+  observed: readonly ObservedFailure[];
   artifacts: readonly Artifact[];
   evidenceSetId: string | null;
   isLoading: boolean;
@@ -38,6 +47,7 @@ export function useRunReportViewModel(runId: string, enabled: boolean): RunRepor
     findings,
     defects: defects(findings),
     unresolved: unresolved(findings),
+    observed: query.data?.observed ?? [],
     artifacts: query.data?.artifacts ?? [],
     evidenceSetId: query.data?.evidenceSetId ?? null,
     isLoading: enabled && query.isPending,

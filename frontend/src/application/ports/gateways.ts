@@ -11,8 +11,10 @@
  * message naming the field.
  */
 
+import type { Environment, EnvironmentSession } from "@domain/projects/session";
 import type { Project } from "@domain/projects/project";
 import type { ConnectionState } from "@domain/runs/connection";
+import type { ExplorationMap } from "@domain/runs/exploration";
 import type { Run } from "@domain/runs/run";
 import type { MemoryStatus } from "@domain/knowledge/memory";
 import type { AcceptanceCriterion, UserStory } from "@domain/qa/story";
@@ -63,10 +65,29 @@ export interface StartRunInput {
   planId?: string;
   planVersion?: string;
   environmentId?: string;
+  /**
+   * Walk the site instead of following a plan step by step.
+   *
+   * Not exclusive with a plan: a run may carry a story, a traversal, or both, and the
+   * third shape is the useful one — a crawl that also credits the story's criteria as it
+   * walks past them (ADR 0017). Named `explore` rather than `mode` for that reason: a
+   * mode would be one of three, and this is one of two independent things a run does.
+   */
+  explore?: boolean;
 }
+
 
 export interface RunGateway {
   get(runId: string): Promise<Run>;
+
+  /**
+   * One project's runs, newest first.
+   *
+   * Without it the console could only show a run it had started itself, in this tab, in
+   * this session — every run from a schedule, the CLI or yesterday was unreachable
+   * even though its report was sitting in the database.
+   */
+  listForProject(projectId: string, limit: number): Promise<Run[]>;
 
   /**
    * Durable events from `after` onward.
@@ -83,9 +104,27 @@ export interface RunGateway {
   report(runId: string): Promise<RunReport>;
 
   start(input: StartRunInput): Promise<Run>;
+
+  /** What a traversal mapped. Absent for a run that never explored, which is a
+   *  fact about the run rather than a failure to read it. */
+  exploration(runId: string): Promise<ExplorationMap | null>;
   pause(runId: string): Promise<void>;
   resume(runId: string): Promise<void>;
   cancel(runId: string): Promise<void>;
+}
+
+export interface SessionGateway {
+  /** The environments of a project. A handful, so unbounded. */
+  environments(projectId: string): Promise<Environment[]>;
+
+  /** Sessions on record for an environment, newest first — records only, never their
+   *  contents. There is no `get`: a stored session has no read path anywhere in the
+   *  system, and adding one here would need one behind it (ADR 0019). */
+  sessions(environmentId: string): Promise<EnvironmentSession[]>;
+
+  /** Destroy a session's key. The record stays as the audit trail; what makes the
+   *  session unusable is the absence of a key the database never held. */
+  revoke(environmentId: string, sessionId: string): Promise<void>;
 }
 
 export interface RunSubscription {

@@ -7,7 +7,7 @@
  */
 
 import { QueryClient } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -22,6 +22,7 @@ import {
   FakeProjectGateway,
   FakeRunEventStream,
   FakeRunGateway,
+  FakeSessionGateway,
   makeEvent,
   FakeStoryGateway,
   makeRun,
@@ -39,12 +40,21 @@ function renderRun(gateways: Gateways, runId = "run-1") {
 }
 
 function gatewaysWith(runs: FakeRunGateway, events: FakeRunEventStream): Gateways {
-  return { projects: new FakeProjectGateway(), runs, events, memory: new FakeMemoryGateway(), stories: new FakeStoryGateway() };
+  return {
+    projects: new FakeProjectGateway(),
+    runs,
+    events,
+    memory: new FakeMemoryGateway(),
+    stories: new FakeStoryGateway(),
+    sessions: new FakeSessionGateway(),
+  };
 }
 
 function timelineRows(): HTMLElement[] {
-  const timeline = document.querySelector(".timeline");
-  return timeline === null ? [] : Array.from(timeline.querySelectorAll(".timeline__row"));
+  // By role and accessible name rather than by class: a query tied to `.timeline__row`
+  // breaks the moment the timeline is restyled, which says nothing about the timeline.
+  const timeline = screen.queryByRole("table", { name: "Timeline" });
+  return timeline === null ? [] : within(timeline).getAllByRole("row").slice(1);
 }
 
 describe("a reload rebuilds the run from the durable log", () => {
@@ -158,6 +168,7 @@ describe("projects", () => {
       events: new FakeRunEventStream(),
       memory: new FakeMemoryGateway(),
       stories: new FakeStoryGateway(),
+      sessions: new FakeSessionGateway(),
     };
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -180,6 +191,7 @@ describe("projects", () => {
       events: new FakeRunEventStream(),
       memory: new FakeMemoryGateway(),
       stories: new FakeStoryGateway(),
+      sessions: new FakeSessionGateway(),
     };
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -242,12 +254,19 @@ describe("the screen follows the run's real status", () => {
 describe("findings keep observations and hypotheses apart", () => {
   function withReport(findings: Finding[]) {
     const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "failed" }));
-    runs.reportValue = { runId: "run-1", findings, artifacts: [], evidenceSetId: "ev-1" };
+    runs.reportValue = {
+      runId: "run-1",
+      findings,
+      observed: [],
+      artifacts: [],
+      evidenceSetId: "ev-1",
+    };
     renderRun(gatewaysWith(runs, new FakeRunEventStream()));
   }
 
   const base: Finding = {
     criterionId: "ac-checkout",
+    source: "plan",
     stepId: "step-1",
     outcome: "not_met",
     failureKind: "product",
@@ -309,5 +328,129 @@ describe("findings keep observations and hypotheses apart", () => {
 
     await screen.findByText("running");
     expect(screen.queryByText("Findings")).not.toBeInTheDocument();
+  });
+});
+
+describe("what the browser saw is not what the run concluded", () => {
+  it("shows console errors and failed requests in their own section", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.reportValue = {
+      runId: "run-1",
+      findings: [],
+      observed: [
+        { kind: "console_error", detail: "TypeError: x is not a function", episodeIndex: 0 },
+        { kind: "failed_request", detail: "https://cdn.test/logo.png", episodeIndex: 1 },
+      ],
+      artifacts: [],
+      evidenceSetId: "ev-1",
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    const table = await screen.findByRole("table", { name: "What the browser saw" });
+    expect(within(table).getByText("TypeError: x is not a function")).toBeInTheDocument();
+    expect(within(table).getByText("https://cdn.test/logo.png")).toBeInTheDocument();
+  });
+
+  it("says out loud that none of them is a verdict", async () => {
+    // A reader who takes a noisy console for a failing test is a reader who stops
+    // trusting the report — in either direction.
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.reportValue = {
+      runId: "run-1",
+      findings: [],
+      observed: [{ kind: "console_error", detail: "boom", episodeIndex: 0 }],
+      artifacts: [],
+      evidenceSetId: null,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    expect(await screen.findByText(/none of them is a verdict/)).toBeInTheDocument();
+    // The run still reads as passed. An observation cannot change that.
+    expect(screen.getByText("passed")).toBeInTheDocument();
+  });
+
+  it("shows nothing at all when the browser saw nothing", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    await screen.findByText("passed");
+    expect(screen.queryByRole("table", { name: "What the browser saw" })).toBeNull();
+  });
+});
+
+describe("a traversal shows what it mapped", () => {
+  it("draws the states it reached", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.explorationValue = {
+      runId: "run-1",
+      states: [
+        { signature: "s1", route: "/", url: "https://app.test/", title: "Home", affordances: [] },
+        {
+          signature: "s2",
+          route: "/about",
+          url: "https://app.test/about",
+          title: "About",
+          affordances: ["link:home"],
+        },
+      ],
+      stopReason: "frontier_exhausted",
+      complete: true,
+      statesDiscovered: 2,
+      actionsTaken: 2,
+      declined: 0,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    const map = await screen.findByRole("img", { name: /Map of 2 states/ });
+    expect(within(map).getByText("/about")).toBeInTheDocument();
+  });
+
+  it("says when the map has holes rather than letting it read as complete", async () => {
+    // A map that stopped on a budget and one that ran out of places to go look identical.
+    // Only the second supports "this page is gone" next time.
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.explorationValue = {
+      runId: "run-1",
+      states: [
+        { signature: "s1", route: "/", url: "https://app.test/", title: "Home", affordances: [] },
+      ],
+      stopReason: "max_actions",
+      complete: false,
+      statesDiscovered: 1,
+      actionsTaken: 6,
+      declined: 3,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    expect(await screen.findByText(/what it reached rather than everything/)).toBeInTheDocument();
+    expect(screen.getByText(/3 controls left alone/)).toBeInTheDocument();
+  });
+
+  it("shows nothing at all for a run that never explored", async () => {
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    await screen.findByText("passed");
+    expect(screen.queryByRole("img", { name: /Map of/ })).toBeNull();
+  });
+});
+
+describe("a healthy run does not look broken", () => {
+  it("does not raise an alert because there is no failure to bundle", async () => {
+    // A run that passed has no failure context, and the server says so with a 404. That
+    // put a red alert on every healthy run's page: the screen crying wolf about the
+    // absence of a problem. Seen on a real report before anyone reported it.
+    const runs = new FakeRunGateway(makeRun({ status: "completed", verdict: "passed" }));
+    runs.reportValue = {
+      runId: "run-1",
+      findings: [],
+      observed: [],
+      artifacts: [],
+      evidenceSetId: null,
+    };
+    renderRun(gatewaysWith(runs, new FakeRunEventStream()));
+
+    await screen.findByText("passed");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

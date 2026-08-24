@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { NavLink, Navigate, Route, Routes } from "react-router";
+import { Navigate, Route, Routes } from "react-router";
 
 import { GatewaysProvider } from "@viewmodels/gateways-context";
+import { AppShell } from "@views/components/app-shell";
 import type { Gateways } from "@viewmodels/gateways";
+import { Notice } from "@views/components/ui";
 import { MemoryPage } from "@views/pages/memory-page";
 import { ProjectPage } from "@views/pages/project-page";
 import { ProjectsPage } from "@views/pages/projects-page";
@@ -10,8 +12,7 @@ import { RunPage } from "@views/pages/run-page";
 import { StartRunPage } from "@views/pages/start-run-page";
 import { StoriesPage } from "@views/pages/stories-page";
 
-import "@views/styles/tokens.css";
-import "@views/styles/app.css";
+import "@views/styles/theme.css";
 
 /**
  * The app shell.
@@ -32,26 +33,18 @@ export function App({
   return (
     <QueryClientProvider client={client}>
       <GatewaysProvider {...(gateways === undefined ? {} : { gateways })}>
-        <div className="app">
-          <header className="app__bar">
-            <h1 className="app__brand">RoveQA</h1>
-            <nav className="app__nav">
-              <NavLink to="/projects">Projects</NavLink>
-            </nav>
-          </header>
-          <main className="app__main">
-            <Routes>
-              <Route path="/" element={<Navigate to="/projects" replace />} />
-              <Route path="/projects" element={<ProjectsPage />} />
-              <Route path="/projects/:projectId" element={<ProjectPage />} />
-              <Route path="/projects/:projectId/runs/new" element={<StartRunPage />} />
-              <Route path="/projects/:projectId/memory" element={<MemoryPage />} />
-              <Route path="/projects/:projectId/stories" element={<StoriesPage />} />
-              <Route path="/runs/:runId" element={<RunPage />} />
-              <Route path="*" element={<p className="notice">No such page.</p>} />
-            </Routes>
-          </main>
-        </div>
+        <AppShell>
+          <Routes>
+            <Route path="/" element={<Navigate to="/projects" replace />} />
+            <Route path="/projects" element={<ProjectsPage />} />
+            <Route path="/projects/:projectId" element={<ProjectPage />} />
+            <Route path="/projects/:projectId/runs/new" element={<StartRunPage />} />
+            <Route path="/projects/:projectId/memory" element={<MemoryPage />} />
+            <Route path="/projects/:projectId/stories" element={<StoriesPage />} />
+            <Route path="/runs/:runId" element={<RunPage />} />
+            <Route path="*" element={<Notice>No such page.</Notice>} />
+          </Routes>
+        </AppShell>
       </GatewaysProvider>
     </QueryClientProvider>
   );

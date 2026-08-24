@@ -26,9 +26,9 @@ from agentic_qa.bootstrap.container import Container
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.qa.verification import CriterionOutcome, CriterionResult, FailureKind
 from agentic_qa.domain.runs.run import Run, RunStatus, Verdict
-from agentic_qa.interfaces.http.app import create_app
 from tests.fakes.repositories import InMemoryStore
 from tests.fakes.unit_of_work import InMemoryUnitOfWork
+from tests.http.test_api_contract import asgi_client, authorise_for
 
 NOW = datetime(2026, 8, 20, 9, 0, tzinfo=UTC)
 CLUSTERS = "/api/v1/projects/proj-1/failure-clusters"
@@ -79,8 +79,8 @@ async def store() -> InMemoryStore:
 @pytest.fixture
 async def client(store: InMemoryStore) -> AsyncIterator[httpx.AsyncClient]:
     container = Container(unit_of_work=lambda: InMemoryUnitOfWork(store))
-    transport = httpx.ASGITransport(app=create_app(container), raise_app_exceptions=True)
-    async with httpx.AsyncClient(transport=transport, base_url="http://api") as client:
+    async with asgi_client(container) as client:
+        await authorise_for(client, "proj-1")
         yield client
 
 

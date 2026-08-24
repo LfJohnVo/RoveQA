@@ -26,7 +26,11 @@ from agentic_qa.application.ports.repositories import (
     RunRepository,
     StoryRepository,
 )
-from agentic_qa.application.ports.results import CriterionResultRepository
+from agentic_qa.application.ports.results import (
+    CriterionResultRepository,
+    ObservedFailureRepository,
+)
+from agentic_qa.application.ports.sessions import ApiTokenRepository, SessionRepository
 from agentic_qa.application.ports.triage import FailureClusterRepository
 
 
@@ -53,6 +57,12 @@ class UnitOfWork(Protocol):
     def environments(self) -> EnvironmentRepository: ...
 
     @property
+    def sessions(self) -> SessionRepository: ...
+
+    @property
+    def api_tokens(self) -> ApiTokenRepository: ...
+
+    @property
     def recovery_points(self) -> RecoveryPointRepository: ...
 
     @property
@@ -60,6 +70,9 @@ class UnitOfWork(Protocol):
 
     @property
     def criterion_results(self) -> CriterionResultRepository: ...
+
+    @property
+    def observed_failures(self) -> ObservedFailureRepository: ...
 
     @property
     def failure_clusters(self) -> FailureClusterRepository: ...

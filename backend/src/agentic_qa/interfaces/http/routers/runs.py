@@ -5,9 +5,10 @@ the commit point live in the use case (ADR 0010), and status is only ever writte
 the workflow's activities — never here.
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Header, Query, Response, status
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from agentic_qa.application.commands.start_run import StartRunCommand, start_run
 from agentic_qa.application.errors import NotFoundError
@@ -17,7 +18,11 @@ from agentic_qa.application.ports.events import (
 )
 from agentic_qa.application.queries.failure_context import load_failure_context, to_manifest
 from agentic_qa.application.queries.list_run_events import list_run_events
-from agentic_qa.application.queries.run_report import build_run_report, to_document
+from agentic_qa.application.queries.run_report import (
+    build_run_report,
+    render_markdown,
+    to_document,
+)
 from agentic_qa.interfaces.http.dependencies import (
     EventPublisherDep,
     IdempotencyKeyDep,
@@ -34,6 +39,29 @@ from agentic_qa.interfaces.http.schemas import (
 )
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
+
+by_project = APIRouter(prefix="/api/v1/projects", tags=["runs"])
+"""One project's runs. A second router only because the path hangs off the project, and
+the runs of a project are a runs concern rather than a projects one."""
+
+DEFAULT_RUN_PAGE_SIZE = 50
+MAX_RUN_PAGE_SIZE = 200
+
+
+@by_project.get("/{project_id}/runs", response_model=list[RunResponse])
+async def list_project_runs(
+    project_id: str,
+    uow: UnitOfWorkDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_RUN_PAGE_SIZE)] = DEFAULT_RUN_PAGE_SIZE,
+) -> list[RunResponse]:
+    """One project's runs, newest first.
+
+    Until this existed a finished run was reachable only by its id, which meant the
+    console could show a run it had just started and nothing else: every run from an
+    earlier session, a schedule or the CLI was invisible to it.
+    """
+    runs = await uow.runs.list_for_project(project_id, limit=limit)
+    return [RunResponse.from_domain(run) for run in runs]
 
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
@@ -146,10 +174,22 @@ async def cancel_run(
 
 
 @router.get("/{run_id}/report")
-async def read_run_report(run_id: str, uow: UnitOfWorkDep) -> dict[str, Any]:
-    """The run's report, built from durable rows rather than from a model transcript."""
-    report = await build_run_report(uow.runs, uow.plans, uow.criterion_results, run_id=run_id)
-    return to_document(report)
+async def read_run_report(
+    run_id: str, uow: UnitOfWorkDep, accept: Annotated[str, Header()] = "application/json"
+) -> Response:
+    """The run's report, built from durable rows rather than from a model transcript.
+
+    Two renderings of one answer, negotiated rather than given two URLs: they are the same
+    report and a second path would be a second thing to keep in step. The JSON document is
+    the versioned contract; the markdown is for a person, and it existed as an unreachable
+    function for two phases — written, exported, and called by nothing.
+    """
+    report = await build_run_report(
+        uow.runs, uow.plans, uow.criterion_results, uow.observed_failures, run_id=run_id
+    )
+    if "text/markdown" in accept:
+        return PlainTextResponse(render_markdown(report), media_type="text/markdown")
+    return JSONResponse(to_document(report))
 
 
 @router.get("/{run_id}/failure-context")

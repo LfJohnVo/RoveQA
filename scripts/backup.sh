@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Back up the two things that cannot be rebuilt: PostgreSQL and the evidence bytes.
 #
-# What is deliberately *not* here is as important as what is. FalkorDB holds a
+# What is deliberately *not* here is as important as what is.
+#
+# The session keyring is the sharpest case and the one with a gate behind it. Revoking an
+# authenticated session destroys its key, and that has to survive a restore — so the keys
+# must live somewhere a `pg_restore` cannot reach. Including them here would defeat the
+# whole design: restoring last month's backup would hand back a session somebody revoked
+# on purpose. The cost is that a restore cannot bring live sessions back either, and
+# re-provisioning them is a documented step rather than a surprise (ADR 0019). FalkorDB holds a
 # projection of knowledge that PostgreSQL already owns (ADR 0008), so backing it up
 # would create a second copy free to disagree with the first; after a restore it is
 # rebuilt, and `scripts/restore.sh` says so. Temporal keeps its own state in its own
@@ -59,7 +66,10 @@ taken_at   $(date -u +%Y-%m-%dT%H:%M:%SZ)
 database   $POSTGRES_DB
 revision   $(cat "$DESTINATION/alembic-revision.txt")
 contents   postgres.dump, artifacts.tar.gz
-excluded   falkordb (rebuildable from postgres), temporal (own store), redis (ephemeral)
+excluded   falkordb (rebuildable from postgres), temporal (own store), redis (ephemeral),
+           session keyring (deliberately: see below)
+sessions   NOT in this backup. Restoring it will not bring authenticated sessions
+           back, and will not resurrect a revoked one either. Re-provision them.
 MANIFEST
 
 echo

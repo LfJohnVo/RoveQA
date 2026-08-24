@@ -28,6 +28,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import BrowserGateway, UnperformableActionError
+from agentic_qa.application.ports.episodes import ActionRecord
 from agentic_qa.application.ports.models import ModelGateway, PlanCriterion, PlanningRequest
 from agentic_qa.application.services.criterion_verification import (
     verify_criteria as verify_plan_criteria,
@@ -40,11 +41,20 @@ from agentic_qa.domain.agent.state import (
     StepRecord,
 )
 from agentic_qa.domain.browser.actions import (
+    NEEDS_TARGET,
+    ActionTarget,
     BrowserAction,
     BrowserActionType,
+    IdempotencyStrategy,
+)
+from agentic_qa.domain.browser.consent import (
+    ConsentPolicy,
+    consent_choice,
+    looks_like_consent,
 )
 from agentic_qa.domain.browser.evidence import EvidenceRef
-from agentic_qa.domain.exploration.actions import exploration_action, is_takeable
+from agentic_qa.domain.browser.policy_guard import evaluate_action
+from agentic_qa.domain.exploration.actions import exploration_action, is_takeable, seed_action
 from agentic_qa.domain.exploration.frontier import (
     ExplorationBudget,
     ExplorationReport,
@@ -53,10 +63,14 @@ from agentic_qa.domain.exploration.frontier import (
     StopReason,
     stop_reason,
 )
+from agentic_qa.domain.exploration.state import PageState
 from agentic_qa.domain.knowledge.memory_context import MemoryItem
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.qa.page_checks import check_page, is_checkable
 from agentic_qa.domain.qa.test_plan import PlanStep
+from agentic_qa.domain.qa.text_match import TextMatch, find_text
 from agentic_qa.domain.qa.verification import (
+    CriterionOutcome,
     CriterionResult,
     FailureKind,
     failure_kind_for_action,
@@ -80,6 +94,39 @@ class GraphState(TypedDict, total=False):
     """The planner proposed an action the domain refused. Distinguished from a policy
     denial because it *should* be retried: the planner can correct a missing target
     once it is told, while a policy refusal will refuse the same action again."""
+
+    last_page: PageState | None
+    """The page the last observation described.
+
+    Kept so a refusal can name the alternative the page offers. The domain guard cannot
+    do this -- it decides on the action alone, which is what makes it testable without a
+    browser -- and the graph is the layer that has both.
+    """
+
+    failed_targets: tuple[str, ...]
+    """Locators the browser could not act on this episode, in the order they were tried.
+
+    Fed back to the planner. Kept in the graph state rather than derived from
+    `action_log` at planning time because the log is a record of what happened and this
+    is an input to what happens next; deriving one from the other would tie the planner's
+    context to the shape of the audit trail.
+    """
+
+    action_log: tuple[ActionRecord, ...]
+    """What the agent did, in order, for the durable log.
+
+    Separate from `agent.recent_steps`, which is a *window* the planner reads and is
+    deliberately small. This one is the whole run: an operator diagnosing a stuck run needs
+    the step that went wrong, not the last twelve.
+    """
+
+    page_checks: dict[str, CriterionResult]
+    """One universal check per route this run observed, keyed by criterion id.
+
+    Keyed rather than appended so a route visited twice is one finding, and so the worse
+    answer wins: a page that answered 500 once and 200 later is a page that answered 500
+    (ADR 0017).
+    """
 
     criteria_seen: dict[str, str]
     """Criteria whose literal has already been seen on a page this run visited, and
@@ -117,6 +164,12 @@ class GraphState(TypedDict, total=False):
     exploration is exactly the long run that must survive a worker dying — and a
     frontier that came back without its `offered` set could walk a two-page cycle
     forever, having survived the crash and lost the guarantee."""
+
+    consent_answered: bool
+    """Whether this episode already answered a consent overlay.
+
+    Once and only once. A banner that reappears is a site refusing the answer, and
+    pressing again would be a second consent signal nobody gave."""
 
     exploration_depth: int
     """Depth of the affordance most recently taken, so the page it leads to is recorded
@@ -179,9 +232,161 @@ def build_agent_graph(
         for criterion_id, expected in (hints or {}).items():
             if criterion_id in found or not expected:
                 continue
-            if expected in visible:
-                found[criterion_id] = f"step {step} at {url}"
+            match = find_text(expected, visible)
+            if match is None:
+                continue
+            # How it matched travels with where, because a normalized match is a weaker
+            # claim than an exact one and the report must not present them as the same.
+            qualifier = "" if match is TextMatch.EXACT else " (ignoring case and line breaks)"
+            found[criterion_id] = f"step {step} at {url}{qualifier}"
         return found
+
+    def _consent_refusal(state: GraphState, action: BrowserAction) -> str | None:
+        """Why this run may not press this control, when the control answers a banner.
+
+        Both facts are needed and only the graph has both: the domain guard decides on an
+        action alone — which is what lets it be tested without a browser — and it cannot
+        know the page is a consent overlay.
+
+        Deliberately narrow. It refuses a press on a control whose label answers consent,
+        on a page that is asking about consent, under a policy that said not to. A button
+        called "Accept" on a checkout is not this, and must not be caught by it.
+        """
+        if policy is None or policy.consent is not ConsentPolicy.LEAVE:
+            return None
+        if action.type is not BrowserActionType.CLICK:
+            return None
+
+        page = state.get("last_page")
+        if page is None or not looks_like_consent(page.visible_text):
+            return None
+
+        named = tuple(a for a in page.affordances if a.name == action.target.name)
+        if not named or consent_choice(named, ConsentPolicy.ACCEPT) is None:
+            return None
+
+        return (
+            f"this run may not answer a consent overlay: pressing {action.target.name!r} "
+            "would record a consent decision nobody made. Set the policy's consent field "
+            "to reject or accept if that is intended."
+        )
+
+    def _consent_action(state: GraphState, page: PageState) -> BrowserAction | None:
+        """The one control a consent overlay offers that this run may press, if any.
+
+        Once per episode. A banner that reappears after being answered is a site refusing
+        the answer, and pressing again would be an agent arguing with it — which is both
+        futile and a second consent signal nobody gave.
+        """
+        if policy is None or state.get("consent_answered", False):
+            return None
+        if not looks_like_consent(page.visible_text):
+            return None
+
+        choice = consent_choice(page.affordances, policy.consent)
+        if choice is None:
+            return None
+
+        return BrowserAction(
+            type=BrowserActionType.CLICK,
+            intent=f"answer the consent overlay: {choice.name}",
+            target=ActionTarget(role=choice.role, name=choice.name),
+            side_effect=True,
+            idempotency_strategy=IdempotencyStrategy.VERIFY_BEFORE_RETRY,
+            verification_strategy="observe whether the overlay is gone",
+            answers_consent=True,
+        )
+
+    def _page_checks(
+        already: dict[str, CriterionResult] | None, page: PageState
+    ) -> dict[str, CriterionResult]:
+        """The universal checks for this page, folded into what earlier pages produced.
+
+        `exploring` answers the question `check_page` cannot: a crawl only ever takes
+        affordances the site published, so a 404 there is the site's own broken link. A
+        planned run can reach a url a model invented, where the same status accuses
+        nobody (ADR 0015).
+
+        A route already checked keeps the worse answer. Two visits to a page that failed
+        once and worked once is not a healthy page, and last-write-wins would decide it
+        by the order the crawl happened to take.
+        """
+        checks = dict(already or {})
+        if not is_checkable(page):
+            return checks
+        result = check_page(page, reached_from_published_link=exploring)
+        existing = checks.get(result.criterion_id)
+        if existing is None or _severity(result) > _severity(existing):
+            checks[result.criterion_id] = result
+        return checks
+
+    def _severity(result: CriterionResult) -> int:
+        if result.outcome is CriterionOutcome.NOT_MET:
+            return 2
+        if result.outcome is CriterionOutcome.UNVERIFIED:
+            return 1
+        return 0
+
+    def _allowed_alternative(state: GraphState, action: BrowserAction) -> BrowserAction | None:
+        """The action this policy *does* allow for the element the refused one named.
+
+        Verified with the same guard that refused the original, never assumed: telling a
+        planner an alternative is permitted and being wrong would be worse than saying
+        nothing. Only the element the model itself named is considered — nothing is
+        inferred about what it was really trying to do.
+        """
+        named = (action.target.name or action.target.text or "").strip().lower()
+        page = state.get("last_page")
+        if not named or page is None or policy is None:
+            return None
+        for affordance in page.affordances:
+            if affordance.name.strip().lower() != named:
+                continue
+            candidate = exploration_action(affordance)
+            if candidate.type is action.type:
+                return None
+            if evaluate_action(candidate, policy).allowed:
+                return candidate
+        return None
+
+    def _logged(
+        state: GraphState,
+        action: BrowserAction,
+        succeeded: bool,
+        *,
+        detail: str = "",
+        url: str | None = None,
+        http_status: int | None = None,
+    ) -> tuple[ActionRecord, ...]:
+        """Append one record. Appending rather than replacing is what makes it a trace."""
+        so_far = state.get("action_log", ())
+        return (
+            *so_far,
+            ActionRecord(
+                index=len(so_far) + 1,
+                action=action.type.value,
+                intent=action.intent,
+                succeeded=succeeded,
+                url=url,
+                http_status=http_status,
+                detail=detail,
+            ),
+        )
+
+    def _unreachable(state: GraphState, action: BrowserAction) -> tuple[str, ...]:
+        """Remember a locator the browser could not act on, so the planner is told once.
+
+        Only actions the domain requires a target for: `navigate` failing is usually a
+        slow or momentarily unhappy site, and warning a planner off a url it should
+        retry would trade one wasted step for a stuck run.
+        """
+        so_far = state.get("failed_targets", ())
+        if action.type not in NEEDS_TARGET or action.target.is_empty():
+            return so_far
+        described = action.target.describe()
+        # Ordered dedup: the same target failing twice is one warning, and the order the
+        # run tried them in is the order they are worth reading.
+        return so_far if described in so_far else (*so_far, described)
 
     exploring = exploration_budget is not None
     started = now()
@@ -198,6 +403,31 @@ def build_agent_graph(
         for step in assertions
         if step.criterion_id
     )
+    settleable = {
+        criterion.criterion_id for criterion in planner_criteria if criterion.expected_text
+    }
+    """Criteria a substring can answer. The rest need a model to judge and cannot be
+    called met without asking it, so their presence is what makes a story unfinishable
+    without the planner saying so."""
+
+    all_settleable = bool(planner_criteria) and len(settleable) == len(planner_criteria)
+
+    def story_is_done(state: GraphState) -> bool:
+        """Every criterion this run is judged by has been seen, so there is nothing left.
+
+        Measured on `after-a-form`: the record was created and the confirmation asserted
+        at action 5, and the planner then asserted the same text twenty more times until
+        the action budget ran out — twenty model calls and twenty actions after the
+        answer was already in hand. `criteria_seen` knew; nothing acted on it.
+
+        Deliberately not applied while exploring. There the story is a layer over a
+        crawl (ADR 0017) and the crawl's own job — does every reachable page load — is
+        not finished just because the story's criteria turned up early.
+        """
+        if exploring or not all_settleable:
+            return False
+        return settleable <= set(state.get("criteria_seen") or {})
+
     # Asked before an affordance enters the frontier, not after it is attempted: a
     # denied action ends an episode by design, so a read-only exploration that queued
     # buttons would stop at the first one instead of mapping the application.
@@ -234,9 +464,11 @@ def build_agent_graph(
         return {
             "agent": agent,
             "safe_point": None,
+            "last_page": page,
             "criteria_seen": _sightings(
                 state.get("criteria_seen"), page.visible_text, page.url, agent.step_index
             ),
+            "page_checks": _page_checks(state.get("page_checks"), page),
         }
 
     async def plan(state: GraphState) -> GraphState:
@@ -264,6 +496,10 @@ def build_agent_graph(
                 # The policy is what knows the application's address. Withholding it
                 # left the planner guessing at URLs the same policy then refused.
                 allowed_origins=policy.allowed_origins if policy is not None else (),
+                # What has already been tried and did not work. Measured: without
+                # it a planner spent three of its actions, and thirty seconds, on
+                # one field that was never there.
+                failed_targets=state.get("failed_targets", ()),
                 # What this run is judged by. Constant for the episode, like memory.
                 criteria=planner_criteria,
                 # Constant for the episode: it was resolved once, before the graph
@@ -331,15 +567,62 @@ def build_agent_graph(
         """
         assert exploration_budget is not None  # `exploring` gates this node
         agent = state["agent"]
+
+        # A browser opens on `about:blank`, and nothing in production ever navigated away
+        # from it: a crawl described the blank page, found nothing to do, and reported a
+        # *complete* map of one state. The Phase 12 gate passed only because the test
+        # called `page.goto` itself before building the graph.
+        #
+        # Two facts decide whether to seed, and both are needed:
+        #
+        #   `exploration is None`   nothing has been described yet, so we are not mid-crawl
+        #                           and a resumed run never starts over.
+        #   last action failed      the seed did not land, so we are still on the blank
+        #                           page. Falling through here would describe it and call
+        #                           the map complete — the exact lie this exists to stop.
+        #
+        # The first entry has no last action, which reads as "not succeeded", so it seeds.
+        # A failed seed simply seeds again, bounded by Recover, which classifies a
+        # navigation that will not complete as `environment` and ends the run `blocked`.
+        if (
+            state.get("exploration") is None
+            and policy is not None
+            and not state.get("last_outcome_succeeded", False)
+        ):
+            # Through `act`, so it passes the guarded browser and counts against the
+            # action budget like every other step. A seed exempt from the allowlist would
+            # be the one navigation the policy does not govern.
+            logger.info("run %s seeding exploration at %s", agent.run_id, policy.allowed_origins[0])
+            return {
+                "agent": agent,
+                "pending_action": seed_action(policy),
+                "safe_point": None,
+            }
+
         frontier = Frontier.from_snapshot(
             exploration_budget, state.get("exploration"), takeable=takeable
         )
 
         page = await browser.describe_page()
         agent.last_observation = page.url or "about:blank"
+
+        overlay = _consent_action(state, page)
+        if overlay is not None:
+            # Through `act`, like everything else: counted, policy-checked, and published
+            # as an event. An agent that quietly clicked things while observing would be
+            # one whose trace does not explain what it did to somebody else's site.
+            logger.info("run %s answering a consent overlay: %s", agent.run_id, overlay.intent)
+            return {
+                "agent": agent,
+                "pending_action": overlay,
+                "consent_answered": True,
+                "last_page": page,
+                "safe_point": None,
+            }
         # An exploring episode observes too, and a criterion satisfied on a page the crawl
         # passed through is as real as one satisfied on the page it stopped at.
         seen = _sightings(state.get("criteria_seen"), page.visible_text, page.url, agent.step_index)
+        checks = _page_checks(state.get("page_checks"), page)
         discovered = frontier.record(page, depth=state.get("exploration_depth", 0))
         if discovered:
             logger.info(
@@ -362,6 +645,8 @@ def build_agent_graph(
                 "agent": agent,
                 "pending_action": None,
                 "criteria_seen": seen,
+                "page_checks": checks,
+                "last_page": page,
                 "exploration": frontier.snapshot(),
                 "exploration_report": frontier.report(reason),
                 "safe_point": None,
@@ -371,11 +656,35 @@ def build_agent_graph(
             }
 
         entry = frontier.take()
-        assert entry is not None  # `frontier_size == 0` is a stop reason
+        if entry is None:
+            # A non-empty frontier can still have nothing worth doing: every entry left
+            # points at a page already mapped, and `take` drops those rather than
+            # spending an action on them. That is the same outcome as an empty frontier
+            # — everything reachable was reached — so it is reported the same way.
+            agent.goal_reached = True
+            logger.info("run %s stopped exploring: frontier_exhausted", agent.run_id)
+            return {
+                "agent": agent,
+                "pending_action": None,
+                "criteria_seen": seen,
+                "page_checks": checks,
+                "last_page": page,
+                "exploration": frontier.snapshot(),
+                "exploration_report": frontier.report(StopReason.FRONTIER_EXHAUSTED),
+                "safe_point": None,
+                "failure_kind": None,
+            }
         return {
             "agent": agent,
             "pending_action": exploration_action(entry.affordance),
             "criteria_seen": seen,
+            "page_checks": checks,
+            # Carried so `act` can refuse a click the consent policy forbids. Only the
+            # observe node set this, so an exploring run left the guard blind — and a run
+            # under `leave` pressed "Accept additional cookies" on gov.uk. Found by
+            # running it, not by the unit tests, which asserted the pieces and never the
+            # composition.
+            "last_page": page,
             "exploration": frontier.snapshot(),
             "exploration_depth": entry.depth,
             "safe_point": None,
@@ -390,6 +699,21 @@ def build_agent_graph(
                 # would throw it away one node before Recover reads it.
                 return {}
             return {"last_outcome_succeeded": True, "last_detail": "", "last_denied": False}
+        refusal = _consent_refusal(state, action)
+        if refusal is not None:
+            # Enforced here rather than in the explore node, because `act` is the one
+            # place every action passes through. A planner is free to propose a click on
+            # "Accept all cookies" like any other button, and without this the consent
+            # policy would govern the crawl and be advice everywhere else.
+            logger.warning("run %s refused a consent click: %s", state["agent"].run_id, refusal)
+            return {
+                "actions_taken": state.get("actions_taken", 0) + 1,
+                "last_outcome_succeeded": False,
+                "last_detail": refusal,
+                "last_denied": True,
+                "last_action_type": action.type,
+            }
+
         # Counted before the attempt, not after it succeeds: an action the page refused
         # still cost the run a turn, and a budget that only counted successes would let
         # a failing loop run forever.
@@ -397,6 +721,29 @@ def build_agent_graph(
         try:
             outcome = await browser.execute(action)
         except ActionDeniedError as denied:
+            # A refusal that does not carry the correction is a refusal the planner
+            # cannot act on. The trace showed exactly this: intent
+            # "navigate_to_records_page", action `click`, denied with "click has side
+            # effects" -- the planner already knew where it wanted to go and was told
+            # only that it could not go that way.
+            #
+            # The alternative is on the page, and the graph is holding the page. Naming
+            # it changes the feedback, never the action: `recover` puts this sentence in
+            # the next prompt, and the planner decides again.
+            # A refusal that does not carry the correction is a refusal the planner
+            # cannot act on. The trace showed exactly this: intent
+            # "navigate_to_records_page", action `click`, denied with "click has side
+            # effects" -- it already knew where it wanted to go and was told only that it
+            # could not go that way.
+            alternative = _allowed_alternative(state, action)
+            detail = denied.decision.detail
+            if alternative is not None:
+                detail = (
+                    f"{detail}. {action.target.name or action.target.text} is reachable "
+                    f"with {alternative.type.value}"
+                    + (f" to {alternative.target.url}" if alternative.target.url else "")
+                    + ", which this policy allows"
+                )
             # A policy refusal is a fact about the run, not a malfunction. Letting it
             # escape would surface as an activity crash and let Temporal retry the
             # episode, re-proposing an action the policy will refuse again (ADR 0009).
@@ -404,9 +751,16 @@ def build_agent_graph(
             return {
                 "actions_taken": taken,
                 "last_outcome_succeeded": False,
-                "last_detail": denied.decision.detail,
+                "last_detail": detail,
                 "last_action_type": action.type,
-                "last_denied": True,
+                # Terminal *unless* the policy itself permits another way to the element
+                # the planner named. Ending on any refusal is what stops an agent hunting
+                # for a way around a policy, and that stance is right — but taking the
+                # path the policy allows is not hunting for a way around it, it is the
+                # policy's own answer. Bounded by MAX_RECOVERY_ATTEMPTS either way, so
+                # this cannot become probing by another name.
+                "last_denied": alternative is None,
+                "action_log": _logged(state, action, False, detail=detail),
             }
         except UnperformableActionError as unusable:
             # Same reasoning, different cause: the planner asked for something the page
@@ -421,6 +775,8 @@ def build_agent_graph(
                 "last_detail": str(unusable),
                 "last_action_type": action.type,
                 "last_denied": False,
+                "failed_targets": _unreachable(state, action),
+                "action_log": _logged(state, action, False, detail=str(unusable)),
             }
         return {
             "actions_taken": taken,
@@ -428,6 +784,19 @@ def build_agent_graph(
             "last_detail": outcome.detail,
             "last_action_type": action.type,
             "last_denied": False,
+            "failed_targets": (
+                state.get("failed_targets", ())
+                if outcome.succeeded
+                else _unreachable(state, action)
+            ),
+            "action_log": _logged(
+                state,
+                action,
+                outcome.succeeded,
+                detail=outcome.detail,
+                url=outcome.current_url,
+                http_status=outcome.http_status,
+            ),
         }
 
     async def verify(state: GraphState) -> GraphState:
@@ -472,6 +841,11 @@ def build_agent_graph(
     async def checkpoint(state: GraphState) -> GraphState:
         """Mark a semantically safe moment. Persisting it is the activity's job."""
         agent = state["agent"]
+        if story_is_done(state):
+            # Decided here rather than in the router so the episode summary agrees with
+            # it: `close_episode` reads `goal_reached`, and a run that met every one of
+            # its criteria and then stopped would otherwise summarise itself as failed.
+            agent.goal_reached = True
         return {
             "agent": agent,
             "recovery_attempts": 0,
@@ -546,8 +920,17 @@ def build_agent_graph(
         shot = await capture("screenshot")
         evidence = (shot,) if shot is not None else ()
 
+        # Sorted so a report reads the same way twice; dict order is insertion order and
+        # a crawl's insertion order is whatever the frontier happened to do.
+        swept = tuple(
+            state.get("page_checks", {})[key] for key in sorted(state.get("page_checks", {}))
+        )
+
         if not assertions:
-            return {"criterion_results": (), "evidence": evidence}
+            # The whole point of ADR 0017: a run with no story used to return nothing
+            # here, so `derive_verdict` was never reached and every sweep — however much
+            # it had learned — came back `inconclusive`.
+            return {"criterion_results": swept, "evidence": evidence}
 
         results = await verify_plan_criteria(
             assertions,
@@ -560,11 +943,14 @@ def build_agent_graph(
         )
         if shot is not None:
             # Every criterion was judged against this one page state, so this is
-            # honestly the evidence for all of them.
+            # honestly the evidence for all of them. The sweep results are excluded: each
+            # one is about a page the run left long ago, and attaching a screenshot of
+            # the last page to a finding about the third would be evidence for the wrong
+            # claim.
             results = tuple(
                 replace(result, evidence_refs=(shot.artifact_id,)) for result in results
             )
-        return {"criterion_results": results, "evidence": evidence}
+        return {"criterion_results": results + swept, "evidence": evidence}
 
     async def close_episode(state: GraphState) -> GraphState:
         agent = state["agent"]

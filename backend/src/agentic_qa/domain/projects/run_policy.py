@@ -12,6 +12,7 @@ editing one in place would rewrite the rules of runs already finished.
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from agentic_qa.domain.browser.consent import ConsentPolicy
 from agentic_qa.domain.errors import InvalidEntityError
 from agentic_qa.domain.validation import require_identifier, require_text
 
@@ -43,6 +44,26 @@ class RunPolicy:
     max_actions: int
     max_model_calls: int
     destructive_actions: bool = False
+    consent: ConsentPolicy = ConsentPolicy.LEAVE
+    """Whether this run may answer a cookie banner, and how.
+
+    `leave` by default, which costs runs against a banner-gated site and is the correct
+    trade: accepting cookies is a legal act performed on somebody's behalf, and a run that
+    did it quietly is a thing nobody finds out about until somebody else does (ADR 0018).
+    """
+    forbidden_paths: tuple[str, ...] = field(default=())
+    """Path prefixes this run may not visit, checked inside the allowed origins.
+
+    Denied prefixes rather than an allowlist, and exploration is the reason: an allowlist
+    would have to enumerate every path worth crawling, which is the thing the crawler is
+    for, and the first unlisted page would end the episode. A denylist says what an
+    authenticated run actually needs to say — you can now reach `/admin`, and you must not
+    go there (ADR 0019).
+
+    A fourth fence inside the first. The origin allowlist still bounds the run and
+    `destructive_actions` still gates every write; this narrows, never widens.
+    """
+
     allow_file_uploads: bool = False
     upload_path_allowlist: tuple[str, ...] = field(default=())
     allow_downloads: bool = False
@@ -70,6 +91,10 @@ class RunPolicy:
         self.upload_path_allowlist = tuple(
             require_text(path, field="upload_path") for path in self.upload_path_allowlist
         )
+        self.forbidden_paths = tuple(
+            _normalize_path(require_text(path, field="forbidden_path"))
+            for path in self.forbidden_paths
+        )
 
     def allows_origin(self, url: str) -> bool:
         """Exact origin match against the allowlist."""
@@ -78,6 +103,27 @@ class RunPolicy:
         except InvalidEntityError:
             return False
         return origin in self.allowed_origins
+
+    def forbids_path(self, url: str) -> str | None:
+        """The forbidden prefix this url falls under, or None.
+
+        Returns the prefix rather than a bool so the refusal can name it. "outside the
+        allowed area" sends someone to read the policy; "under /admin, which this policy
+        forbids" does not.
+        """
+        path = _normalize_path(urlsplit(url.strip()).path or "/")
+        for forbidden in self.forbidden_paths:
+            # Segment-aware: `/admin` must not match `/administrators`, which is a
+            # different area of the application and was not what anybody forbade.
+            if path == forbidden or path.startswith(forbidden.rstrip("/") + "/"):
+                return forbidden
+        return None
+
+
+def _normalize_path(path: str) -> str:
+    """Leading slash, no trailing one. `admin`, `/admin` and `/admin/` are one rule."""
+    trimmed = "/" + path.strip().strip("/")
+    return trimmed
 
 
 def _origin_of(url: str) -> str:

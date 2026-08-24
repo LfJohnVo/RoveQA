@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import Select, delete, desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,9 +29,12 @@ from agentic_qa.domain.knowledge.experience import (
     KnowledgeExperienceCandidate,
 )
 from agentic_qa.domain.knowledge.feedback import MemoryFeedback
+from agentic_qa.domain.projects.api_token import ApiToken
 from agentic_qa.domain.projects.environment import Environment
 from agentic_qa.domain.projects.project import Project
 from agentic_qa.domain.projects.run_policy import RunPolicy
+from agentic_qa.domain.projects.session import EnvironmentSession
+from agentic_qa.domain.qa.observations import ObservedFailure, ObservedFailureKind
 from agentic_qa.domain.qa.test_plan import TestPlan
 from agentic_qa.domain.qa.user_story import UserStory
 from agentic_qa.domain.qa.verification import CriterionResult
@@ -66,10 +69,12 @@ from agentic_qa.infrastructure.persistence.postgres.mappers import (
     story_to_model,
 )
 from agentic_qa.infrastructure.persistence.postgres.models import (
+    ApiTokenModel,
     ArtifactModel,
     ClusterHypothesisModel,
     CriterionResultModel,
     EnvironmentModel,
+    EnvironmentSessionModel,
     ExplorationRunModel,
     ExploredStateModel,
     FailureClusterMemberModel,
@@ -78,6 +83,7 @@ from agentic_qa.infrastructure.persistence.postgres.models import (
     IdempotencyRecordModel,
     KnowledgeCandidateModel,
     MemoryFeedbackModel,
+    ObservedFailureModel,
     ProjectModel,
     RecoveryPointModel,
     RunEventModel,
@@ -273,6 +279,167 @@ class PostgresRunRepository:
         model.status = run.status
         model.verdict = run.verdict
 
+    async def list_for_project(self, project_id: str, *, limit: int) -> list[Run]:
+        statement = (
+            select(RunModel)
+            .where(RunModel.project_id == project_id)
+            # `run_id` breaks the tie so the order is total: two runs created in the same
+            # millisecond would otherwise come back in whatever order the plan chose, and
+            # a list that reshuffles itself between refreshes is one nobody can page.
+            .order_by(RunModel.created_at.desc(), RunModel.run_id.desc())
+            .limit(limit)
+        )
+        result = await self._session.scalars(statement)
+        return [run_to_domain(model) for model in result]
+
+
+class PostgresApiTokenRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, token: ApiToken) -> None:
+        try:
+            async with self._session.begin_nested():
+                self._session.add(
+                    ApiTokenModel(
+                        token_id=token.token_id,
+                        project_id=token.project_id,
+                        label=token.label,
+                        fingerprint=token.fingerprint,
+                        issued_at=token.issued_at,
+                        issued_by=token.issued_by,
+                    )
+                )
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                raise AlreadyExistsError("api_token", token.token_id) from error
+            raise
+
+    async def find_by_fingerprint(self, fingerprint: str) -> ApiToken | None:
+        """The lookup every authenticated request makes.
+
+        By the unique index, so it is one probe rather than a scan — which matters here
+        more than anywhere else, because it happens on every call and an attacker gets to
+        choose how often.
+        """
+        result = await self._session.scalars(
+            select(ApiTokenModel).where(ApiTokenModel.fingerprint == fingerprint)
+        )
+        model = result.first()
+        return _token_to_domain(model) if model is not None else None
+
+    async def list_for_project(self, project_id: str) -> list[ApiToken]:
+        result = await self._session.scalars(
+            select(ApiTokenModel)
+            .where(ApiTokenModel.project_id == project_id)
+            .order_by(ApiTokenModel.issued_at.desc(), ApiTokenModel.token_id.desc())
+        )
+        return [_token_to_domain(model) for model in result]
+
+    async def revoke(self, token_id: str) -> bool:
+        """Delete the row. True when there was one.
+
+        Deleted rather than flagged, unlike a session. A session keeps its record because
+        the ciphertext survives in every backup and the row is the audit trail explaining
+        why it no longer opens; a token has nothing left behind it, so a row that stays
+        would be a listing entry that means nothing and a second state to reason about.
+        """
+        # `scalars(... returning(...))` rather than reading `rowcount`, which SQLAlchemy
+        # types as unavailable on a generic `Result` and which drivers are free to leave
+        # at -1. Asking the database which id it removed answers the same question and
+        # cannot be -1.
+        removed = await self._session.scalars(
+            delete(ApiTokenModel)
+            .where(ApiTokenModel.token_id == token_id)
+            .returning(ApiTokenModel.token_id)
+        )
+        return removed.first() is not None
+
+
+def _token_to_domain(model: ApiTokenModel) -> ApiToken:
+    return ApiToken(
+        token_id=model.token_id,
+        project_id=model.project_id,
+        label=model.label,
+        fingerprint=model.fingerprint,
+        issued_at=model.issued_at,
+        issued_by=model.issued_by,
+    )
+
+
+class PostgresSessionRepository:
+    """Records and ciphertext. The key belongs to the keyring and never comes near this."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, session: EnvironmentSession, sealed_state: bytes) -> None:
+        if await self.get(session.session_id) is not None:
+            raise AlreadyExistsError("environment_session", session.session_id)
+        try:
+            async with self._session.begin_nested():
+                self._session.add(
+                    EnvironmentSessionModel(
+                        session_id=session.session_id,
+                        environment_id=session.environment_id,
+                        label=session.label,
+                        established_at=session.established_at,
+                        valid_until=session.valid_until,
+                        established_by=session.established_by,
+                        sealed_state=sealed_state,
+                    )
+                )
+        except IntegrityError as error:
+            if _is_unique_violation(error):
+                raise AlreadyExistsError("environment_session", session.session_id) from error
+            raise
+
+    async def get(self, session_id: str) -> EnvironmentSession | None:
+        model = await self._session.get(EnvironmentSessionModel, session_id)
+        return _session_to_domain(model) if model is not None else None
+
+    async def current_for_environment(self, environment_id: str) -> EnvironmentSession | None:
+        result = await self._session.scalars(self._newest_first(environment_id).limit(1))
+        model = result.first()
+        return _session_to_domain(model) if model is not None else None
+
+    async def sealed_state(self, session_id: str) -> bytes | None:
+        # Selected on its own rather than through the entity: the bytes are wanted at
+        # exactly one call site, and loading them with every record read would put them
+        # in memory for every listing that never asked.
+        result = await self._session.scalars(
+            select(EnvironmentSessionModel.sealed_state).where(
+                EnvironmentSessionModel.session_id == session_id
+            )
+        )
+        return result.first()
+
+    async def list_for_environment(self, environment_id: str) -> list[EnvironmentSession]:
+        result = await self._session.scalars(self._newest_first(environment_id))
+        return [_session_to_domain(model) for model in result]
+
+    @staticmethod
+    def _newest_first(environment_id: str) -> Select[tuple[EnvironmentSessionModel]]:
+        return (
+            select(EnvironmentSessionModel)
+            .where(EnvironmentSessionModel.environment_id == environment_id)
+            .order_by(
+                EnvironmentSessionModel.established_at.desc(),
+                EnvironmentSessionModel.session_id.desc(),
+            )
+        )
+
+
+def _session_to_domain(model: EnvironmentSessionModel) -> EnvironmentSession:
+    return EnvironmentSession(
+        session_id=model.session_id,
+        environment_id=model.environment_id,
+        label=model.label,
+        established_at=model.established_at,
+        valid_until=model.valid_until,
+        established_by=model.established_by,
+    )
+
 
 class PostgresRunPolicyRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -312,6 +479,14 @@ class PostgresEnvironmentRepository:
     async def get(self, environment_id: str) -> Environment | None:
         model = await self._session.get(EnvironmentModel, environment_id)
         return environment_to_domain(model) if model is not None else None
+
+    async def list_for_project(self, project_id: str) -> list[Environment]:
+        result = await self._session.scalars(
+            select(EnvironmentModel)
+            .where(EnvironmentModel.project_id == project_id)
+            .order_by(EnvironmentModel.environment_id)
+        )
+        return [environment_to_domain(model) for model in result]
 
 
 class PostgresRecoveryPointRepository:
@@ -406,6 +581,46 @@ class PostgresTestPlanRepository:
             .limit(limit)
         )
         return [plan_to_domain(model) for model in result.scalars()]
+
+
+class PostgresObservedFailureRepository:
+    """Console errors and failed requests, appended per episode.
+
+    Append rather than replace, unlike criterion results next door: a criterion has one
+    answer per run and the latest wins, while an observation is a thing that happened —
+    episode three seeing a broken image does not mean episode one did not.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, run_id: str, failures: Sequence[ObservedFailure]) -> None:
+        if not failures:
+            return
+        self._session.add_all(
+            ObservedFailureModel(
+                run_id=run_id,
+                episode_index=failure.episode_index,
+                kind=failure.kind.value,
+                detail=failure.detail,
+            )
+            for failure in failures
+        )
+
+    async def list_for_run(self, run_id: str) -> list[ObservedFailure]:
+        result = await self._session.execute(
+            select(ObservedFailureModel)
+            .where(ObservedFailureModel.run_id == run_id)
+            .order_by(ObservedFailureModel.id)
+        )
+        return [
+            ObservedFailure(
+                kind=ObservedFailureKind(model.kind),
+                detail=model.detail,
+                episode_index=model.episode_index,
+            )
+            for model in result.scalars()
+        ]
 
 
 class PostgresCriterionResultRepository:

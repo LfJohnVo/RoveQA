@@ -10,6 +10,12 @@ cd "$(dirname "$0")/.."
 echo "== compose config =="
 docker compose config --quiet
 
+echo "== network posture =="
+# Every profile, deliberately: a port only exists in the resolved document when its
+# service's profile is active, so checking the default set would leave the model servers
+# unexamined — which is where three of the ten published ports live (ADR 0021).
+COMPOSE_PROFILES=gpu,memory-gpu,deep-gpu,gates,baseline python scripts/check_network_posture.py
+
 echo "== blueprint =="
 docker compose --profile gates run --rm --quiet-pull blueprint-check
 

@@ -60,6 +60,27 @@ The third is why status alone cannot decide a verdict: provenance decides who is
 responsible, and the run knows the provenance because it knows whether the URL came from
 an affordance or from a decision.
 
+## Follow-up, 2026-08-21
+
+The consequence below — "`roveqa.run-report.v1` gains observed failures" — was written and
+not implemented. `EpisodeResult.page_problems` was populated by the episode runner and read
+by nothing: the only field of that result with no consumer anywhere. Console errors and
+failed requests were collected across three layers and dropped at the last one, which is
+indistinguishable from never collecting them.
+
+They now have a table (`observed_failures`, migration `d41f7c2a9e08`) and a key of their
+own in the report. Two things this ADR did not say, and should have:
+
+**The grain is the episode, not the page.** The adapter holds one `ObservedFailures` per
+gateway and never clears it between navigations, so a problem cannot honestly be attributed
+to a page. `ObservedFailure` carries an `episode_index` and no url on purpose; a site sweep
+needs the finer grain and has to earn it by clearing at the right moment.
+
+**Nothing here may reach a verdict**, and it is enforced by the type rather than by care:
+`ObservedFailure` has no outcome and no `failure_kind`. The 5xx table above still has no
+implementation — a status is recorded and no code reads it to decide anything — and that
+remains true after this change.
+
 ## Consequences
 `ActionOutcome` and the episode result gain fields; `roveqa.run-report.v1` gains observed
 failures. Additive, so existing consumers are unaffected.

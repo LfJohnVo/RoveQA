@@ -4,6 +4,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
+from agentic_qa.application.commands.create_environment import (
+    CreateEnvironmentCommand,
+    create_environment,
+)
 from agentic_qa.application.commands.create_project import (
     CreateProjectCommand,
     create_project,
@@ -13,10 +17,13 @@ from agentic_qa.application.commands.create_run_policy import (
     create_run_policy,
 )
 from agentic_qa.application.queries.get_project import get_project
+from agentic_qa.interfaces.http.authorisation import AuthorisedDep
 from agentic_qa.interfaces.http.dependencies import UnitOfWorkDep
 from agentic_qa.interfaces.http.schemas import (
+    CreateEnvironmentRequest,
     CreateProjectRequest,
     CreateRunPolicyRequest,
+    EnvironmentResponse,
     ProjectResponse,
     RunPolicyResponse,
 )
@@ -36,16 +43,59 @@ async def post_project(payload: CreateProjectRequest, uow: UnitOfWorkDep) -> Pro
 @router.get("", response_model=list[ProjectResponse])
 async def list_projects(
     uow: UnitOfWorkDep,
+    token: AuthorisedDep,
     limit: Annotated[int, Query(ge=1, le=MAX_PROJECT_PAGE_SIZE)] = DEFAULT_PROJECT_PAGE_SIZE,
 ) -> list[ProjectResponse]:
-    """Bounded by construction: a page size is a promise about response size."""
+    """This token's projects. Bounded by construction, and filtered by who is asking.
+
+    The path names no project, so the generic scope check has nothing to compare against
+    — a listing across projects is exactly the shape that check cannot decide (ADR 0020).
+    Filtering here is what stops a token for one team's application from enumerating
+    every other application this deployment tests.
+    """
     projects = await uow.projects.list(limit=limit)
-    return [ProjectResponse.from_domain(project) for project in projects]
+    return [
+        ProjectResponse.from_domain(project)
+        for project in projects
+        if token.covers(project.project_id)
+    ]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def read_project(project_id: str, uow: UnitOfWorkDep) -> ProjectResponse:
     return ProjectResponse.from_domain(await get_project(uow.projects, project_id))
+
+
+@router.post(
+    "/{project_id}/environments",
+    response_model=EnvironmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_environment(
+    project_id: str, payload: CreateEnvironmentRequest, uow: UnitOfWorkDep
+) -> EnvironmentResponse:
+    """Create a deployment of this project's application.
+
+    An environment is what a session hangs off, and until now one could only be made
+    from a test. That made the whole session feature unreachable through the API: you
+    could register a session for an environment that no endpoint could create.
+    """
+    environment = await create_environment(
+        uow,
+        CreateEnvironmentCommand(
+            project_id=project_id,
+            name=payload.name,
+            default_run_policy_id=payload.default_run_policy_id,
+        ),
+    )
+    return EnvironmentResponse.from_domain(environment)
+
+
+@router.get("/{project_id}/environments", response_model=list[EnvironmentResponse])
+async def list_environments(project_id: str, uow: UnitOfWorkDep) -> list[EnvironmentResponse]:
+    """Unbounded on purpose: a project has staging and production, not thousands."""
+    environments = await uow.environments.list_for_project(project_id)
+    return [EnvironmentResponse.from_domain(environment) for environment in environments]
 
 
 @router.post(
@@ -66,6 +116,7 @@ async def post_run_policy(
             max_actions=payload.max_actions,
             max_model_calls=payload.max_model_calls,
             destructive_actions=payload.destructive_actions,
+            consent=payload.consent,
             allow_file_uploads=payload.allow_file_uploads,
             upload_path_allowlist=tuple(payload.upload_path_allowlist),
             allow_downloads=payload.allow_downloads,

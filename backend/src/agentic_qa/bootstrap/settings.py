@@ -16,6 +16,7 @@ DEFAULT_MODEL_CONCURRENCY = 2
 DEFAULT_MODEL_TIMEOUT_SECONDS = 60.0
 DEFAULT_GRAPH_DATABASE = "roveqa"
 DEFAULT_DEEP_TIMEOUT_SECONDS = 900.0
+DEFAULT_KEYRING_ROOT = "/data/keyring"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,14 @@ class Settings:
     site can spend twenty seconds on images the agent never reads, and one constant for
     both jobs is what stopped every run against the real web."""
     artifact_root: str = "/data/runs"
+
+    keyring_root: str = DEFAULT_KEYRING_ROOT
+    """Where the keys for stored sessions live.
+
+    A directory rather than a variable, and its own volume rather than a corner of
+    the artifact one, because `scripts/backup.sh` has to be able to *not* include it:
+    revoking a session destroys its key, and a key inside the backup would come back
+    with the ciphertext and resurrect it (ADR 0019)."""
     """Where artifact bytes live. References are in PostgreSQL; blobs are not."""
 
     falkordb_url: str | None = None
@@ -92,6 +101,7 @@ class Settings:
             browser_headless=not _flag("BROWSER_HEADED"),
             browser_navigation_timeout_ms=_optional_positive_int("BROWSER_NAVIGATION_TIMEOUT_MS"),
             artifact_root=os.environ.get("ARTIFACT_ROOT", "/data/runs"),
+            keyring_root=os.environ.get("KEYRING_ROOT", DEFAULT_KEYRING_ROOT),
             falkordb_url=os.environ.get("FALKORDB_URL") or None,
             graph_database=os.environ.get("GRAPH_DATABASE", DEFAULT_GRAPH_DATABASE),
             embedding_base_url=os.environ.get("EMBEDDING_BASE_URL") or None,

@@ -1,5 +1,7 @@
 import type { Finding } from "@domain/runs/findings";
 
+import { Badge, type BadgeTone } from "./ui";
+
 const OUTCOME_LABEL: Record<Finding["outcome"], string> = {
   met: "met",
   not_met: "not met",
@@ -15,32 +17,52 @@ const OUTCOME_LABEL: Record<Finding["outcome"], string> = {
  */
 export function FindingsList({ findings }: { findings: readonly Finding[] }) {
   if (findings.length === 0) {
-    return <p className="notice">This run verified no acceptance criteria.</p>;
+    return (
+      <p className="rounded-lg bg-white px-4 py-3 text-sm text-gray-600 shadow-xs dark:bg-gray-800 dark:text-gray-400">
+        This run verified no acceptance criteria.
+      </p>
+    );
   }
 
   return (
-    <ul className="card-list">
+    <ul className="grid gap-4">
       {findings.map((finding) => (
-        <li className="card" key={finding.criterionId}>
-          <div className="finding__head">
-            <span className="card__name">{finding.criterionId}</span>
-            <span className={`badge badge--${toneFor(finding)}`} data-tone={toneFor(finding)}>
-              {OUTCOME_LABEL[finding.outcome]}
+        <li
+          className="min-w-0 rounded-lg bg-white p-4 shadow-xs dark:bg-gray-800"
+          key={finding.criterionId}
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-200">
+              {finding.criterionId}
             </span>
+            {/* Said on the row. A reader must never take "every run checks this page"
+                for "the story asked for this", and the two sit in one list. */}
+            <span className="text-xs text-gray-500 dark:text-gray-500">
+              {finding.source === "sweep" ? "page check" : "from the story"}
+            </span>
+            <Badge tone={badgeFor(finding)} dataTone={toneFor(finding)}>
+              {OUTCOME_LABEL[finding.outcome]}
+            </Badge>
             {finding.failureKind !== null ? (
-              <span className="card__meta">{finding.failureKind}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-500">
+                {finding.failureKind}
+              </span>
             ) : null}
           </div>
 
           {finding.deterministicObservation !== null ? (
-            <p className="finding__observed">{finding.deterministicObservation}</p>
+            <p className="mt-3 text-sm text-gray-700 dark:text-gray-300">
+              {finding.deterministicObservation}
+            </p>
           ) : null}
 
           {finding.rootCauseHypothesis !== null ? (
-            <p className="finding__hypothesis">
-              <span className="finding__label">
+            // Set apart on purpose: a dashed rule and a label, so a guess can never be
+            // skimmed as an observation. The style is doing an editorial job here.
+            <p className="mt-3 border-l-2 border-dashed border-gray-300 pl-3 text-sm text-gray-600 dark:border-gray-600 dark:text-gray-400">
+              <span className="mr-2 text-xs font-semibold tracking-wide text-yellow-600 uppercase dark:text-yellow-400">
                 hypothesis{finding.modelName === null ? "" : ` · ${finding.modelName}`}
-              </span>{" "}
+              </span>
               {finding.rootCauseHypothesis}
             </p>
           ) : null}
@@ -58,4 +80,11 @@ function toneFor(finding: Finding): string {
     return finding.failureKind === "product" ? "answer-fail" : "no-answer";
   }
   return "no-answer";
+}
+
+function badgeFor(finding: Finding): BadgeTone {
+  const tone = toneFor(finding);
+  if (tone === "answer-pass") return "pass";
+  if (tone === "answer-fail") return "fail";
+  return "unsure";
 }

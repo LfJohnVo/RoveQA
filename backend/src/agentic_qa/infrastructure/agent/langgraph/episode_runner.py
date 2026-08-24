@@ -19,8 +19,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from agentic_qa.application.ports.artifacts import ArtifactRepository
 from agentic_qa.application.ports.browser import (
     BrowserGateway,
-    PageProblems,
-    ReportsPageProblems,
+    BrowserSetup,
 )
 from agentic_qa.application.ports.episodes import EpisodeRequest, EpisodeResult
 from agentic_qa.application.ports.models import ModelGateway
@@ -32,7 +31,9 @@ from agentic_qa.infrastructure.agent.langgraph.graph import build_agent_graph
 
 logger = logging.getLogger(__name__)
 
-BrowserFactory = Callable[[], AbstractAsyncContextManager[BrowserGateway]]
+BrowserFactory = Callable[[BrowserSetup], AbstractAsyncContextManager[BrowserGateway]]
+"""Takes what the context needs before its first navigation. An anonymous run passes
+an empty `BrowserSetup`, which is a case rather than the only shape (ADR 0019)."""
 CheckpointerFactory = Callable[[], AbstractAsyncContextManager[BaseCheckpointSaver[str]]]
 
 
@@ -56,7 +57,10 @@ class LangGraphEpisodeRunner:
         self._artifacts = artifacts
 
     async def run_episode(self, request: EpisodeRequest) -> EpisodeResult:
-        async with self._checkpointer_factory() as checkpointer, self._browser_factory() as raw:
+        async with (
+            self._checkpointer_factory() as checkpointer,
+            self._browser_factory(request.setup) as raw,
+        ):
             guarded = GuardedBrowserGateway(raw, request.policy)
             graph = build_agent_graph(
                 browser=guarded,
@@ -111,15 +115,16 @@ class LangGraphEpisodeRunner:
                 # Read from the live browser, not from the agent's last observation:
                 # the recovery point has to name where the page actually ended up.
                 observed_url=await raw.current_url(),
+                actions=final.get("action_log", ()),
                 # Asked while the page still exists, for the same reason the screenshot
                 # is taken then: the browser is about to be closed and nothing survives
                 # it. Absent for a gateway that does not watch, which is a real case and
                 # not a degraded one.
-                page_problems=(
-                    await raw.page_problems()
-                    if isinstance(raw, ReportsPageProblems)
-                    else PageProblems()
-                ),
+                # Through the guarded gateway, which is what the graph was given. Asking
+                # `raw` skipped the wrapper entirely and left its forwarder with no
+                # caller — the sort of thing that reads as equivalent right up until the
+                # wrapper starts doing something.
+                page_problems=await guarded.page_problems(),
                 state_map=_state_map(final.get("exploration"), report),
                 exploration_report=report,
             )

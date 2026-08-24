@@ -36,6 +36,27 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE),
     # JWT-shaped things
     re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b"),
+    # Vendor-prefixed keys, which announce themselves. Certain rather than heuristic:
+    # nothing that begins `sk-live-` or `ghp_` is prose.
+    re.compile(r"\b(?:sk|pk|rk)[-_](?:live|test|prod)[-_][A-Za-z0-9]{8,}\b", re.IGNORECASE),
+    re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\b(?:ghp|gho|ghs|ghu|github_pat)_[A-Za-z0-9_]{16,}\b"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    # A secret *named* in prose, which is how a debug line leaks one:
+    # "auth failed for token sk-live-9f2b…". The vocabulary is the one `_SECRET_KEYS`
+    # already uses for object keys — a word meaning "secret", then the value.
+    #
+    # The value has to look like a value: twelve or more token characters with at least
+    # one digit among them. Without that bound, "session expired" and "authorization
+    # required" would both be redacted, and evidence eaten by its own filter is evidence
+    # lost — the opposite of why this is kept rather than refused.
+    re.compile(
+        r"((?:password|passwd|secret|token|api[_-]?key|authorization|credential|bearer)"
+        r"(?:\s+(?:is|was))?\s*[:=]?\s+)"
+        r"(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{12,}",
+        re.IGNORECASE,
+    ),
 )
 
 _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
